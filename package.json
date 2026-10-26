@@ -1,0 +1,54 @@
+{
+  "name": "brainchain-mcp",
+  "version": "0.2.0",
+  "description": "MCP server for BrainChain: hire frontier models through Jev and pay in USDC on Base or USDG on Robinhood Chain, only for work that passes its grade.",
+  "mcpName": "com.usebrainchain/brainchain",
+  "license": "MIT",
+  "author": "BrainChain <hello@usebrainchain.com>",
+  "homepage": "https://docs.usebrainchain.com/agents",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "brainchain",
+    "x402",
+    "usdc",
+    "usdg",
+    "robinhood-chain",
+    "base",
+    "ai-agents"
+  ],
+  "type": "module",
+  "bin": {
+    "brainchain-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "test": "vitest run",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@x402/evm": "2.28.0",
+    "@x402/fetch": "2.28.0",
+    "viem": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usebrainchain/brainchain-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/usebrainchain/brainchain-mcp/issues"
+  }
+}

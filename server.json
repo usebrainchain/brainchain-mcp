@@ -1,0 +1,73 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.usebrainchain/brainchain",
+  "title": "BrainChain",
+  "description": "Hire frontier models through Jev. Pay in USDC on Base or USDG, only for work that passes.",
+  "version": "0.2.0",
+  "websiteUrl": "https://docs.usebrainchain.com/agents",
+  "icons": [
+    {
+      "src": "https://usebrainchain.com/brand/favicon.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": [
+        "any"
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "brainchain-mcp",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "BRAINCHAIN_PAYER_KEY",
+          "description": "Private key of the wallet that pays for tasks (0x followed by 64 hex characters). Use a dedicated wallet.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "BRAINCHAIN_NETWORK",
+          "description": "mainnet or testnet. Testnet pays with test tokens that have no value.",
+          "isRequired": false,
+          "format": "string",
+          "default": "mainnet",
+          "choices": [
+            "mainnet",
+            "testnet"
+          ]
+        },
+        {
+          "name": "BRAINCHAIN_PAY_ON",
+          "description": "robinhood pays in USDG on Robinhood Chain after a one-time Permit2 approval; base pays in USDC on Base (Base Sepolia on testnet) with a signature alone.",
+          "isRequired": false,
+          "format": "string",
+          "default": "robinhood",
+          "choices": [
+            "robinhood",
+            "base"
+          ]
+        },
+        {
+          "name": "BRAINCHAIN_MAX_PRICE_UNITS",
+          "description": "The most the server pays for one task, in the payment token's base units (6 decimals).",
+          "isRequired": false,
+          "format": "number",
+          "default": "1000000"
+        },
+        {
+          "name": "BRAINCHAIN_BUDGET_UNITS",
+          "description": "The most the server pays in total while it runs, in the payment token's base units (6 decimals).",
+          "isRequired": false,
+          "format": "number",
+          "default": "10000000"
+        }
+      ]
+    }
+  ]
+}
