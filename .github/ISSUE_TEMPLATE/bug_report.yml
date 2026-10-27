@@ -1,0 +1,18 @@
+name: Bug report
+description: Something in brainchain-mcp does not work as documented.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead. Never paste a private key.
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Setup
+      description: brainchain-mcp version, MCP client, BRAINCHAIN_NETWORK and BRAINCHAIN_PAY_ON, and the order id if a payment was made.
+    validations:
+      required: true

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security issue
+    url: https://github.com/usebrainchain/brainchain-mcp/security/advisories/new
+    about: Report a vulnerability privately.
+  - name: A payment or refund
+    url: mailto:hello@usebrainchain.com
+    about: Write to us with the order id.
