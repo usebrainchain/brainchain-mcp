@@ -28,7 +28,7 @@ MCP server that pays for tasks on BrainChain and reads their graded results.
 Usage:
   brainchain-mcp                 Start the server on stdio (what MCP clients run).
   brainchain-mcp approve [USDG]  Let Permit2 spend the paying wallet's USDG, once.
-                                 Default 100 USDG; pass a number or "max".
+                                 Default 100 USDG; pass a number, "max", or 0 to revoke.
                                  Not needed when paying in USDC on Base.
 
 Environment:
@@ -52,7 +52,7 @@ if (command === "--help" || command === "-h" || command === "help") {
   console.log(USAGE);
   process.exit(0);
 }
-if (command === "--version" || command === "-v") {
+if (command === "--version" || command === "-v" || command === "version") {
   console.log(version);
   process.exit(0);
 }
@@ -97,7 +97,11 @@ if (command === "approve") {
     console.log(`Sent ${hash} on ${config.chain}. Waiting for it to confirm…`);
     const receipt = await reader.waitForTransactionReceipt({ hash, timeout: 180_000 });
     if (receipt.status !== "success") fail("The approval reverted.");
-    console.log(`Permit2 can now spend ${arg === "max" ? "any amount of" : formatUnits(amount)} ${config.token} from ${account.address}.`);
+    console.log(
+      amount === 0n
+        ? `Permit2 can no longer spend ${config.token} from ${account.address}. Run approve with an amount to pay for tasks again.`
+        : `Permit2 can now spend ${arg === "max" ? "any amount of" : formatUnits(amount)} ${config.token} from ${account.address}.`,
+    );
     process.exit(0);
   } catch (error) {
     const message = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);

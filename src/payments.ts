@@ -181,11 +181,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
 
     const reply = await json(response);
     if (response.ok) return { ...reply, order: typeof reply.order === "string" ? reply.order : signed ? orderIdOf(signed) : undefined };
-    if (signed && (response.status === 409 || response.status >= 500)) {
+    // The desk answers 400 (a brief it refuses) and 402 (a payment it refuses)
+    // before settling. Any other answer to a signed payment may have charged it.
+    if (signed && response.status !== 400 && response.status !== 402) {
       return possiblyCharged(typeof reply.order === "string" ? reply.order : orderIdOf(signed), `The desk answered ${response.status}.`);
     }
 
-    // The desk answered with a client error, so the signed payment was not settled.
+    // The desk refused the brief or the payment before settling it.
     spent -= amount;
     amount = 0n;
     if (response.status === 402) throw new Error(await explainRefusal(reply.error));
@@ -193,8 +195,27 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   }
 
   async function get(order: string): Promise<unknown> {
-    const response = await fetchImpl(`${endpoint}/${order}`, { signal: AbortSignal.timeout(20_000) });
+    let response: Response;
+    try {
+      response = await fetchImpl(`${endpoint}/${order}`, { signal: AbortSignal.timeout(20_000) });
+    } catch (error) {
+      return { order, error: `Could not reach the desk (${firstLine(error)}).`, done: false, next: "The desk could not be reached. Read the order again shortly.", retryAfterSeconds: 30 };
+    }
     const view = await json(response);
+    // A payment authorization lasts at most MAX_TIMEOUT_SECONDS, so an order the
+    // desk still does not know after that was never charged.
+    if (response.status === 404) {
+      return {
+        order,
+        error: "The desk has no order with this id.",
+        done: false,
+        next: `If brainchain_post_task said possiblyCharged, the payment either never reached the desk or is still settling. Read the order again in a minute. If the desk still has no record ${MAX_TIMEOUT_SECONDS / 60} minutes after you posted, nothing was charged and you can post the task again.`,
+        retryAfterSeconds: 60,
+      };
+    }
+    if (response.status >= 500) {
+      return { order, error: `The desk answered ${response.status}.`, done: false, next: "The desk is briefly unavailable. Read the order again shortly.", retryAfterSeconds: 30 };
+    }
     if (!response.ok) throw new Error(typeof view.error === "string" ? view.error : `The desk answered ${response.status}.`);
     // Results are served by the desk itself; anything else is left as a link.
     if (typeof view.result === "string" && view.result.startsWith(`${config.desk}/records/`)) {

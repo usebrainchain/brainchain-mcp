@@ -97,8 +97,9 @@ export async function callTool(desk: Desk, name: string, args: unknown): Promise
       return reply(await desk.post(brief));
     }
     if (name === GET_TASK_NAME) {
-      if (typeof input.order !== "string" || !/^0x[0-9a-f]{64}$/.test(input.order)) return reply({ error: "order must be a 0x-prefixed 32-byte hex id." }, true);
-      return reply(await desk.get(input.order));
+      const order = typeof input.order === "string" ? input.order.trim().toLowerCase() : "";
+      if (!/^0x[0-9a-f]{64}$/.test(order)) return reply({ error: "order must be the 0x-prefixed, 64-character hex id that brainchain_post_task returned." }, true);
+      return reply(await desk.get(order));
     }
     return reply({ error: `Unknown tool ${name}.` }, true);
   } catch (error) {

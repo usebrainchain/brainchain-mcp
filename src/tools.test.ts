@@ -24,8 +24,11 @@ describe("callTool", () => {
     expect(result.isError).toBe(true);
   });
 
-  it("rejects a malformed order id", async () => {
+  it("rejects a malformed order id and accepts one in capitals", async () => {
     expect((await callTool(desk, GET_TASK_NAME, { order: "42" })).isError).toBe(true);
+    const upper = await callTool(desk, GET_TASK_NAME, { order: ` 0x${"AB".repeat(32)} ` });
+    expect(upper.isError).toBe(false);
+    expect(body(upper)).toMatchObject({ order: `0x${"ab".repeat(32)}` });
   });
 
   it("reports desk errors as tool errors", async () => {

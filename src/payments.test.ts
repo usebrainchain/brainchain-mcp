@@ -105,6 +105,16 @@ describe("posting", () => {
     }
   });
 
+  it("treats any reply to a signed payment other than 400 or 402 as possibly charged", async () => {
+    for (const status of [408, 429, 403]) {
+      const { fetchImpl, seen } = fakeDesk(() => new Response("{}", { status }));
+      const d = desk(fetchImpl);
+      const reply = (await d.post(task)) as { order: string; possiblyCharged: boolean };
+      expect(reply).toMatchObject({ possiblyCharged: true, order: orderIdOf(seen[0]!) });
+      expect(d.spent()).toBe(1_000_000n);
+    }
+  });
+
   it("releases the budget when the desk rejects the request", async () => {
     const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "brief must be 1 to 4,000 characters." }), { status: 400 }));
     const d = desk(fetchImpl);
@@ -195,6 +205,17 @@ describe("input checks", () => {
 });
 
 describe("reading an order", () => {
+  it("guides the caller through an unknown order and an unavailable desk instead of failing", async () => {
+    const order = `0x${"ab".repeat(32)}`;
+    const reply = (status: number) => (async () => new Response("{}", { status })) as typeof fetch;
+    const unknown = (await desk(reply(404)).get(order)) as { done: boolean; next: string; retryAfterSeconds: number };
+    expect(unknown).toMatchObject({ done: false, retryAfterSeconds: 60 });
+    expect(unknown.next).toMatch(/nothing was charged and you can post the task again/);
+    expect(await desk(reply(502)).get(order)).toMatchObject({ done: false, retryAfterSeconds: 30 });
+    const offline = (async () => Promise.reject(new TypeError("fetch failed"))) as typeof fetch;
+    expect(await desk(offline).get(order)).toMatchObject({ done: false, retryAfterSeconds: 30 });
+  });
+
   it("keeps the order when the result cannot be fetched", async () => {
     const result = `${config.desk}/records/0x${"1".repeat(64)}.txt`;
     const fetchImpl = (async (input: RequestInfo | URL) => {

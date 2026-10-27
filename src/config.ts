@@ -86,26 +86,32 @@ export function formatUnits(units: bigint): string {
   return fraction ? `${whole}.${fraction}` : `${whole}`;
 }
 
+/** MCP clients often pass optional variables as empty strings; those count as unset. */
+function envString(env: Record<string, string | undefined>, name: string): string | undefined {
+  const value = env[name]?.trim();
+  return value ? value : undefined;
+}
+
 function envUnits(env: Record<string, string | undefined>, name: string, fallback: bigint): bigint {
-  const raw = env[name] ?? fallback.toString();
+  const raw = envString(env, name) ?? fallback.toString();
   if (!/^\d+$/.test(raw) || BigInt(raw) === 0n) throw new Error(`${name} must be a positive whole number of base units.`);
   return BigInt(raw);
 }
 
 function envAddress(env: Record<string, string | undefined>, name: string, fallback: string): `0x${string}` {
-  const value = env[name] ?? fallback;
+  const value = envString(env, name) ?? fallback;
   if (!/^0x[0-9a-fA-F]{40}$/.test(value)) throw new Error(`${name} must be an address.`);
   return value as `0x${string}`;
 }
 
 export function resolveConfig(env: Record<string, string | undefined>): Config {
-  const name = (env.BRAINCHAIN_NETWORK ?? "mainnet").toLowerCase();
+  const name = (envString(env, "BRAINCHAIN_NETWORK") ?? "mainnet").toLowerCase();
   if (name !== "mainnet" && name !== "testnet") throw new Error("BRAINCHAIN_NETWORK must be mainnet or testnet.");
-  const payOn = (env.BRAINCHAIN_PAY_ON ?? "robinhood").toLowerCase();
+  const payOn = (envString(env, "BRAINCHAIN_PAY_ON") ?? "robinhood").toLowerCase();
   if (payOn !== "robinhood" && payOn !== "base") throw new Error("BRAINCHAIN_PAY_ON must be robinhood or base.");
   const preset = PRESETS[name][payOn];
 
-  const network = env.BRAINCHAIN_PAYMENT_NETWORK ?? preset.network;
+  const network = envString(env, "BRAINCHAIN_PAYMENT_NETWORK") ?? preset.network;
   const match = /^eip155:(\d+)$/.exec(network);
   if (!match) throw new Error("BRAINCHAIN_PAYMENT_NETWORK must look like eip155:<chain id>.");
   const maxPrice = envUnits(env, "BRAINCHAIN_MAX_PRICE_UNITS", DEFAULT_MAX_PRICE);
@@ -116,12 +122,12 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
     name,
     payOn,
     permit2: preset.permit2,
-    desk: (env.BRAINCHAIN_DESK_URL ?? preset.desk).replace(/\/$/, ""),
+    desk: (envString(env, "BRAINCHAIN_DESK_URL") ?? preset.desk).replace(/\/$/, ""),
     network: network as `eip155:${number}`,
     chainId: Number(match[1]),
     asset: envAddress(env, "BRAINCHAIN_PAYMENT_ASSET", preset.asset),
     payTo: envAddress(env, "BRAINCHAIN_PAY_TO", preset.payTo),
-    rpc: env.BRAINCHAIN_PAYMENT_RPC ?? preset.rpc,
+    rpc: envString(env, "BRAINCHAIN_PAYMENT_RPC") ?? preset.rpc,
     chain: preset.chain,
     token: preset.token,
     maxPrice,

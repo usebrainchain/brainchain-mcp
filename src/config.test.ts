@@ -33,6 +33,15 @@ describe("resolveConfig", () => {
     });
   });
 
+  it("treats empty and blank variables as unset, as MCP clients often pass them", () => {
+    expect(resolveConfig({ BRAINCHAIN_NETWORK: "", BRAINCHAIN_PAY_ON: " ", BRAINCHAIN_PAYMENT_NETWORK: "", BRAINCHAIN_MAX_PRICE_UNITS: "" })).toMatchObject({
+      name: "mainnet",
+      payOn: "robinhood",
+      network: "eip155:4663",
+      maxPrice: 1_000_000n,
+    });
+  });
+
   it("refuses an unknown chain", () => {
     expect(() => resolveConfig({ BRAINCHAIN_PAY_ON: "solana" })).toThrow(/robinhood or base/);
   });
