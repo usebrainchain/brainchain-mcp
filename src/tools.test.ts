@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { formatUnits, resolveConfig } from "./config.js";
-import { callTool, GET_TASK_NAME, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
+import { callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
 
 const desk: Desk = {
   post: async (task) => ({ order: "0x01", task }),
@@ -25,10 +25,21 @@ describe("callTool", () => {
   });
 
   it("rejects a malformed order id and accepts one in capitals", async () => {
+    const pattern = new RegExp((GET_TASK_TOOL.inputSchema.properties!.order as { pattern: string }).pattern);
+    expect(pattern.test(`0x${"AB".repeat(32)}`)).toBe(true);
     expect((await callTool(desk, GET_TASK_NAME, { order: "42" })).isError).toBe(true);
     const upper = await callTool(desk, GET_TASK_NAME, { order: ` 0x${"AB".repeat(32)} ` });
     expect(upper.isError).toBe(false);
     expect(body(upper)).toMatchObject({ order: `0x${"ab".repeat(32)}` });
+  });
+
+  it("returns the result as its own text block, as written", async () => {
+    const resultText = 'Line one, "quoted".\n\n```ts\nconst x = 1;\n```';
+    const reading: Desk = { ...desk, get: async (order) => ({ order, done: true, resultText }) };
+    const result = await callTool(reading, GET_TASK_NAME, { order: `0x${"a".repeat(64)}` });
+    expect(result.content).toHaveLength(2);
+    expect(body(result)).toEqual({ order: `0x${"a".repeat(64)}`, done: true });
+    expect(result.content[1]).toEqual({ type: "text", text: resultText });
   });
 
   it("reports desk errors as tool errors", async () => {
@@ -43,7 +54,7 @@ describe("callTool", () => {
   });
 });
 
-describe("resolveConfig", () => {
+describe("post tool and config", () => {
   it("defaults to mainnet: the USDG desk on Robinhood Chain", () => {
     const config = resolveConfig({});
     expect(config).toMatchObject({
@@ -55,6 +66,18 @@ describe("resolveConfig", () => {
     });
     expect(postTaskTool(config.terms).description).toContain("Each task costs 1 USDG, paid from this server's wallet on Robinhood Chain");
     expect(postTaskTool(config.terms).description).toContain("about six hours after grading");
+  });
+
+  it("says the memory of identical posts lasts while the server runs, and that briefs and results are public", () => {
+    const { description } = postTaskTool(resolveConfig({}).terms);
+    expect(description).toContain("While this server keeps running, an identical post within 15 minutes");
+    expect(description).toContain("Briefs and results are public");
+  });
+
+  it("leads with a configuration error instead of terms", () => {
+    const { description } = postTaskTool("BRAINCHAIN_NETWORK must be mainnet or testnet.");
+    expect(description).toMatch(/^Invalid setting: BRAINCHAIN_NETWORK must be mainnet or testnet\./);
+    expect(description).not.toContain("Each task costs");
   });
 
   it("switches every setting with BRAINCHAIN_NETWORK=testnet", () => {

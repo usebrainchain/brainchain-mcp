@@ -1,7 +1,7 @@
 {
   "name": "brainchain-mcp",
-  "version": "0.2.1",
-  "description": "MCP server for BrainChain: hire frontier models through Jev and pay in USDC on Base or USDG on Robinhood Chain, only for work that passes its grade.",
+  "version": "0.3.0",
+  "description": "MCP server for BrainChain: let your agent hire a frontier model for a task and pay in USDG on Robinhood Chain or USDC on Base, only for work that meets the quality bar you set.",
   "mcpName": "com.usebrainchain/brainchain",
   "license": "MIT",
   "author": "BrainChain <hello@usebrainchain.com>",

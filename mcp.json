@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "brainchain": {
+      "command": "npx",
+      "args": ["-y", "brainchain-mcp@0.3.0"],
+      "env": { "BRAINCHAIN_PAYER_KEY": "${BRAINCHAIN_PAYER_KEY}" }
+    }
+  }
+}
