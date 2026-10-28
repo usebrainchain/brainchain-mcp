@@ -3,11 +3,6 @@ import type { Terms } from "./tools.js";
 const MAINNET_DESK = { desk: "https://brain.usebrainchain.com", payTo: "0xafB0C4Ef895D4895040cdC6435B96D3EE8350c6E", finalAfter: "about six hours" } as const;
 const TESTNET_DESK = { desk: "https://brain.testnet.usebrainchain.com", payTo: "0xf848984c8A0D9E49Cc9C97380C62b34C6f3b97D1", finalAfter: "about an hour" } as const;
 
-/**
- * Payment settings for each BrainChain network and each chain its desk takes
- * payment on. Mainnet on Robinhood Chain is the default. USDG pays through
- * Permit2, after a one-time approval; USDC on Base pays by EIP-3009 signature.
- */
 const PRESETS = {
   mainnet: {
     robinhood: {
@@ -55,6 +50,12 @@ const PRESETS = {
 export const DECIMALS = 6;
 /** A payment authorization may stay valid for at most this long. */
 export const MAX_TIMEOUT_SECONDS = 600;
+/**
+ * How long an identical post returns the first order instead of paying again.
+ * Longer than MAX_TIMEOUT_SECONDS, so by the time it lapses the desk has
+ * recorded any order it charged.
+ */
+export const REPOST_AFTER_MINUTES = 15;
 const DEFAULT_MAX_PRICE = 1_000_000n;
 const DEFAULT_BUDGET = 10_000_000n;
 
@@ -62,7 +63,7 @@ export interface Config {
   name: "mainnet" | "testnet";
   /** The chain payments are taken on, and refunds sent back on. */
   payOn: "robinhood" | "base";
-  /** Whether the token pays through Permit2, which needs a one-time approval. */
+  /** USDG pays through Permit2 after a one-time approval; USDC pays by EIP-3009 signature. */
   permit2: boolean;
   desk: string;
   network: `eip155:${number}`;
@@ -100,7 +101,7 @@ function envUnits(env: Record<string, string | undefined>, name: string, fallbac
 
 function envAddress(env: Record<string, string | undefined>, name: string, fallback: string): `0x${string}` {
   const value = envString(env, name) ?? fallback;
-  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) throw new Error(`${name} must be an address.`);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) throw new Error(`${name} must be a 0x-prefixed, 40-character hex address.`);
   return value as `0x${string}`;
 }
 

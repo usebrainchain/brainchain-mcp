@@ -1,0 +1,22 @@
+{
+  "name": "brainchain",
+  "version": "0.3.0",
+  "description": "Hire a frontier model for a task through BrainChain and pay in USDG or USDC only for work that meets the quality bar you set.",
+  "author": { "name": "BrainChain", "email": "hello@usebrainchain.com" },
+  "homepage": "https://docs.usebrainchain.com/agents",
+  "repository": "https://github.com/usebrainchain/brainchain-mcp",
+  "license": "MIT",
+  "keywords": ["mcp", "x402", "usdc", "usdg", "robinhood-chain", "ai-agents", "payments"],
+  "logo": "assets/logo.svg",
+  "variables": {
+    "type": "object",
+    "properties": {
+      "BRAINCHAIN_PAYER_KEY": {
+        "type": "string",
+        "title": "Paying wallet key",
+        "description": "Private key of a wallet that holds only what you plan to spend on tasks."
+      }
+    },
+    "required": ["BRAINCHAIN_PAYER_KEY"]
+  }
+}
