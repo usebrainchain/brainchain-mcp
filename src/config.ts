@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import type { Terms } from "./tools.js";
 
 const MAINNET_DESK = { desk: "https://brain.usebrainchain.com", payTo: "0xafB0C4Ef895D4895040cdC6435B96D3EE8350c6E", finalAfter: "about six hours" } as const;
@@ -78,6 +81,10 @@ export interface Config {
   maxPrice: bigint;
   /** The most this server process pays in total, in the asset's smallest unit. */
   budget: bigint;
+  /** The most the wallet pays per UTC day across restarts and servers, when set. */
+  daily?: bigint;
+  /** Where the daily limit's spending record is kept. */
+  stateDir: string;
   terms: Terms;
 }
 
@@ -118,6 +125,8 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
   const maxPrice = envUnits(env, "BRAINCHAIN_MAX_PRICE_UNITS", DEFAULT_MAX_PRICE);
   const budget = envUnits(env, "BRAINCHAIN_BUDGET_UNITS", DEFAULT_BUDGET);
   if (budget < maxPrice) throw new Error("BRAINCHAIN_BUDGET_UNITS must be at least BRAINCHAIN_MAX_PRICE_UNITS.");
+  const daily = envString(env, "BRAINCHAIN_DAILY_UNITS") === undefined ? undefined : envUnits(env, "BRAINCHAIN_DAILY_UNITS", 0n);
+  if (daily !== undefined && daily < maxPrice) throw new Error("BRAINCHAIN_DAILY_UNITS must be at least BRAINCHAIN_MAX_PRICE_UNITS.");
 
   return {
     name,
@@ -133,6 +142,8 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
     token: preset.token,
     maxPrice,
     budget,
+    ...(daily !== undefined ? { daily } : {}),
+    stateDir: envString(env, "BRAINCHAIN_STATE_DIR") ?? join(homedir(), ".brainchain"),
     terms: {
       cost: maxPrice === DEFAULT_MAX_PRICE ? `1 ${preset.token}` : `at most ${formatUnits(maxPrice)} ${preset.token}`,
       chain: preset.chain,

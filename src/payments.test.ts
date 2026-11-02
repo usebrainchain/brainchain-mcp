@@ -1,3 +1,7 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -146,6 +150,30 @@ describe("posting", () => {
     await expect(d.post({ ...task, brief: "In one paragraph." })).rejects.toThrow(/BRAINCHAIN_BUDGET_UNITS/);
     expect(seen).toHaveLength(1);
     expect(d.spent()).toBe(1_000_000n);
+  });
+
+  it("keeps the daily limit across a restart", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+    const { fetchImpl, seen } = fakeDesk(accepted);
+    await desk(fetchImpl, { daily: 1_500_000n, stateDir }).post(task);
+    const restarted = desk(fetchImpl, { daily: 1_500_000n, stateDir });
+    await expect(restarted.post({ ...task, brief: "In one paragraph." })).rejects.toThrow(
+      /already signed payments for 1 of its 1\.5 test USDG daily limit\. The limit resets at 00:00 UTC.*Nothing was charged\.$/,
+    );
+    expect(seen).toHaveLength(1);
+  });
+
+  it("returns to the daily limit what the desk refused", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+    let refuse = true;
+    const { fetchImpl, seen } = fakeDesk((payment) =>
+      refuse ? new Response(JSON.stringify({ error: "brief must be 1 to 32,000 characters." }), { status: 400 }) : accepted(payment),
+    );
+    const d = desk(fetchImpl, { daily: 1_000_000n, stateDir });
+    await expect(d.post(task)).rejects.toThrow(/Nothing was charged/);
+    refuse = false;
+    await expect(d.post(task)).resolves.toMatchObject({ price: expect.stringMatching(/^1 /) });
+    expect(seen).toHaveLength(2);
   });
 
   it("refuses to pay anyone but the desk, or for longer than 600 seconds", async () => {

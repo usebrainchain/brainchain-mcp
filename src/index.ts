@@ -27,6 +27,8 @@ Environment:
                               base pays in USDC on Base (Base Sepolia on testnet).
   BRAINCHAIN_MAX_PRICE_UNITS  Maximum paid per task, in base units (default 1000000 = 1 USDG or USDC).
   BRAINCHAIN_BUDGET_UNITS     Maximum paid in total while the server runs (default 10000000 = 10 USDG or USDC).
+  BRAINCHAIN_DAILY_UNITS      Maximum the wallet pays per UTC day, kept across restarts (default: no daily limit).
+  BRAINCHAIN_STATE_DIR        Where the daily limit's record is kept (default ~/.brainchain).
   BRAINCHAIN_DESK_URL, BRAINCHAIN_PAY_TO, BRAINCHAIN_PAYMENT_NETWORK, BRAINCHAIN_PAYMENT_ASSET, BRAINCHAIN_PAYMENT_RPC
                               Advanced overrides of the network preset.
 `;
