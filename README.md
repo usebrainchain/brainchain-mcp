@@ -92,6 +92,14 @@ These clients keep the key in that file as plain text.
 }
 ```
 
+### OpenClaw
+
+```sh
+openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.4.0"],"env":{"BRAINCHAIN_PAYER_KEY":"${BRAINCHAIN_PAYER_KEY}"}}'
+```
+
+OpenClaw resolves `${BRAINCHAIN_PAYER_KEY}` from its environment when it starts the server, so the config holds no secret. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
+
 Each setup above pays in USDG on Robinhood Chain. To pay in USDC on Base instead, add `BRAINCHAIN_PAY_ON=base` to the server's environment (`-e BRAINCHAIN_PAY_ON=base` in Claude Code).
 
 ## Tasks are public
