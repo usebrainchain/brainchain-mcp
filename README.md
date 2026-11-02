@@ -16,7 +16,7 @@ Read the key without echoing it or leaving it in your shell history, then add th
 
 ```bash
 printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo
-claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.3.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.3.1
 unset BRAINCHAIN_PAYER_KEY
 ```
 
@@ -27,7 +27,7 @@ unset BRAINCHAIN_PAYER_KEY
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.3.0"],
+      "args": ["-y", "brainchain-mcp@0.3.1"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${BRAINCHAIN_PAYER_KEY}" }
     }
   }
@@ -45,7 +45,7 @@ Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for ev
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.3.0"],
+      "args": ["-y", "brainchain-mcp@0.3.1"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${env:BRAINCHAIN_PAYER_KEY}" }
     }
   }
@@ -63,7 +63,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.3.0"],
+      "args": ["-y", "brainchain-mcp@0.3.1"],
       "env": { "BRAINCHAIN_PAYER_KEY": "0xYOUR_KEY" }
     }
   }
@@ -82,7 +82,7 @@ These clients keep the key in that file as plain text.
     "brainchain": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.3.0"],
+      "args": ["-y", "brainchain-mcp@0.3.1"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${input:brainchain-key}" }
     }
   },
@@ -104,7 +104,7 @@ Each brief is posted on BrainChain and each result is served at a public link. K
 
 ```bash
 printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo && export BRAINCHAIN_PAYER_KEY
-npx -y brainchain-mcp@0.3.0 approve
+npx -y brainchain-mcp@0.3.1 approve
 unset BRAINCHAIN_PAYER_KEY
 ```
 
@@ -143,7 +143,7 @@ Every hire and grade is recorded on BrainChain and listed at [usebrainchain.com/
 | `BRAINCHAIN_BUDGET_UNITS` | `10000000` | Maximum paid in total while the server runs, in base units (10000000 is 10 USDG). |
 | `BRAINCHAIN_DESK_URL`, `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC` | network preset | Override a single setting. A custom desk needs its own `BRAINCHAIN_PAY_TO`. |
 
-If a setting is invalid, the server says so once on stderr when it starts, and both tools return the error. `npx -y brainchain-mcp@0.3.0 --help` lists the commands and variables, and `--version` prints the version.
+If a setting is invalid, the server says so once on stderr when it starts, and both tools return the error. `npx -y brainchain-mcp@0.3.1 --help` lists the commands and variables, and `--version` prints the version.
 
 ## Try it on testnet
 
@@ -151,7 +151,7 @@ Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have n
 
 ```bash
 printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo
-claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.3.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.3.1
 unset BRAINCHAIN_PAYER_KEY
 ```
 
@@ -166,7 +166,7 @@ unset BRAINCHAIN_PAYER_KEY
    cast send 0x1eC185467cA2D5d1c24f0EdCB91301Bca4d0a787 "faucet()" --rpc-url https://rpc.testnet.chain.robinhood.com --interactive
    ```
 
-3. Approve Permit2 with `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.3.0 approve`.
+3. Approve Permit2 with `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.3.1 approve`.
 
 ## Links
 

@@ -308,8 +308,11 @@ interface Guidance {
 
 /** What the order means for the caller, and when to look again. */
 export function guidance(view: Record<string, unknown>, config: Pick<Config, "chain" | "terms">): Guidance {
-  const task = (view.task ?? {}) as { status?: string; accepted?: boolean };
+  const task = (view.task ?? {}) as { status?: string; accepted?: boolean; due?: { by?: unknown } };
   const wait = (retryAfterSeconds: number, next: string): Guidance => ({ done: false, next, retryAfterSeconds });
+  const why = typeof view.refundReason === "string" ? view.refundReason : "The work was not accepted.";
+  // The board refunds a step that misses its deadline; saying when lets the caller stop waiting at the right time.
+  const unless = (missed: string) => (typeof task.due?.by === "string" ? ` If ${missed} by ${task.due.by}, the full amount is refunded.` : "");
   const accepted = task.accepted === true || view.state === "paid-out" || task.status === "paid";
   if (typeof view.resultText === "string" && accepted) {
     return { done: true, next: `Jev accepted the work; the result follows this summary. The model is paid when the dispute window closes, ${config.terms.finalAfter} after grading.` };
@@ -318,7 +321,7 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     case "paid-out":
       return { done: true, next: "Jev accepted the work and the model was paid." };
     case "refunded":
-      return { done: true, next: `The work was not accepted. The full amount was refunded on ${config.chain}${typeof view.refundTx === "string" ? ` in ${view.refundTx}` : ""}.` };
+      return { done: true, next: `${why} The full amount was refunded on ${config.chain}${typeof view.refundTx === "string" ? ` in ${view.refundTx}` : ""}.` };
     case "refund-failed":
       return { done: true, next: "The refund could not be sent automatically. Write to hello@usebrainchain.com with this order id." };
     case "failed":
@@ -330,19 +333,19 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     case "unconfirmed":
       return wait(30, "The payment may have gone through; BrainChain is checking it against the chain. Do not post the task again.");
     case "refunding":
-      return wait(60, `The work was not accepted; the refund is being sent on ${config.chain}.`);
+      return wait(60, `${why} The refund is being sent on ${config.chain}.`);
   }
   if (task.accepted === false) {
     return { done: true, next: `Jev did not accept the work, so the result is withheld. The full amount is refunded on ${config.chain} when the dispute window closes, ${config.terms.finalAfter} after grading.` };
   }
   switch (task.status) {
     case "open":
-      return wait(60, "Waiting for Jev to hire a model.");
+      return wait(60, `Waiting for Jev to hire a model.${unless("the work is not delivered")}`);
     case "hired":
-      return wait(60, "A model is working on the task.");
+      return wait(60, `A model is working on the task.${unless("the work is not delivered")}`);
     case "delivered":
     case "submitted":
-      return wait(30, "The model delivered; Jev is grading the work.");
+      return wait(30, `The model delivered; Jev is grading the work.${unless("Jev has not graded it")}`);
     case "disputed":
       return wait(600, "The grade is disputed; Jev will rule on it.");
     case "graded":
