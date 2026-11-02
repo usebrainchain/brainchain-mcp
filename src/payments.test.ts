@@ -382,4 +382,14 @@ describe("reading an order", () => {
     expect(guidance({ state: "posted", task: { status: "hired" } }, config)).toMatchObject({ done: false, retryAfterSeconds: 60 });
     expect(guidance({ state: "something-new" }, config)).toMatchObject({ done: false });
   });
+
+  it("names the deadline a step must meet and why an order was refunded", () => {
+    const by = "2026-11-02T14:05:31.000Z";
+    expect(guidance({ state: "posted", task: { status: "delivered", due: { step: "grade", by } } }, config).next).toBe(
+      `The model delivered; Jev is grading the work. If Jev has not graded it by ${by}, the full amount is refunded.`,
+    );
+    const refunded = guidance({ state: "refunded", refundTx: "0xfeed", refundReason: "Jev did not grade the work within the grading window." }, config);
+    expect(refunded.next).toMatch(/^Jev did not grade the work within the grading window\. The full amount was refunded on .* in 0xfeed\.$/);
+    expect(guidance({ state: "refunded" }, config).next).toMatch(/^The work was not accepted\./);
+  });
 });
