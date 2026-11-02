@@ -1,12 +1,15 @@
 import type { ClientEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
+import { join } from "node:path";
 import { keccak256, toBytes } from "viem";
 
 import { formatUnits, MAX_TIMEOUT_SECONDS, REPOST_AFTER_MINUTES, type Config } from "./config.js";
+import { dailyLedger, type DailyLedger, type Reservation } from "./daily.js";
 import type { TaskRequest, Desk } from "./tools.js";
 
 const BUDGET_REASON = "budget";
+const DAILY_REASON = "daily limit";
 const RESULT_LIMIT = 20_000;
 
 /** Same serialization the desk hashes into an order id: sorted keys, no whitespace. */
@@ -71,6 +74,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   const { config, signer, approveCommand } = options;
   const fetchImpl = options.fetch ?? fetch;
   let spent = 0n;
+  const account = () => (typeof signer === "function" ? signer() : signer);
+  let ledger: DailyLedger | undefined;
+  // Kept per network and wallet, so a testnet wallet never spends from the mainnet limit.
+  const daily = () =>
+    config.daily === undefined
+      ? undefined
+      : (ledger ??= dailyLedger(join(config.stateDir, `spend-${config.name}-${config.payOn}-${account().address.toLowerCase()}.json`), config.daily));
   const endpoint = `${config.desk}/x402/tasks`;
   const recent = new Map<string, { at: number; reply: Promise<unknown> }>();
   /** When this process paid, or may have paid, for each order; the desk can take minutes to know one. */
@@ -100,6 +110,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const message = firstLine(error);
     if (message.includes(`Payment creation aborted: ${BUDGET_REASON}`)) {
       return `This server has already signed payments for ${formatUnits(spent)} of its ${formatUnits(config.budget)} ${config.token} budget. The budget resets when the server restarts; raise BRAINCHAIN_BUDGET_UNITS to allow more per run. Nothing was charged.`;
+    }
+    if (message.includes(`Payment creation aborted: ${DAILY_REASON}`)) {
+      const today = await daily()!.spentToday().catch(() => undefined);
+      return `This wallet has already signed payments for ${today === undefined ? "most" : formatUnits(today)} of its ${formatUnits(config.daily!)} ${config.token} daily limit. The limit resets at 00:00 UTC; raise BRAINCHAIN_DAILY_UNITS to allow more. Nothing was charged.`;
     }
     if (/rejected by spendControls/.test(message)) {
       const price = await quotedPrice();
@@ -136,7 +150,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       const [{ balance, allowance }, quoted] = await until(deadline, Promise.all([options.funds(), quotedPrice(deadline)]));
       const needed = quoted ?? config.maxPrice;
       if (balance < needed) {
-        const { address } = typeof signer === "function" ? signer() : signer;
+        const { address } = account();
         return `The paying wallet holds ${formatUnits(balance)} ${config.token} on ${config.chain}; a task costs ${formatUnits(needed)}. Nothing was charged. Send at least ${formatUnits(needed - balance)} ${config.token} to ${address} on ${config.chain}, then post again.`;
       }
       if (config.permit2 && allowance !== undefined && allowance < needed) {
@@ -180,10 +194,17 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   async function pay(task: TaskRequest): Promise<unknown> {
     let signed: { payload: unknown } | undefined;
     let amount = 0n;
+    let reservation: Reservation | undefined;
+    const unreserve = async () => {
+      spent -= amount;
+      amount = 0n;
+      if (reservation) await daily()!.release(reservation);
+      reservation = undefined;
+    };
     const receipt = (order: string) => ({ order, price: `${formatUnits(amount)} ${config.token}`, statusUrl: `${endpoint}/${order}` });
 
     const client = x402Client.fromConfig({
-      schemes: [{ network: config.network, client: new ExactEvmScheme(typeof signer === "function" ? signer() : signer) }],
+      schemes: [{ network: config.network, client: new ExactEvmScheme(account()) }],
       spendControls: { allowedAssets: [{ network: config.network, asset: config.asset, maxAmountPerPayment: config.maxPrice.toString() }] },
       policies: [
         (_version, requirements) =>
@@ -196,11 +217,16 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
           ),
       ],
     });
-    // A payment is reserved against the budget before it is signed, so parallel
-    // calls cannot overshoot it.
+    // A payment is reserved against the budget and the daily limit before it is
+    // signed, so parallel calls cannot overshoot either.
     client.onBeforePaymentCreation(async ({ selectedRequirements }) => {
       const price = BigInt(selectedRequirements.amount);
       if (spent + price > config.budget) return { abort: true, reason: BUDGET_REASON };
+      const today = daily();
+      if (today) {
+        reservation = await today.reserve(price);
+        if (!reservation) return { abort: true, reason: DAILY_REASON };
+      }
       spent += price;
       amount = price;
     });
@@ -208,9 +234,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       signed = paymentPayload;
     });
     client.onPaymentCreationFailure(async () => {
-      if (signed) return;
-      spent -= amount;
-      amount = 0n;
+      if (!signed) await unreserve();
     });
 
     let response: Response;
@@ -241,8 +265,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       return possiblyCharged(receipt(typeof reply.order === "string" ? reply.order : orderIdOf(signed)), `The desk answered ${response.status}.`);
     }
 
-    spent -= amount;
-    amount = 0n;
+    await unreserve();
     if (response.status === 402) throw new Error(await explainRefusal(reply.error));
     throw new Error(typeof reply.error === "string" ? `${reply.error} Nothing was charged.` : `The desk answered ${response.status}. Nothing was charged.`);
   }

@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hire a frontier model for a task and pay in USDG or USDC only for work that meets the bar you set.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "transport": {
         "type": "stdio"
       },
@@ -70,6 +70,12 @@
           "isRequired": false,
           "format": "number",
           "default": "10000000"
+        },
+        {
+          "name": "BRAINCHAIN_DAILY_UNITS",
+          "description": "The most the wallet pays per UTC day, in the payment token's base units (6 decimals). Kept on disk, so it holds across restarts. Unset means no daily limit.",
+          "isRequired": false,
+          "format": "number"
         }
       ]
     }
