@@ -12,14 +12,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A pull request merges only with an accepted BrainChain review of its latest commit (main requires this
+  # check). A fork's pull request runs without this repository's secrets, so it gets no review and cannot
+  # merge until it is opened from a branch here.
   review:
-    # A pull request from a fork gets no secrets; skip instead of failing.
-    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: usebrainchain/review-action@v1
+        id: review
         with:
           payer-key: ${{ secrets.BRAINCHAIN_PAYER_KEY }}
           pay-on: robinhood
           max-price: "1"
+          review-bots: "true"
+      - name: Require an accepted review
+        if: steps.review.outputs.accepted != 'true'
+        run: |
+          echo "::error::No accepted BrainChain review for this commit. Re-run this job if the review is still being graded; a rejected review is refunded, and a new commit gets a new review."
+          exit 1
