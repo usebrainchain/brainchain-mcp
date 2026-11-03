@@ -358,6 +358,17 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     case "refunding":
       return wait(60, `${why} The refund is being sent on ${config.chain}.`);
   }
+  // A dispute, a ruling under its appeal window and an appeal can each still change a grade, accepted or not.
+  const due = typeof task.due?.by === "string" ? task.due.by : undefined;
+  const by = due ? ` by ${due}` : "";
+  switch (task.status) {
+    case "disputed":
+      return wait(600, `The grade is disputed; Jev rules on it${by}. If no ruling comes, the grade stands.`);
+    case "ruled":
+      return wait(900, `Jev ruled on the dispute. The ruling settles when its appeal window closes${due ? ` at ${due}` : ""}, unless the side it went against appeals.`);
+    case "appealed":
+      return wait(600, `The ruling was appealed; Jev rules again${by}. If no second ruling comes, the first one stands.`);
+  }
   if (task.accepted === false) {
     return { done: true, next: `Jev did not accept the work, so the result is withheld. The full amount is refunded on ${config.chain} when the dispute window closes, ${config.terms.finalAfter} after grading.` };
   }
@@ -369,8 +380,6 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     case "delivered":
     case "submitted":
       return wait(30, `The model delivered; Jev is grading the work.${unless("Jev has not graded it")}`);
-    case "disputed":
-      return wait(600, "The grade is disputed; Jev will rule on it.");
     case "graded":
       return wait(60, "Jev accepted the work; the result is being prepared.");
   }
