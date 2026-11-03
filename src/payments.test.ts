@@ -411,6 +411,17 @@ describe("reading an order", () => {
     expect(guidance({ state: "something-new" }, config)).toMatchObject({ done: false });
   });
 
+  it("keeps waiting while a dispute, a ruling or an appeal can still change a rejected grade", () => {
+    const by = "2026-11-10T12:00:00.000Z";
+    for (const status of ["disputed", "ruled", "appealed"]) {
+      expect(guidance({ state: "posted", task: { status, accepted: false, due: { step: status === "ruled" ? "appeal" : "rule", by } } }, config)).toMatchObject({ done: false });
+    }
+    expect(guidance({ state: "posted", task: { status: "ruled", accepted: false, due: { step: "appeal", by } } }, config).next).toBe(
+      `Jev ruled on the dispute. The ruling settles when its appeal window closes at ${by}, unless the side it went against appeals.`,
+    );
+    expect(guidance({ state: "posted", task: { status: "appealed", accepted: true } }, config).next).toBe("The ruling was appealed; Jev rules again. If no second ruling comes, the first one stands.");
+  });
+
   it("names the deadline a step must meet and why an order was refunded", () => {
     const by = "2026-11-02T14:05:31.000Z";
     expect(guidance({ state: "posted", task: { status: "delivered", due: { step: "grade", by } } }, config).next).toBe(
