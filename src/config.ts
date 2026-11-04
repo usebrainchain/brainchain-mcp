@@ -133,6 +133,16 @@ function envUrl(env: Record<string, string | undefined>, name: string, fallback:
   return value;
 }
 
+/** Signed payments travel to the desk, so plain http is allowed only where they never leave the machine. */
+function envDesk(env: Record<string, string | undefined>, fallback: string): string {
+  const desk = envUrl(env, "BRAINCHAIN_DESK_URL", fallback).replace(/\/+$/, "");
+  const { protocol, hostname } = new URL(desk);
+  if (protocol === "http:" && !["localhost", "127.0.0.1", "[::1]"].includes(hostname)) {
+    throw new Error("BRAINCHAIN_DESK_URL must be an https URL, or http on localhost or 127.0.0.1.");
+  }
+  return desk;
+}
+
 export function resolveConfig(env: Record<string, string | undefined>): Config {
   const name = (envString(env, "BRAINCHAIN_NETWORK") ?? "mainnet").toLowerCase();
   if (name !== "mainnet" && name !== "testnet") throw new Error("BRAINCHAIN_NETWORK must be mainnet or testnet.");
@@ -153,7 +163,7 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
     name,
     payOn,
     permit2: preset.permit2,
-    desk: envUrl(env, "BRAINCHAIN_DESK_URL", preset.desk).replace(/\/$/, ""),
+    desk: envDesk(env, preset.desk),
     network: network as `eip155:${number}`,
     chainId: Number(match[1]),
     asset: envAddress(env, "BRAINCHAIN_PAYMENT_ASSET", preset.asset),

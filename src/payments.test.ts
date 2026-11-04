@@ -1,4 +1,4 @@
-import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -158,9 +158,39 @@ describe("posting", () => {
     await desk(fetchImpl, { daily: 1_500_000n, stateDir }).post(task);
     const restarted = desk(fetchImpl, { daily: 1_500_000n, stateDir });
     await expect(restarted.post({ ...task, brief: "In one paragraph." })).rejects.toThrow(
-      /already signed payments for 1 of its 1\.5 test USDG daily limit\. The limit resets at 00:00 UTC.*Nothing was charged\.$/,
+      /already signed payments for 1 of its daily limit of 1\.5, counting USDG and USDC together\. The limit resets at 00:00 UTC.*Nothing was charged\.$/,
     );
     expect(seen).toHaveLength(1);
+  });
+
+  it("holds the budget and the daily limit for posts made at once", async () => {
+    const tasks = ["one", "two", "three"].map((brief) => ({ ...task, brief }));
+    const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+    const byBudget = fakeDesk(accepted);
+    const d = desk(byBudget.fetchImpl, { budget: 1_000_000n, daily: 5_000_000n, stateDir });
+    const replies = await Promise.allSettled(tasks.map((t) => d.post(t)));
+    expect(byBudget.seen).toHaveLength(1);
+    expect(replies.filter((r) => r.status === "rejected").map((r) => String(r.reason))).toEqual([expect.stringMatching(/BRAINCHAIN_BUDGET_UNITS/), expect.stringMatching(/BRAINCHAIN_BUDGET_UNITS/)]);
+    expect(d.spent()).toBe(1_000_000n);
+    expect(JSON.parse(await readFile(join(stateDir, `spend-testnet-${signer.address.toLowerCase()}.json`), "utf8"))).toMatchObject({ units: "1000000" });
+
+    const byDay = fakeDesk(accepted);
+    const e = desk(byDay.fetchImpl, { daily: 1_000_000n, stateDir: await mkdtemp(join(tmpdir(), "brainchain-mcp-")) });
+    const daily = await Promise.allSettled(tasks.map((t) => e.post(t)));
+    expect(byDay.seen).toHaveLength(1);
+    expect(daily.filter((r) => r.status === "rejected").map((r) => String(r.reason))).toEqual([expect.stringMatching(/daily limit/), expect.stringMatching(/daily limit/)]);
+    // A payment the daily limit refused gives its share of the budget back.
+    expect(e.spent()).toBe(1_000_000n);
+  });
+
+  it("gives the budget back when the daily record cannot be read", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+    await writeFile(join(stateDir, `spend-testnet-${signer.address.toLowerCase()}.json`), "{not json");
+    const { fetchImpl, seen } = fakeDesk(accepted);
+    const d = desk(fetchImpl, { daily: 5_000_000n, stateDir });
+    await expect(d.post(task)).rejects.toThrow(/cannot be read/);
+    expect(seen).toHaveLength(0);
+    expect(d.spent()).toBe(0n);
   });
 
   it("returns to the daily limit what the desk refused", async () => {
@@ -273,7 +303,7 @@ describe("paying on Base", () => {
     await desk(robinhood.fetchImpl, { daily: 1_500_000n, stateDir }).post(task);
     const onBase = bothLanes(accepted);
     await expect(createDesk({ config: { ...base, daily: 1_500_000n, stateDir }, signer, approveCommand: "unused", fetch: onBase.fetchImpl }).post({ ...task, brief: "On the other chain." })).rejects.toThrow(
-      /already signed payments for 1 of its 1\.5 test USDC daily limit/,
+      /already signed payments for 1 of its daily limit of 1\.5, counting USDG and USDC together\./,
     );
     expect(onBase.seen).toHaveLength(0);
     expect(await readdir(stateDir)).toEqual([`spend-testnet-${signer.address.toLowerCase()}.json`]);
@@ -497,7 +527,8 @@ describe("what brainchain_get_task says, for every order state and task status",
     // Rejected: the refund is still owed, and the model can still dispute, so the caller is not done. It comes back once the window has closed.
     ["posted", "graded", false, { due: by }, waits(6 * 3600 + 60, `${reject} The full amount is refunded on ${chain} when the dispute window closes at ${by}, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`)],
     ["posted", "graded", false, {}, waits(900, `${reject} The full amount is refunded on ${chain} when the dispute window closes, ${config.terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`)],
-    ["posted", "graded", false, { due: closed }, waits(300, `${reject} The dispute window has closed, so the full amount is refunded on ${chain} shortly.`)],
+    ["posted", "graded", false, { due: closed }, waits(60, `${reject} The dispute window has closed, so the full amount is refunded on ${chain} shortly.`)],
+    ["posted", "graded", false, { due: "soon" }, waits(900, `${reject} The full amount is refunded on ${chain} when the dispute window closes, ${config.terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`)],
     ["posted", "disputed", false, { due: by }, waits(600, `The grade is disputed; Jev rules on it by ${by}. If no ruling comes, the grade stands.`)],
     // An accepted grade under dispute can still refund the caller, so a result in hand does not finish it.
     ["posted", "disputed", true, { due: by, resultText: "R" }, waits(600, `The grade is disputed; Jev rules on it by ${by}. If no ruling comes, the grade stands. The result follows this summary.`)],
@@ -538,7 +569,7 @@ describe("what brainchain_get_task says, for every order state and task status",
     for (const state of STATES) {
       for (const status of STATUSES) {
         for (const accepted of [undefined, true, false]) {
-          for (const extra of [{}, { resultText: "R" }, { refundReason: "Why." }, { due: by }]) {
+          for (const extra of [{}, { resultText: "R" }, { refundReason: "Why." }, { due: by }, { due: closed }, { due: "soon" }]) {
             const { done, next, retryAfterSeconds } = read(state, status, accepted, extra);
             const at = `${state}/${status}/${accepted}/${JSON.stringify(extra)}: ${next}`;
             expect(next.length, at).toBeGreaterThan(0);

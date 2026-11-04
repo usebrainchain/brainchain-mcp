@@ -8,7 +8,7 @@ const readme = read("README.md");
 const { version } = JSON.parse(read("package.json")) as { version: string };
 const [, front = "", body = ""] = skill.split(/^---$/m);
 // The frontmatter's metadata is JSON5: JSON with trailing commas.
-const metadata = (JSON.parse(front.slice(front.indexOf("{")).replace(/,(\s*[}\]])/g, "$1")) as { openclaw: Record<string, never> }).openclaw as {
+const metadata = (JSON.parse(front.slice(front.indexOf("{")).replace(/,(\s*[}\]])/g, "$1")) as { openclaw: unknown }).openclaw as {
   primaryEnv?: string;
   requires: { bins: string[]; config: string[]; env?: string[] };
   envVars: { name: string; required: boolean; description: string }[];

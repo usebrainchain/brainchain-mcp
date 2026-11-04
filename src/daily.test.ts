@@ -2,9 +2,21 @@ import { mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { dailyLedger } from "./daily.js";
+
+// Slows chosen reads, so two processes judging the same stale lock can be lined up at will.
+const slow = vi.hoisted(() => ({ lockStatMs: 0, recordReadMs: 0 }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs/promises")>();
+  const later = <T>(ms: number, value: Promise<T>) => (ms ? value.finally(() => new Promise((r) => setTimeout(r, ms))) : value);
+  return {
+    ...fs,
+    stat: ((file: string) => later(file.endsWith(".lock") ? slow.lockStatMs : 0, fs.stat(file))) as typeof fs.stat,
+    readFile: ((file: string, options: "utf8") => later(file.endsWith(".json") ? slow.recordReadMs : 0, fs.readFile(file, options))) as typeof fs.readFile,
+  };
+});
 
 const DAY = Date.parse("2026-11-02T12:00:00Z");
 
@@ -50,5 +62,25 @@ describe("daily ledger", () => {
     const old = new Date(Date.now() - 60_000);
     await utimes(`${path}.lock`, old, old);
     expect(await ledger.reserve(1n)).toBeDefined();
+  });
+
+  it("gives a lock left by a process that died to one taker, when a second judged it stale just before", async () => {
+    const { path, ledger } = await ledgerAt(1n);
+    const other = dailyLedger(path, 1n, () => DAY);
+    await writeFile(`${path}.lock`, "");
+    const old = new Date(Date.now() - 60_000);
+    await utimes(`${path}.lock`, old, old);
+    // The second taker reads the stale lock's age while the first is about to clear it,
+    // and acts on that reading only once the first holds a fresh lock.
+    Object.assign(slow, { lockStatMs: 60, recordReadMs: 200 });
+    try {
+      const first = ledger.reserve(1n);
+      await new Promise((r) => setTimeout(r, 30));
+      const results = await Promise.all([first, other.reserve(1n)]);
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ day: "2026-11-02", units: "1" });
+    } finally {
+      Object.assign(slow, { lockStatMs: 0, recordReadMs: 0 });
+    }
   });
 });

@@ -5,6 +5,8 @@ import { dirname } from "node:path";
 
 const LOCK_STALE_MS = 10_000;
 const LOCK_WAIT_MS = 5_000;
+/** Clearing a lock takes a few system calls, so a marker older than this was left by a crash. */
+const TAKEOVER_STALE_MS = 5_000;
 
 export interface Reservation {
   day: string;
@@ -24,6 +26,32 @@ export function utcDay(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
 }
 
+/** How long ago a file was last written, or 0 when it is gone. */
+const ageOf = (file: string) => stat(file).then((s) => Date.now() - s.mtimeMs, () => 0);
+
+/**
+ * Removes a lock left by a process that died mid-write. The marker lets one
+ * process at a time judge and remove it, since removing a lock another process
+ * has just taken would give the lock to both.
+ */
+async function clearStale(lockPath: string): Promise<boolean> {
+  const marker = `${lockPath}.takeover`;
+  try {
+    await (await open(marker, "wx")).close();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if ((await ageOf(marker)) >= TAKEOVER_STALE_MS) await rm(marker, { force: true });
+    return false;
+  }
+  try {
+    if ((await ageOf(lockPath)) <= LOCK_STALE_MS) return false;
+    await rm(lockPath, { force: true });
+    return true;
+  } finally {
+    await rm(marker, { force: true });
+  }
+}
+
 export function dailyLedger(path: string, limit: bigint, now: () => number = Date.now): DailyLedger {
   const lockPath = `${path}.lock`;
 
@@ -36,12 +64,10 @@ export function dailyLedger(path: string, limit: bigint, now: () => number = Dat
         break;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        // A lock left by a process that died mid-write.
-        const age = await stat(lockPath).then((s) => Date.now() - s.mtimeMs, () => 0);
-        if (age > LOCK_STALE_MS) await rm(lockPath, { force: true });
-        else if (Date.now() > deadline) throw new Error(`The daily spending record at ${path} is locked by another process; try again`);
-        else await new Promise((r) => setTimeout(r, 50));
       }
+      if ((await ageOf(lockPath)) > LOCK_STALE_MS && (await clearStale(lockPath))) continue;
+      if (Date.now() > deadline) throw new Error(`The daily spending record at ${path} is locked by another process; try again`);
+      await new Promise((r) => setTimeout(r, 50));
     }
     try {
       return await work();

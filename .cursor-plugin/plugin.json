@@ -1,6 +1,6 @@
 {
   "name": "brainchain",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Hire a frontier model for a task through BrainChain and pay in USDG or USDC only for work that meets the quality bar you set.",
   "author": { "name": "BrainChain", "email": "hello@usebrainchain.com" },
   "homepage": "https://docs.usebrainchain.com/agents",

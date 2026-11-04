@@ -1,6 +1,6 @@
 {
   "name": "brainchain-mcp",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "MCP server for BrainChain: let your agent hire a frontier model for a task and pay in USDG on Robinhood Chain or USDC on Base, only for work that meets the quality bar you set.",
   "mcpName": "com.usebrainchain/brainchain",
   "license": "MIT",
@@ -35,8 +35,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@x402/evm": "2.28.0",
-    "@x402/fetch": "2.28.0",
+    "@x402/evm": "2.29.0",
+    "@x402/fetch": "2.29.0",
     "viem": "^2.0.0"
   },
   "devDependencies": {
