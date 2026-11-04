@@ -64,7 +64,7 @@ def check(address: str, network: str, pay_on: str, tasks: int, call=None) -> dic
         if allowance < need:
             eth = int(call(rail["rpc"], "eth_getBalance", [address, "latest"]), 16)
             report["eth"] = eth / 1e18
-            report["problems"].append("Permit2 may not spend enough USDG yet: run the approve command once (see Prerequisites).")
+            report["problems"].append("Permit2 may not spend enough USDG yet: run the approve command once (see Set up once in the skill).")
             if eth == 0:
                 report["problems"].append(f"Has no ETH on {rail['chain']} to pay for that approval.")
     report["ready"] = not report["problems"]
