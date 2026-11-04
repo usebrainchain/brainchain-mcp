@@ -369,14 +369,17 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     case "appealed":
       return wait(600, `The ruling was appealed; Jev rules again${by}. If no second ruling comes, the first one stands.`);
   }
+  // A settled task comes first: a ruling can pay work the grade rejected, or refund work it accepted.
+  if (task.status === "paid") {
+    return { done: true, next: `The model was paid.${typeof view.result === "string" ? ` The result is at ${view.result}.` : ""}` };
+  }
+  if (task.status === "refunded") {
+    return { done: true, next: `${why} The full amount was refunded on ${config.chain}.` };
+  }
   if (task.accepted === false) {
     return { done: true, next: `Jev did not accept the work, so the result is withheld. The full amount is refunded on ${config.chain} when the dispute window closes, ${config.terms.finalAfter} after grading.` };
   }
   switch (task.status) {
-    case "paid":
-      return { done: true, next: `Jev accepted the work and the model was paid.${typeof view.result === "string" ? ` The result is at ${view.result}.` : ""}` };
-    case "refunded":
-      return { done: true, next: `${why} The full amount was refunded on ${config.chain}.` };
     case "open":
       return wait(60, `Waiting for Jev to hire a model.${unless("the work is not delivered")}`);
     case "hired":
