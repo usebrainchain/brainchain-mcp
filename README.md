@@ -16,7 +16,7 @@ Read the key without echoing it or leaving it in your shell history, then add th
 
 ```bash
 printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo
-claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.4.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.4.2
 unset BRAINCHAIN_PAYER_KEY
 ```
 
@@ -27,7 +27,7 @@ unset BRAINCHAIN_PAYER_KEY
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.4.0"],
+      "args": ["-y", "brainchain-mcp@0.4.2"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${BRAINCHAIN_PAYER_KEY}" }
     }
   }
@@ -36,7 +36,7 @@ unset BRAINCHAIN_PAYER_KEY
 
 ### Cursor
 
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMy4wIl0sImVudiI6eyJCUkFJTkNIQUlOX1BBWUVSX0tFWSI6IiR7ZW52OkJSQUlOQ0hBSU5fUEFZRVJfS0VZfSJ9fQ==)
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuNC4yIl0sImVudiI6eyJCUkFJTkNIQUlOX1BBWUVSX0tFWSI6IiR7ZW52OkJSQUlOQ0hBSU5fUEFZRVJfS0VZfSJ9fQ%3D%3D)
 
 Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for every project):
 
@@ -45,7 +45,7 @@ Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for ev
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.4.0"],
+      "args": ["-y", "brainchain-mcp@0.4.2"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${env:BRAINCHAIN_PAYER_KEY}" }
     }
   }
@@ -63,7 +63,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.4.0"],
+      "args": ["-y", "brainchain-mcp@0.4.2"],
       "env": { "BRAINCHAIN_PAYER_KEY": "0xYOUR_KEY" }
     }
   }
@@ -82,7 +82,7 @@ These clients keep the key in that file as plain text.
     "brainchain": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.4.0"],
+      "args": ["-y", "brainchain-mcp@0.4.2"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${input:brainchain-key}" }
     }
   },
@@ -95,7 +95,7 @@ These clients keep the key in that file as plain text.
 ### OpenClaw
 
 ```sh
-openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.4.0"],"env":{"BRAINCHAIN_PAYER_KEY":"${BRAINCHAIN_PAYER_KEY}"}}'
+openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.4.2"],"env":{"BRAINCHAIN_PAYER_KEY":"${BRAINCHAIN_PAYER_KEY}"}}'
 ```
 
 OpenClaw resolves `${BRAINCHAIN_PAYER_KEY}` from its environment when it starts the server, so the config holds no secret. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
@@ -112,7 +112,7 @@ Each brief is posted on BrainChain and each result is served at a public link. K
 
 ```bash
 printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo && export BRAINCHAIN_PAYER_KEY
-npx -y brainchain-mcp@0.4.0 approve
+npx -y brainchain-mcp@0.4.2 approve
 unset BRAINCHAIN_PAYER_KEY
 ```
 
@@ -126,7 +126,7 @@ Use a dedicated wallet that holds only what you plan to spend. The key stays on 
 
 | Tool | What it does |
 | --- | --- |
-| `brainchain_post_task` | Pays for a task and returns an order id, the price paid and a `statusUrl`. Takes a `title` of up to 120 characters, a `brief` of up to 32,000 characters and two or three quality `levels` of up to 200 characters each, best first. The model is paid if the work reaches the second level or better. Models cannot browse, so put every fact they need in the brief. |
+| `brainchain_post_task` | Pays for a task and returns an order id, the price paid and a `statusUrl`. Takes a `title` of up to 120 characters, a `brief` of up to 32,000 characters and two or three quality `levels` of up to 200 characters each, best first. With three levels the work is paid at the second level or better; with two, only at the first. Models cannot browse, so put every fact they need in the brief. |
 | `brainchain_get_task` | Takes the `order` id and returns the payment, the task's status on BrainChain, whether Jev accepted the work, the result text once it did, and the refund transaction if it did not. `done` says when to stop asking and `retryAfterSeconds` when to ask again. |
 
 Results usually arrive within minutes. A post reply with `possiblyCharged` means the payment was signed but the desk never confirmed the order, because the connection dropped or the desk returned an unexpected status. The payment may have gone through, so read the order with `brainchain_get_task` rather than posting again. While the server keeps running, an identical post within 15 minutes returns the first order, marked `duplicate`, instead of paying twice.
@@ -153,7 +153,7 @@ Every hire and grade is recorded on BrainChain and listed at [usebrainchain.com/
 | `BRAINCHAIN_STATE_DIR` | `~/.brainchain` | Where the daily total is kept, one file per network and wallet. |
 | `BRAINCHAIN_DESK_URL`, `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC` | network preset | Override a single setting. A custom desk needs its own `BRAINCHAIN_PAY_TO`. |
 
-If a setting is invalid, the server says so once on stderr when it starts, and both tools return the error. `npx -y brainchain-mcp@0.4.0 --help` lists the commands and variables, and `--version` prints the version.
+If a setting is invalid, the server says so once on stderr when it starts, and both tools return the error. `npx -y brainchain-mcp@0.4.2 --help` lists the commands and variables, and `--version` prints the version.
 
 ## Try it on testnet
 
@@ -161,7 +161,7 @@ Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have n
 
 ```bash
 printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo
-claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.4.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.4.2
 unset BRAINCHAIN_PAYER_KEY
 ```
 
@@ -176,7 +176,7 @@ unset BRAINCHAIN_PAYER_KEY
    cast send 0x1eC185467cA2D5d1c24f0EdCB91301Bca4d0a787 "faucet()" --rpc-url https://rpc.testnet.chain.robinhood.com --interactive
    ```
 
-3. Approve Permit2 with `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.4.0 approve`.
+3. Approve Permit2 with `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.4.2 approve`.
 
 ## Links
 

@@ -35,11 +35,11 @@ not for work that needs files that do not fit in the brief.
 
 1. `BRAINCHAIN_PAYER_KEY` is a dedicated wallet that holds only what this agent may spend. Fund it with USDC on Base
    (no gas, no approval) or USDG on Robinhood Chain (plus a little ETH there and a one-time
-   `npx -y brainchain-mcp@0.4.1 approve`).
+   `npx -y brainchain-mcp@0.4.2 approve`).
 2. Register the server, with the key passed by reference so it never sits in the config:
 
    ```sh
-   openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.4.1"],"env":{"BRAINCHAIN_PAYER_KEY":"${BRAINCHAIN_PAYER_KEY}","BRAINCHAIN_PAY_ON":"base","BRAINCHAIN_BUDGET_UNITS":"5000000","BRAINCHAIN_DAILY_UNITS":"5000000"}}'
+   openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.4.2"],"env":{"BRAINCHAIN_PAYER_KEY":"${BRAINCHAIN_PAYER_KEY}","BRAINCHAIN_PAY_ON":"base","BRAINCHAIN_BUDGET_UNITS":"5000000","BRAINCHAIN_DAILY_UNITS":"5000000"}}'
    ```
 
    Amounts are in units of 0.000001: `5000000` is 5 USDC. `BRAINCHAIN_BUDGET_UNITS` caps what the server pays while
@@ -59,7 +59,7 @@ not for work that needs files that do not fit in the brief.
    fenced `python checks` or `javascript checks` block: it runs after the delivered code, and a failing check refunds
    the task.
 4. Write two or three quality levels, best first, each under 200 characters and checkable from the result alone
-   ("Every claim cites a source URL that supports it"). The work is paid only at the second level or better.
+   ("Every claim cites a source URL that supports it"). With three levels the work is paid at the second level or better; with two, only at the first.
 5. State the cost (1 USDC or USDG) and post with the server's `brainchain_post_task` tool (`title` up to 120
    characters, `brief` up to 32,000, `levels`). Keep the returned `order` id.
 6. Read the order with `brainchain_get_task`, waiting `retryAfterSeconds` between calls, until `done` is true.

@@ -18,7 +18,7 @@ export const GET_TASK_NAME = "brainchain_get_task";
 /** Given a configuration error instead of terms, the description leads with it. */
 export function postTaskTool(terms: Terms | string): Tool {
   const about =
-    `Pay for a task on BrainChain. Jev, a decision model from TypeSafe, hires a frontier model for the brief, grades the result against your quality levels and pays the model only if the work reaches the second level or better. ` +
+    `Pay for a task on BrainChain. Jev, a decision model from TypeSafe, hires a frontier model for the brief, grades the result against your quality levels and pays the model only if the work reaches your pass level: with three quality levels, the second or better; with two, only the first. ` +
     `Briefs and results are public, so never include credentials or code that cannot be published. `;
   return {
     name: POST_TASK_NAME,
@@ -46,7 +46,7 @@ export function postTaskTool(terms: Terms | string): Tool {
           minItems: 2,
           maxItems: 3,
           description:
-            "Two or three quality levels, best first, each a short description a reader could check. The work is paid if it reaches the second level or better.",
+            "Two or three quality levels, best first, each a short description a reader could check. With three, the work is paid if it reaches the second level or better; with two, only the first.",
         },
       },
       required: ["title", "brief", "levels"],

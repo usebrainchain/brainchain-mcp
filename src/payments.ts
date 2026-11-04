@@ -373,6 +373,10 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     return { done: true, next: `Jev did not accept the work, so the result is withheld. The full amount is refunded on ${config.chain} when the dispute window closes, ${config.terms.finalAfter} after grading.` };
   }
   switch (task.status) {
+    case "paid":
+      return { done: true, next: `Jev accepted the work and the model was paid.${typeof view.result === "string" ? ` The result is at ${view.result}.` : ""}` };
+    case "refunded":
+      return { done: true, next: `${why} The full amount was refunded on ${config.chain}.` };
     case "open":
       return wait(60, `Waiting for Jev to hire a model.${unless("the work is not delivered")}`);
     case "hired":
@@ -381,7 +385,7 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     case "submitted":
       return wait(30, `The model delivered; Jev is grading the work.${unless("Jev has not graded it")}`);
     case "graded":
-      return wait(60, "Jev accepted the work; the result is being prepared.");
+      return wait(60, task.accepted === true ? "Jev accepted the work; the result is being prepared." : "Jev graded the work; the verdict is being recorded.");
   }
   return wait(60, "The order is in progress.");
 }

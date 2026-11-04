@@ -422,6 +422,16 @@ describe("reading an order", () => {
     expect(guidance({ state: "posted", task: { status: "appealed", accepted: true } }, config).next).toBe("The ruling was appealed; Jev rules again. If no second ruling comes, the first one stands.");
   });
 
+  it("finishes on a settled task even when the result file cannot be read, and claims no verdict it was not given", () => {
+    const paid = guidance({ state: "posted", result: "https://desk/records/0xdead", task: { status: "paid", accepted: true } }, config);
+    expect(paid).toMatchObject({ done: true, next: "Jev accepted the work and the model was paid. The result is at https://desk/records/0xdead." });
+    const refunded = guidance({ state: "posted", task: { status: "refunded" } }, config);
+    expect(refunded.done).toBe(true);
+    expect(refunded.next).toMatch(/^The work was not accepted\. The full amount was refunded on /);
+    expect(guidance({ state: "posted", task: { status: "graded" } }, config).next).toBe("Jev graded the work; the verdict is being recorded.");
+    expect(guidance({ state: "posted", task: { status: "graded", accepted: true } }, config).next).toBe("Jev accepted the work; the result is being prepared.");
+  });
+
   it("names the deadline a step must meet and why an order was refunded", () => {
     const by = "2026-11-02T14:05:31.000Z";
     expect(guidance({ state: "posted", task: { status: "delivered", due: { step: "grade", by } } }, config).next).toBe(
