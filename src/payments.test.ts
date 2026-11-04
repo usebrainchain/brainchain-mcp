@@ -391,6 +391,17 @@ describe("input checks", () => {
   it("measures what is sent: trimmed, with briefs up to 32,000 characters", () => {
     expect(checkBrief({ ...task, title: ` ${"x".repeat(120)} `, brief: "x".repeat(32_000) })).toMatchObject({ title: "x".repeat(120) });
   });
+
+  it("measures the whole task in bytes as the desk does, with its pass level, as canonical JSON", () => {
+    const levels = ["a", "b"];
+    const overhead = Buffer.byteLength('{"brief":"","levels":["a","b"],"passIndex":0,"title":"t"}');
+    // 21,000 characters at three bytes each, then one-byte characters up to the cap.
+    const brief = `${"漢".repeat(21_000)}${"x".repeat(64_000 - 63_000 - overhead)}`;
+    expect(checkBrief({ title: "t", brief, levels }).brief).toBe(brief);
+    expect(() => checkBrief({ title: "t", brief: `${brief}x`, levels })).toThrow("The task is 64,001 bytes as JSON; the limit is 64,000. Shorten the brief.");
+    // A quote is escaped, so it takes two bytes.
+    expect(() => checkBrief({ title: "t", brief: `${brief.slice(0, -1)}"`, levels })).toThrow("The task is 64,001 bytes as JSON");
+  });
 });
 
 describe("reading an order", () => {
