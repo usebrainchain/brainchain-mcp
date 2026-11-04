@@ -1,6 +1,10 @@
 import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it, vi } from "vitest";
@@ -121,6 +125,35 @@ describe("posting", () => {
     }
   });
 
+  it("answers possiblyCharged by its deadline while the desk holds a paid request, through garbage collection", async () => {
+    // The real fetch, against a desk that never answers the paid request, with garbage collected all along.
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const held: ServerResponse[] = [];
+    const server = createServer((request, response) => {
+      request.resume();
+      if (request.headers["payment-signature"]) return void held.push(response);
+      response.writeHead(402, { "payment-required": challenge() }).end("{}");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const collect = setInterval(gc, 20);
+    try {
+      const local = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const d = createDesk({ config: { ...config, desk: local }, signer, approveCommand: "npx -y brainchain-mcp approve", postTimeoutMs: 500 });
+      const started = Date.now();
+      const reply = (await d.post(task)) as { possiblyCharged?: boolean; error?: string };
+      expect(Date.now() - started).toBeLessThan(2_500);
+      expect(held).toHaveLength(1);
+      expect(reply.possiblyCharged).toBe(true);
+      expect(reply.error).toMatch(/do not post the task again/);
+    } finally {
+      clearInterval(collect);
+      for (const response of held) response.destroy();
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+
   it("releases the budget when the desk rejects the request", async () => {
     const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "brief must be 1 to 32,000 characters." }), { status: 400 }));
     const d = desk(fetchImpl);
@@ -136,6 +169,19 @@ describe("posting", () => {
     expect(seen).toHaveLength(1);
     expect(d.spent()).toBe(0n);
     await expect(desk((async () => tooLarge()) as typeof fetch).post(task)).rejects.toThrow("The task is too large to post. Nothing was charged.");
+  });
+
+  it("ends the desk's reason as a sentence before saying nothing was charged", async () => {
+    for (const [error, said] of [
+      ["brief refused", "brief refused. Nothing was charged."],
+      ["The brief is refused.", "The brief is refused. Nothing was charged."],
+      ["", "The desk answered 400. Nothing was charged."],
+    ]) {
+      const refuse = (async () => new Response(JSON.stringify({ error }), { status: 400 })) as typeof fetch;
+      await expect(desk(refuse).post(task)).rejects.toThrow(said);
+    }
+    const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "insufficient_funds" }), { status: 402 }));
+    await expect(desk(fetchImpl).post(task)).rejects.toThrow("The desk refused the payment: insufficient_funds. Nothing was charged.");
   });
 
   it("refuses a desk that answers without asking for payment", async () => {
@@ -357,6 +403,17 @@ describe("input checks", () => {
 
   it("measures what is sent: trimmed, with briefs up to 32,000 characters", () => {
     expect(checkBrief({ ...task, title: ` ${"x".repeat(120)} `, brief: "x".repeat(32_000) })).toMatchObject({ title: "x".repeat(120) });
+  });
+
+  it("measures the whole task in bytes as the desk does, with its pass level, as canonical JSON", () => {
+    const levels = ["a", "b"];
+    const overhead = Buffer.byteLength('{"brief":"","levels":["a","b"],"passIndex":0,"title":"t"}');
+    // 21,000 characters at three bytes each, then one-byte characters up to the cap.
+    const brief = `${"漢".repeat(21_000)}${"x".repeat(64_000 - 63_000 - overhead)}`;
+    expect(checkBrief({ title: "t", brief, levels }).brief).toBe(brief);
+    expect(() => checkBrief({ title: "t", brief: `${brief}x`, levels })).toThrow("The task is 64,001 bytes as JSON; the limit is 64,000. Shorten the brief.");
+    // A quote is escaped, so it takes two bytes.
+    expect(() => checkBrief({ title: "t", brief: `${brief.slice(0, -1)}"`, levels })).toThrow("The task is 64,001 bytes as JSON");
   });
 });
 

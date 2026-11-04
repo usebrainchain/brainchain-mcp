@@ -5,7 +5,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { createWalletClient, http, maxUint256, type PrivateKeyAccount } from "viem";
 
 import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
-import { approvalFailure, chainClients, createServer, erc20, payerAccount, PERMIT2 } from "./server.js";
+import { stateDirProblem } from "./daily.js";
+import { approvalFailure, approveCommand, chainClients, createServer, erc20, payerAccount, PERMIT2, walletFunds, walletReport } from "./server.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -18,7 +19,8 @@ Usage:
   brainchain-mcp approve [USDG]  Let Permit2 spend the paying wallet's USDG.
                                  Default 100 USDG; pass a number, "max", or 0 to revoke.
                                  Not needed when paying in USDC on Base.
-  brainchain-mcp wallet          Check the key and settings, and print the wallet that pays.
+  brainchain-mcp wallet          Check the key and settings, and print the wallet that pays, what it
+                                 holds and, for USDG, what Permit2 may spend.
 
 Environment:
   BRAINCHAIN_PAYER_KEY        Private key of the paying wallet, 64 hex characters with or without 0x.
@@ -51,22 +53,31 @@ if (command === "--version" || command === "-v" || command === "version") {
   process.exit(0);
 }
 if (command !== undefined && command !== "approve" && command !== "wallet") fail(`Unknown command ${command}.\n\n${USAGE}`);
+const extra = process.argv[command === "approve" ? 4 : 3];
+if (command !== undefined && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : "wallet takes none"}.\n\n${USAGE}`);
 
 if (command === undefined) {
   await createServer(process.env, version).connect(new StdioServerTransport());
 } else if (command === "wallet") {
   const { config, account } = settings();
-  console.log(`${account.address} pays for tasks in ${config.token} on ${config.chain}.`);
+  const funds = await walletFunds(config, account.address).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+  console.log(walletReport(config, account.address, funds, approveCommand(config, version)));
 } else {
   await approve(process.argv[3] ?? "100");
 }
 
 function settings(): { config: Config; account: PrivateKeyAccount } {
+  let config: Config;
+  let account: PrivateKeyAccount;
   try {
-    return { config: resolveConfig(process.env), account: payerAccount(process.env) };
+    config = resolveConfig(process.env);
+    account = payerAccount(process.env);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
+  const problem = config.daily === undefined ? undefined : stateDirProblem(config.stateDir);
+  if (problem) fail(problem);
+  return { config, account };
 }
 
 async function approve(arg: string): Promise<void> {

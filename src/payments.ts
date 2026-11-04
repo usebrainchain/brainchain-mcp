@@ -49,6 +49,8 @@ export interface DeskOptions {
 
 const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const firstLine = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0] ?? "";
+/** Text from the desk or a library, ended as a sentence so what this server adds after it reads apart. */
+const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
 /** Statuses that say "not now" rather than "no", alongside every 5xx. */
 const RETRY_LATER = new Set([408, 425, 429]);
 
@@ -139,12 +141,14 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(message)) {
       return `Could not reach the desk at ${config.desk}. Nothing was charged. Check your connection or BRAINCHAIN_DESK_URL and try again.`;
     }
-    return `The payment could not be prepared: ${message}. Nothing was charged.`;
+    // The x402 client puts its own words before an error raised while it prepared the payment.
+    return `The payment could not be prepared: ${sentence(message.replace(/^Failed to create payment payload: /, ""))} Nothing was charged.`;
   }
 
   /** Explains a payment the desk refused, from the wallet's balance and Permit2 allowance where possible. */
   async function explainRefusal(reason: unknown): Promise<string> {
-    const fallback = typeof reason === "string" ? `The desk refused the payment: ${reason}. Nothing was charged.` : "The desk refused the payment. Nothing was charged.";
+    const fallback =
+      typeof reason === "string" && reason.trim() ? `The desk refused the payment: ${sentence(reason)} Nothing was charged.` : "The desk refused the payment. Nothing was charged.";
     if (!options.funds) return fallback;
     try {
       // One deadline for both reads, so a slow chain cannot hold the reply.
@@ -247,18 +251,25 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       if (!signed) await unreserve();
     });
 
+    // Short enough that a possiblyCharged reply reaches a client that gives up after 60 seconds.
+    // The x402 client sends clones of the request, and a clone follows the request's signal
+    // through weak references only, so once garbage is collected a deadline set on the request
+    // never fires. Each request it sends carries the deadline itself, which the timer keeps alive.
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")), options.postTimeoutMs ?? 45_000);
+    const timed: typeof fetch = (input, init) => fetchImpl(input, { ...init, signal: deadline.signal });
     let response: Response;
     try {
-      response = await wrapFetchWithPayment(fetchImpl, client)(endpoint, {
+      response = await wrapFetchWithPayment(timed, client)(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(task),
-        // Short enough that a possiblyCharged reply reaches a client that gives up after 60 seconds.
-        signal: AbortSignal.timeout(options.postTimeoutMs ?? 45_000),
       });
     } catch (error) {
       if (signed) return possiblyCharged(receipt(orderIdOf(signed)), `The desk did not confirm the order (${firstLine(error)}).`);
       throw new Error(await explainUnsigned(error));
+    } finally {
+      clearTimeout(timer);
     }
 
     const reply = (await jsonObject(response)) ?? {};
@@ -277,7 +288,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
 
     await unreserve();
     if (response.status === 402) throw new Error(await explainRefusal(reply.error));
-    throw new Error(typeof reply.error === "string" ? `${reply.error} Nothing was charged.` : `The desk answered ${response.status}. Nothing was charged.`);
+    throw new Error(typeof reply.error === "string" && reply.error.trim() ? `${sentence(reply.error)} Nothing was charged.` : `The desk answered ${response.status}. Nothing was charged.`);
   }
 
   async function get(order: string): Promise<unknown> {

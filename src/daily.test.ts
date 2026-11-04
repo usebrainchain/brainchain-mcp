@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { dailyLedger } from "./daily.js";
+import { dailyLedger, stateDirProblem } from "./daily.js";
 
 // Slows chosen reads, so two processes judging the same stale lock can be lined up at will.
 const slow = vi.hoisted(() => ({ lockStatMs: 0, recordReadMs: 0 }));
@@ -27,6 +27,25 @@ async function ledgerAt(limit: bigint) {
 }
 
 describe("daily ledger", () => {
+  it("says plainly when its folder cannot hold the record, and makes a missing one", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "daily-"));
+    const file = join(dir, "not-a-folder");
+    await writeFile(file, "");
+    const notFolder = `BRAINCHAIN_STATE_DIR is ${file}, which is not a folder, so the daily limit's record cannot be kept there.`;
+    expect(stateDirProblem(file)).toContain(notFolder);
+    await expect(dailyLedger(join(file, "spend.json"), 2n).reserve(1n)).rejects.toThrow(notFolder);
+    expect(stateDirProblem(join(dir, "new", "folder"))).toBeUndefined();
+    // Root can write anywhere, so only another account sees a folder it cannot write to.
+    if (process.getuid?.() !== 0) {
+      const locked = join(dir, "read-only");
+      expect(stateDirProblem(locked)).toBeUndefined();
+      await chmod(locked, 0o500);
+      const readOnly = `BRAINCHAIN_STATE_DIR is ${locked}, which this account cannot write to, so the daily limit's record cannot be kept there.`;
+      expect(stateDirProblem(locked)).toContain(readOnly);
+      await expect(dailyLedger(join(locked, "spend.json"), 2n).reserve(1n)).rejects.toThrow(readOnly);
+    }
+  });
+
   it("refuses what would pass the limit and starts again on the next UTC day", async () => {
     const { path, clock, ledger } = await ledgerAt(2n);
     expect(await ledger.reserve(1n)).toEqual({ day: "2026-11-02", amount: 1n });

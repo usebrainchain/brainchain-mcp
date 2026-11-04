@@ -63,6 +63,14 @@ describe("callTool", () => {
       [{ ...task, levels: ["good", 5] }, "levels[1] must be a string, not a number."],
       [{ ...task, levels: ["good", " "] }, "levels[1] is empty."],
       [{ ...task, levels: ["x".repeat(201), "ok"] }, "levels[0] is 201 characters; the limit is 200."],
+      [{ ...task, title: "line one\nline two" }, "title must be one line."],
+      [{ ...task, title: "line one\u2028line two" }, "title must be one line."],
+      [{ ...task, brief: "\u200b" }, "brief is empty."],
+      [{ ...task, brief: " \u2800\u3164\ufeff\u{e0041} " }, "brief is empty."],
+      [{ ...task, levels: ["good", "\u200d"] }, "levels[1] is empty."],
+      [{ ...task, levels: ["Accurate", " Accurate "] }, "levels[1] repeats levels[0]; each level must describe a different quality."],
+      [{ ...task, levels: ["good", "ok", "good"] }, "levels[2] repeats levels[0]; each level must describe a different quality."],
+      [{ ...task, brief: "漢".repeat(25_000) }, "The task is 75,061 bytes as JSON; the limit is 64,000. Shorten the brief."],
     ] as const) {
       const result = await callTool(desk, POST_TASK_NAME, input);
       expect(result.isError).toBe(true);
