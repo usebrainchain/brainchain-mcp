@@ -16,7 +16,7 @@ Read the key without echoing it or leaving it in your shell history, then add th
 
 ```bash
 printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo
-claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.4.2
+claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.4.3
 unset BRAINCHAIN_PAYER_KEY
 ```
 
@@ -27,7 +27,7 @@ unset BRAINCHAIN_PAYER_KEY
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.4.2"],
+      "args": ["-y", "brainchain-mcp@0.4.3"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${BRAINCHAIN_PAYER_KEY}" }
     }
   }
@@ -36,7 +36,7 @@ unset BRAINCHAIN_PAYER_KEY
 
 ### Cursor
 
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuNC4yIl0sImVudiI6eyJCUkFJTkNIQUlOX1BBWUVSX0tFWSI6IiR7ZW52OkJSQUlOQ0hBSU5fUEFZRVJfS0VZfSJ9fQ%3D%3D)
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuNC4zIl0sImVudiI6eyJCUkFJTkNIQUlOX1BBWUVSX0tFWSI6IiR7ZW52OkJSQUlOQ0hBSU5fUEFZRVJfS0VZfSJ9fQ%3D%3D)
 
 Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for every project):
 
@@ -45,7 +45,7 @@ Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for ev
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.4.2"],
+      "args": ["-y", "brainchain-mcp@0.4.3"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${env:BRAINCHAIN_PAYER_KEY}" }
     }
   }
@@ -63,7 +63,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.4.2"],
+      "args": ["-y", "brainchain-mcp@0.4.3"],
       "env": { "BRAINCHAIN_PAYER_KEY": "0xYOUR_KEY" }
     }
   }
@@ -82,7 +82,7 @@ These clients keep the key in that file as plain text.
     "brainchain": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.4.2"],
+      "args": ["-y", "brainchain-mcp@0.4.3"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${input:brainchain-key}" }
     }
   },
@@ -95,7 +95,7 @@ These clients keep the key in that file as plain text.
 ### OpenClaw
 
 ```sh
-openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.4.2"],"env":{"BRAINCHAIN_PAYER_KEY":"${BRAINCHAIN_PAYER_KEY}"}}'
+openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.4.3"],"env":{"BRAINCHAIN_PAYER_KEY":"${BRAINCHAIN_PAYER_KEY}"}}'
 ```
 
 OpenClaw resolves `${BRAINCHAIN_PAYER_KEY}` from its environment when it starts the server, so the config holds no secret. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
@@ -112,7 +112,7 @@ Each brief is posted on BrainChain and each result is served at a public link. K
 
 ```bash
 printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo && export BRAINCHAIN_PAYER_KEY
-npx -y brainchain-mcp@0.4.2 approve
+npx -y brainchain-mcp@0.4.3 approve
 unset BRAINCHAIN_PAYER_KEY
 ```
 
@@ -149,11 +149,11 @@ Every hire and grade is recorded on BrainChain and listed at [usebrainchain.com/
 | `BRAINCHAIN_PAY_ON` | `robinhood` | `base` pays in USDC on Base (Base Sepolia on testnet) instead of USDG on Robinhood Chain. |
 | `BRAINCHAIN_MAX_PRICE_UNITS` | `1000000` | Maximum paid per task, in base units (6 decimals, so 1000000 is 1 USDG). |
 | `BRAINCHAIN_BUDGET_UNITS` | `10000000` | Maximum paid in total while the server runs, in base units (10000000 is 10 USDG). |
-| `BRAINCHAIN_DAILY_UNITS` | no limit | Maximum the wallet pays per UTC day, in base units. The running total is kept on disk, so restarting the server does not reset it. |
+| `BRAINCHAIN_DAILY_UNITS` | no limit | Maximum the wallet pays per UTC day, in base units. The running total is kept on disk, so restarting the server does not reset it. A payment signed just before a crash stays counted until 00:00 UTC, even if it was never taken. |
 | `BRAINCHAIN_STATE_DIR` | `~/.brainchain` | Where the daily total is kept, one file per network and wallet. |
 | `BRAINCHAIN_DESK_URL`, `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC` | network preset | Override a single setting. A custom desk needs its own `BRAINCHAIN_PAY_TO`. |
 
-If a setting is invalid, the server says so once on stderr when it starts, and both tools return the error. `npx -y brainchain-mcp@0.4.2 --help` lists the commands and variables, and `--version` prints the version.
+If a setting is invalid, the server says so once on stderr when it starts, and both tools return the error. `npx -y brainchain-mcp@0.4.3 --help` lists the commands and variables, and `--version` prints the version.
 
 ## Try it on testnet
 
@@ -161,7 +161,7 @@ Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have n
 
 ```bash
 printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo
-claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.4.2
+claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.4.3
 unset BRAINCHAIN_PAYER_KEY
 ```
 
@@ -176,7 +176,7 @@ unset BRAINCHAIN_PAYER_KEY
    cast send 0x1eC185467cA2D5d1c24f0EdCB91301Bca4d0a787 "faucet()" --rpc-url https://rpc.testnet.chain.robinhood.com --interactive
    ```
 
-3. Approve Permit2 with `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.4.2 approve`.
+3. Approve Permit2 with `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.4.3 approve`.
 
 ## Links
 

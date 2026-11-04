@@ -424,7 +424,9 @@ describe("reading an order", () => {
 
   it("finishes on a settled task even when the result file cannot be read, and claims no verdict it was not given", () => {
     const paid = guidance({ state: "posted", result: "https://desk/records/0xdead", task: { status: "paid", accepted: true } }, config);
-    expect(paid).toMatchObject({ done: true, next: "Jev accepted the work and the model was paid. The result is at https://desk/records/0xdead." });
+    expect(paid).toMatchObject({ done: true, next: "The model was paid. The result is at https://desk/records/0xdead." });
+    const overturned = guidance({ state: "posted", task: { status: "paid", accepted: false } }, config);
+    expect(overturned).toMatchObject({ done: true, next: "The model was paid." });
     const refunded = guidance({ state: "posted", task: { status: "refunded" } }, config);
     expect(refunded.done).toBe(true);
     expect(refunded.next).toMatch(/^The work was not accepted\. The full amount was refunded on /);
