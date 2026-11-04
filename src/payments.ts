@@ -390,5 +390,7 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     case "graded":
       return wait(60, task.accepted === true ? "Jev accepted the work; the result is being prepared." : "Jev graded the work; the verdict is being recorded.");
   }
+  // The order can read posted a moment before the task's status reaches it.
+  if (view.state === "posted" && task.status === undefined) return wait(20, "The task is posted; its status shows here shortly.");
   return wait(60, "The order is in progress.");
 }

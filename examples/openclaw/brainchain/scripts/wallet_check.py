@@ -41,7 +41,7 @@ def _word(address: str) -> str:
 def rpc(url: str, method: str, params: list, timeout: float = 15.0):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
     # Some public RPCs refuse urllib's default user agent.
-    request = urllib.request.Request(url, data=body, headers={"content-type": "application/json", "user-agent": "hermes-brainchain-skill/0.1"})
+    request = urllib.request.Request(url, data=body, headers={"content-type": "application/json", "user-agent": "openclaw-brainchain-skill/0.1"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         reply = json.load(response)
     if "error" in reply:

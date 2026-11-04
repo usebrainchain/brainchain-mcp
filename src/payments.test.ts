@@ -399,6 +399,11 @@ describe("reading an order", () => {
     expect(view.done).toBe(false);
   });
 
+  it("says the task is posted when the order reads posted before the task's status reaches it", () => {
+    expect(guidance({ state: "posted" }, config)).toEqual({ done: false, next: "The task is posted; its status shows here shortly.", retryAfterSeconds: 20 });
+    expect(guidance({ state: "posted", task: { status: "something-new" } }, config)).toEqual({ done: false, next: "The order is in progress.", retryAfterSeconds: 60 });
+  });
+
   it("says when to stop polling", () => {
     expect(guidance({ resultText: "done", task: { status: "graded", accepted: true } }, config)).toMatchObject({ done: true });
     // A desk that serves results before grading must not read as accepted.

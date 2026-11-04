@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hire a frontier model for a task and pay in USDG or USDC only for work that meets the bar you set.",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,15 +23,15 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.4.3",
+      "version": "0.4.4",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
           "name": "BRAINCHAIN_PAYER_KEY",
-          "description": "Private key of the wallet that pays for tasks, 64 hex characters with or without 0x. Use a wallet that holds only what you plan to spend.",
-          "isRequired": true,
+          "description": "Private key of the wallet that pays for tasks, 64 hex characters with or without 0x. Needed to post tasks; the server starts and reads orders without it. Use a wallet that holds only what you plan to spend.",
+          "isRequired": false,
           "isSecret": true,
           "format": "string"
         },
@@ -76,6 +76,12 @@
           "description": "The most the wallet pays per UTC day, in the payment token's base units (6 decimals). Kept on disk, so it holds across restarts. Unset means no daily limit.",
           "isRequired": false,
           "format": "number"
+        },
+        {
+          "name": "BRAINCHAIN_STATE_DIR",
+          "description": "Folder where the daily total is kept, one file per network and wallet. Defaults to ~/.brainchain.",
+          "isRequired": false,
+          "format": "filepath"
         }
       ]
     }
