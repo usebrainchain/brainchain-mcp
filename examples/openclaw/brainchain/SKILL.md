@@ -59,7 +59,8 @@ says the server is registered. Step 4 is what checks the key.
    ```
 
    For USDG on Robinhood Chain, also approve once:
-   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.4.4 approve`.
+   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.4.4 approve` (with
+   `BRAINCHAIN_NETWORK=testnet` in front on testnet).
 3. Register the server with the path of that file:
 
    ```sh
