@@ -160,7 +160,7 @@ Every hire and grade is recorded on BrainChain and listed at [usebrainchain.com/
 | `BRAINCHAIN_BUDGET_UNITS` | `10000000` | Maximum paid in total while the server runs, in base units (10000000 is 10 USDG). |
 | `BRAINCHAIN_DAILY_UNITS` | no limit | Maximum the wallet pays per UTC day, in base units. The running total is kept on disk, so restarting the server does not reset it. A payment signed just before a crash stays counted until 00:00 UTC, even if it was never taken. |
 | `BRAINCHAIN_STATE_DIR` | `~/.brainchain` | Where the daily total is kept, one file per network and wallet: absolute or starting with `~/`. |
-| `BRAINCHAIN_DESK_URL`, `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC` | network preset | Override a single setting. A custom desk needs its own `BRAINCHAIN_PAY_TO`. |
+| `BRAINCHAIN_DESK_URL`, `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC` | network preset | Override a single setting. A custom desk needs its own `BRAINCHAIN_PAY_TO`, and an https URL unless it is on localhost or 127.0.0.1. |
 
 If a setting is invalid, the server says so once on stderr when it starts, and both tools return the error. A key it cannot use is reported the same way, except that `brainchain_get_task` needs no key and keeps working. `npx -y brainchain-mcp@0.5.0 wallet` checks the settings and the key, and prints the wallet that pays. `--help` lists the commands and variables, and `--version` prints the version.
 

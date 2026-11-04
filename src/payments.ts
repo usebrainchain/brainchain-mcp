@@ -114,7 +114,8 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
     if (message.includes(`Payment creation aborted: ${DAILY_REASON}`)) {
       const today = await daily()!.spentToday().catch(() => undefined);
-      return `This wallet has already signed payments for ${today === undefined ? "most" : formatUnits(today)} of its ${formatUnits(config.daily!)} ${config.token} daily limit. The limit resets at 00:00 UTC; raise BRAINCHAIN_DAILY_UNITS to allow more. Nothing was charged.`;
+      // One limit covers both chains, so it is named without a token.
+      return `This wallet has already signed payments for ${today === undefined ? "most" : formatUnits(today)} of its daily limit of ${formatUnits(config.daily!)}, counting USDG and USDC together. The limit resets at 00:00 UTC; raise BRAINCHAIN_DAILY_UNITS to allow more. Nothing was charged.`;
     }
     if (/rejected by spendControls/.test(message)) {
       const price = await quotedPrice();
@@ -357,9 +358,11 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
   // The caller hears the verdict now and comes back once, when the window has closed.
   const rejected = (): Guidance => {
     const start = "Jev did not accept the work, so the result is withheld.";
-    const left = due === undefined ? undefined : Math.ceil((Date.parse(due) - now) / 1000);
-    if (left !== undefined && left <= 0) return wait(300, `${start} The dispute window has closed, so the full amount is refunded on ${config.chain} shortly.`);
-    const when = due === undefined ? `, ${config.terms.finalAfter} after grading` : ` at ${due}`;
+    const closes = due === undefined ? NaN : Date.parse(due);
+    const left = Number.isFinite(closes) ? Math.ceil((closes - now) / 1000) : undefined;
+    // The desk sends the refund within a minute or two of the window closing.
+    if (left !== undefined && left <= 0) return wait(60, `${start} The dispute window has closed, so the full amount is refunded on ${config.chain} shortly.`);
+    const when = left === undefined ? `, ${config.terms.finalAfter} after grading` : ` at ${due}`;
     return wait(
       left === undefined ? 900 : left + 60,
       `${start} The full amount is refunded on ${config.chain} when the dispute window closes${when}, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`,

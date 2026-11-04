@@ -66,6 +66,15 @@ describe("resolveConfig", () => {
     expect(resolveConfig({ BRAINCHAIN_DESK_URL: "http://localhost:8080/" }).desk).toBe("http://localhost:8080");
   });
 
+  it("sends payments to a desk over https, or plain http only on this machine", () => {
+    expect(() => resolveConfig({ BRAINCHAIN_DESK_URL: "http://desk.example.com" })).toThrow(
+      /^BRAINCHAIN_DESK_URL must be an https URL, or http on localhost or 127\.0\.0\.1\.$/,
+    );
+    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "http://127.0.0.1:8080" }).desk).toBe("http://127.0.0.1:8080");
+    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "http://[::1]:8080" }).desk).toBe("http://[::1]:8080");
+    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "https://desk.example.com//" }).desk).toBe("https://desk.example.com");
+  });
+
   it("refuses an unknown chain", () => {
     expect(() => resolveConfig({ BRAINCHAIN_PAY_ON: "solana" })).toThrow(/robinhood or base/);
   });
