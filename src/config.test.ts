@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { resolveConfig } from "./config.js";
@@ -40,6 +43,27 @@ describe("resolveConfig", () => {
       network: "eip155:4663",
       maxPrice: 1_000_000n,
     });
+  });
+
+  it("expands ~ in the state directory, since no shell does it for an MCP client", () => {
+    expect(resolveConfig({}).stateDir).toBe(join(homedir(), ".brainchain"));
+    expect(resolveConfig({ BRAINCHAIN_STATE_DIR: "~/.brainchain-audit" }).stateDir).toBe(join(homedir(), ".brainchain-audit"));
+    expect(resolveConfig({ BRAINCHAIN_STATE_DIR: "/var/brainchain" }).stateDir).toBe("/var/brainchain");
+  });
+
+  it("refuses a state directory that would follow wherever the client starts", () => {
+    for (const path of ["state", "./state", "~other/state", "$HOME/state"]) {
+      expect(() => resolveConfig({ BRAINCHAIN_STATE_DIR: path })).toThrow("BRAINCHAIN_STATE_DIR must be an absolute path or start with ~/.");
+    }
+  });
+
+  it("refuses a desk or RPC that is not a URL, without echoing it", () => {
+    for (const name of ["BRAINCHAIN_DESK_URL", "BRAINCHAIN_PAYMENT_RPC"]) {
+      for (const value of ["notaurl", "ftp://example.com", "file:///etc/passwd"]) {
+        expect(() => resolveConfig({ [name]: value })).toThrow(new RegExp(`^${name} must be an http or https URL\\.$`));
+      }
+    }
+    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "http://localhost:8080/" }).desk).toBe("http://localhost:8080");
   });
 
   it("refuses an unknown chain", () => {
