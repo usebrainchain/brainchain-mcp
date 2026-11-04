@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -267,6 +267,18 @@ describe("paying on Base", () => {
     return { fetchImpl, seen };
   }
 
+  it("holds one daily limit for a wallet on either chain, and a separate one per network", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+    const robinhood = fakeDesk(accepted);
+    await desk(robinhood.fetchImpl, { daily: 1_500_000n, stateDir }).post(task);
+    const onBase = bothLanes(accepted);
+    await expect(createDesk({ config: { ...base, daily: 1_500_000n, stateDir }, signer, approveCommand: "unused", fetch: onBase.fetchImpl }).post({ ...task, brief: "On the other chain." })).rejects.toThrow(
+      /already signed payments for 1 of its 1\.5 test USDC daily limit/,
+    );
+    expect(onBase.seen).toHaveLength(0);
+    expect(await readdir(stateDir)).toEqual([`spend-testnet-${signer.address.toLowerCase()}.json`]);
+  });
+
   it("picks the Base accept and signs a transfer authorization, not a Permit2 transfer", async () => {
     const { fetchImpl, seen } = bothLanes(accepted);
     await createDesk({ config: base, signer, approveCommand: "unused", fetch: fetchImpl }).post(task);
@@ -410,7 +422,6 @@ describe("reading an order", () => {
     expect(guidance({ resultText: "draft", state: "posted", task: { status: "delivered" } }, config)).toMatchObject({ done: false, retryAfterSeconds: 30 });
     expect(guidance({ state: "posted", task: { status: "submitted" } }, config)).toMatchObject({ done: false, retryAfterSeconds: 30 });
     for (const state of ["paid-out", "refunded", "refund-failed", "failed"]) expect(guidance({ state }, config).done).toBe(true);
-    expect(guidance({ state: "posted", task: { status: "graded", accepted: false } }, config)).toMatchObject({ done: true });
     expect(guidance({ state: "unconfirmed" }, config)).toMatchObject({ done: false, retryAfterSeconds: 30 });
     expect(guidance({ state: "posted", task: { status: "hired" } }, config)).toMatchObject({ done: false, retryAfterSeconds: 60 });
     expect(guidance({ state: "something-new" }, config)).toMatchObject({ done: false });
@@ -429,12 +440,9 @@ describe("reading an order", () => {
 
   it("finishes on a settled task even when the result file cannot be read, and claims no verdict it was not given", () => {
     const paid = guidance({ state: "posted", result: "https://desk/records/0xdead", task: { status: "paid", accepted: true } }, config);
-    expect(paid).toMatchObject({ done: true, next: "The model was paid. The result is at https://desk/records/0xdead." });
+    expect(paid).toMatchObject({ done: true, next: "Jev accepted the work and the model was paid. The result is at https://desk/records/0xdead." });
     const overturned = guidance({ state: "posted", task: { status: "paid", accepted: false } }, config);
     expect(overturned).toMatchObject({ done: true, next: "The model was paid." });
-    const refunded = guidance({ state: "posted", task: { status: "refunded" } }, config);
-    expect(refunded.done).toBe(true);
-    expect(refunded.next).toMatch(/^The work was not accepted\. The full amount was refunded on /);
     expect(guidance({ state: "posted", task: { status: "graded" } }, config).next).toBe("Jev graded the work; the verdict is being recorded.");
     expect(guidance({ state: "posted", task: { status: "graded", accepted: true } }, config).next).toBe("Jev accepted the work; the result is being prepared.");
   });
@@ -446,6 +454,107 @@ describe("reading an order", () => {
     );
     const refunded = guidance({ state: "refunded", refundTx: "0xfeed", refundReason: "Jev did not grade the work within the grading window." }, config);
     expect(refunded.next).toMatch(/^Jev did not grade the work within the grading window\. The full amount was refunded on .* in 0xfeed\.$/);
-    expect(guidance({ state: "refunded" }, config).next).toMatch(/^The work was not accepted\./);
+  });
+});
+
+describe("what brainchain_get_task says, for every order state and task status", () => {
+  const chain = config.chain;
+  const NOW = Date.parse("2026-11-04T12:00:00.000Z");
+  const by = "2026-11-04T18:00:00.000Z";
+  const closed = "2026-11-04T11:00:00.000Z";
+  const STATES = ["paying", "unconfirmed", "failed", "paid", "posted", "paid-out", "refunding", "refunded", "refund-failed"];
+  const STATUSES = [undefined, "none", "open", "hired", "delivered", "graded", "disputed", "paid", "refunded", "ruled", "appealed"];
+  const read = (state: string, status?: string, accepted?: boolean, extra: Record<string, unknown> = {}) =>
+    guidance({ state, ...(status ? { task: { status, ...(accepted === undefined ? {} : { accepted }), ...(extra.due ? { due: { by: extra.due } } : {}) } } : {}), ...extra }, config, NOW);
+  const waits = (retryAfterSeconds: number, next: string) => ({ done: false, next, retryAfterSeconds });
+  const finished = (next: string) => ({ done: true, next });
+
+  // The order's own state decides, whatever the task's status last read: [state, what the caller is told].
+  const BY_STATE: [string, ReturnType<typeof waits> | ReturnType<typeof finished>][] = [
+    ["paying", waits(20, "The payment is settling and the task is being posted.")],
+    ["paid", waits(20, "The payment is settling and the task is being posted.")],
+    ["unconfirmed", waits(30, "The payment may have gone through; BrainChain is checking it against the chain. Do not post the task again.")],
+    ["failed", finished("The payment did not settle: nothing was charged and no task was posted. You can post the task again.")],
+    ["refund-failed", finished("The refund could not be sent automatically. Write to hello@usebrainchain.com with this order id.")],
+  ];
+  it.each(BY_STATE)("%s", (state, expected) => {
+    for (const status of STATUSES) for (const accepted of [undefined, true, false]) expect(read(state, status, accepted)).toEqual(expected);
+  });
+
+  // [state, status, accepted, extra fields, what the caller is told].
+  const reject = "Jev did not accept the work, so the result is withheld.";
+  const TABLE: [string, string | undefined, boolean | undefined, Record<string, unknown>, ReturnType<typeof waits> | ReturnType<typeof finished>][] = [
+    ["posted", undefined, undefined, {}, waits(20, "The task is posted; its status shows here shortly.")],
+    ["posted", "none", undefined, {}, waits(60, "The order is in progress.")],
+    ["posted", "open", undefined, { due: by }, waits(60, `Waiting for Jev to hire a model. If no model is hired by ${by}, the full amount is refunded.`)],
+    ["posted", "hired", undefined, { due: by }, waits(60, `A model is working on the task. If the work is not delivered by ${by}, the full amount is refunded.`)],
+    ["posted", "delivered", undefined, { due: by }, waits(30, `The model delivered; Jev is grading the work. If Jev has not graded it by ${by}, the full amount is refunded.`)],
+    ["posted", "graded", undefined, { due: by }, waits(60, "Jev graded the work; the verdict is being recorded.")],
+    ["posted", "graded", true, { due: by }, waits(60, "Jev accepted the work; the result is being prepared.")],
+    ["posted", "graded", true, { due: by, result: "https://desk/r", resultError: "HTTP 500" }, waits(60, "Jev accepted the work, but the result could not be read just now.")],
+    ["posted", "graded", true, { due: by, resultText: "R" }, finished(`Jev accepted the work. The result follows this summary. The payment becomes final when the dispute window closes, ${config.terms.finalAfter} after grading.`)],
+    ["posted", "graded", true, { due: by, result: "https://elsewhere/r" }, finished(`Jev accepted the work. The result is at https://elsewhere/r. The payment becomes final when the dispute window closes, ${config.terms.finalAfter} after grading.`)],
+    // Rejected: the refund is still owed, and the model can still dispute, so the caller is not done. It comes back once the window has closed.
+    ["posted", "graded", false, { due: by }, waits(6 * 3600 + 60, `${reject} The full amount is refunded on ${chain} when the dispute window closes at ${by}, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`)],
+    ["posted", "graded", false, {}, waits(900, `${reject} The full amount is refunded on ${chain} when the dispute window closes, ${config.terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`)],
+    ["posted", "graded", false, { due: closed }, waits(300, `${reject} The dispute window has closed, so the full amount is refunded on ${chain} shortly.`)],
+    ["posted", "disputed", false, { due: by }, waits(600, `The grade is disputed; Jev rules on it by ${by}. If no ruling comes, the grade stands.`)],
+    // An accepted grade under dispute can still refund the caller, so a result in hand does not finish it.
+    ["posted", "disputed", true, { due: by, resultText: "R" }, waits(600, `The grade is disputed; Jev rules on it by ${by}. If no ruling comes, the grade stands. The result follows this summary.`)],
+    ["posted", "ruled", false, { due: by }, waits(900, `Jev ruled on the dispute. The ruling settles when its appeal window closes at ${by}, unless the side it went against appeals.`)],
+    ["posted", "ruled", true, { due: by }, waits(900, `Jev ruled on the dispute. The ruling settles when its appeal window closes at ${by}, unless the side it went against appeals.`)],
+    ["posted", "appealed", false, { due: by }, waits(600, `The ruling was appealed; Jev rules again by ${by}. If no second ruling comes, the first one stands.`)],
+    ["posted", "appealed", true, { due: by }, waits(600, `The ruling was appealed; Jev rules again by ${by}. If no second ruling comes, the first one stands.`)],
+    ["posted", "paid", true, { resultText: "R" }, finished("Jev accepted the work and the model was paid. The result follows this summary.")],
+    ["posted", "paid", false, {}, finished("The model was paid.")],
+    // The board has returned the money to the desk, and the payer's refund transaction has not been sent.
+    ["posted", "refunded", false, { refundReason: "Jev did not accept the work." }, waits(60, `Jev did not accept the work. The refund is being sent on ${chain}.`)],
+    ["posted", "refunded", undefined, {}, waits(60, `The refund is being sent on ${chain}.`)],
+    // Settled days ago: past tense, and accepted only where the grade accepted it. A ruling can pay rejected work.
+    ["paid-out", "paid", true, { resultText: "R" }, finished("Jev accepted the work and the model was paid. The result follows this summary.")],
+    ["paid-out", "paid", true, { result: "https://desk/r", resultError: "HTTP 500" }, finished("Jev accepted the work and the model was paid.")],
+    ["paid-out", "paid", false, { resultText: "R" }, finished("The model was paid. The result follows this summary.")],
+    ["paid-out", "paid", false, {}, finished("The model was paid.")],
+    ["paid-out", undefined, undefined, {}, finished("The model was paid.")],
+    // With no task the desk could not post the order, so no work ever existed.
+    ["refunding", undefined, undefined, {}, waits(60, `The task could not be posted. The refund is being sent on ${chain}.`)],
+    ["refunding", "refunded", false, { refundReason: "Jev did not accept the work." }, waits(60, `Jev did not accept the work. The refund is being sent on ${chain}.`)],
+    ["refunding", "refunded", undefined, { refundReason: "No model was hired before the task's deadline." }, waits(60, `No model was hired before the task's deadline. The refund is being sent on ${chain}.`)],
+    ["refunded", undefined, undefined, { refundTx: "0xfeed" }, finished(`The task could not be posted. The full amount was refunded on ${chain} in 0xfeed.`)],
+    ["refunded", "refunded", false, { refundReason: "Jev did not accept the work.", refundTx: "0xfeed" }, finished(`Jev did not accept the work. The full amount was refunded on ${chain} in 0xfeed.`)],
+    ["refunded", "refunded", true, { refundReason: "The dispute was ruled for the poster.", refundTx: "0xfeed" }, finished(`The dispute was ruled for the poster. The full amount was refunded on ${chain} in 0xfeed.`)],
+    ["refunded", "refunded", undefined, { refundReason: "Jev did not grade the work within the grading window." }, finished(`Jev did not grade the work within the grading window. The full amount was refunded on ${chain}.`)],
+  ];
+  it.each(TABLE)("%s, task %s, accepted %s, %j", (state, status, accepted, extra, expected) => {
+    expect(read(state, status, accepted, extra)).toEqual(expected);
+  });
+
+  it("covers every status of a posted order", () => {
+    for (const status of STATUSES) expect(TABLE.some(([state, listed]) => state === "posted" && listed === status)).toBe(true);
+    for (const state of STATES) expect(BY_STATE.some(([listed]) => listed === state) || TABLE.some(([listed]) => listed === state)).toBe(true);
+  });
+
+  it("never claims what the order does not show, in any combination", () => {
+    for (const state of STATES) {
+      for (const status of STATUSES) {
+        for (const accepted of [undefined, true, false]) {
+          for (const extra of [{}, { resultText: "R" }, { refundReason: "Why." }, { due: by }]) {
+            const { done, next, retryAfterSeconds } = read(state, status, accepted, extra);
+            const at = `${state}/${status}/${accepted}/${JSON.stringify(extra)}: ${next}`;
+            expect(next.length, at).toBeGreaterThan(0);
+            expect(done ? retryAfterSeconds === undefined : retryAfterSeconds! > 0, at).toBe(true);
+            if (next.startsWith("Jev accepted")) expect(accepted, at).toBe(true);
+            if (next.includes("did not accept")) expect(accepted, at).toBe(false);
+            if (/was paid/.test(next)) expect(state === "paid-out" || status === "paid", at).toBe(true);
+            if (/was refunded/.test(next)) expect(state, at).toBe("refunded");
+            if (next.includes("could not be posted")) expect(status, at).toBeUndefined();
+            if (next.includes("result follows")) expect(extra, at).toHaveProperty("resultText");
+            // Nothing is finished while a dispute, a ruling or an appeal can still move the money, or a refund is still owed.
+            if (state === "posted" && ["disputed", "ruled", "appealed", "refunded"].includes(status ?? "")) expect(done, at).toBe(false);
+            if (state === "posted" && status === "graded" && accepted === false) expect(done, at).toBe(false);
+          }
+        }
+      }
+    }
   });
 });

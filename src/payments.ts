@@ -76,11 +76,12 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   let spent = 0n;
   const account = () => (typeof signer === "function" ? signer() : signer);
   let ledger: DailyLedger | undefined;
-  // Kept per network and wallet, so a testnet wallet never spends from the mainnet limit.
+  // Kept per network and wallet, so a testnet wallet never spends from the mainnet limit, and one
+  // limit holds whichever chain the wallet pays on: USDG and USDC count in the same units.
   const daily = () =>
     config.daily === undefined
       ? undefined
-      : (ledger ??= dailyLedger(join(config.stateDir, `spend-${config.name}-${config.payOn}-${account().address.toLowerCase()}.json`), config.daily));
+      : (ledger ??= dailyLedger(join(config.stateDir, `spend-${config.name}-${account().address.toLowerCase()}.json`), config.daily));
   const endpoint = `${config.desk}/x402/tasks`;
   const recent = new Map<string, { at: number; reply: Promise<unknown> }>();
   /** When this process paid, or may have paid, for each order; the desk can take minutes to know one. */
@@ -329,22 +330,39 @@ interface Guidance {
   retryAfterSeconds?: number;
 }
 
-/** What the order means for the caller, and when to look again. */
-export function guidance(view: Record<string, unknown>, config: Pick<Config, "chain" | "terms">): Guidance {
+/** What the order means for the caller, and when to look again. Every state and status pair is in payments.test.ts. */
+export function guidance(view: Record<string, unknown>, config: Pick<Config, "chain" | "terms">, now = Date.now()): Guidance {
   const task = (view.task ?? {}) as { status?: string; accepted?: boolean; due?: { by?: unknown } };
   const wait = (retryAfterSeconds: number, next: string): Guidance => ({ done: false, next, retryAfterSeconds });
-  const why = typeof view.refundReason === "string" ? view.refundReason : "The work was not accepted.";
+  // Without a task the desk could not post the order, so no work ever existed.
+  const why = typeof view.refundReason === "string" ? `${view.refundReason} ` : task.status === undefined ? "The task could not be posted. " : "";
+  const due = typeof task.due?.by === "string" ? task.due.by : undefined;
+  const by = due ? ` by ${due}` : "";
   // The board refunds a step that misses its deadline; saying when lets the caller stop waiting at the right time.
-  const unless = (missed: string) => (typeof task.due?.by === "string" ? ` If ${missed} by ${task.due.by}, the full amount is refunded.` : "");
-  const accepted = task.accepted === true || view.state === "paid-out" || task.status === "paid";
-  if (typeof view.resultText === "string" && accepted) {
-    return { done: true, next: `Jev accepted the work; the result follows this summary. The model is paid when the dispute window closes, ${config.terms.finalAfter} after grading.` };
-  }
+  const unless = (missed: string) => (due ? ` If ${missed}${by}, the full amount is refunded.` : "");
+  const fetched = typeof view.resultText === "string";
+  const link = !fetched && typeof view.result === "string" && view.resultError === undefined ? view.result : undefined;
+  const result = fetched ? " The result follows this summary." : link ? ` The result is at ${link}.` : "";
+  // Accepted comes from the grade alone: a ruling can pay work the grade rejected.
+  const paid = (): Guidance => ({ done: true, next: `${task.accepted === true ? "Jev accepted the work and the model was paid" : "The model was paid"}.${result}` });
+  // Not done: the caller is owed a refund transaction, and the model can still dispute.
+  // The caller hears the verdict now and comes back once, when the window has closed.
+  const rejected = (): Guidance => {
+    const start = "Jev did not accept the work, so the result is withheld.";
+    const left = due === undefined ? undefined : Math.ceil((Date.parse(due) - now) / 1000);
+    if (left !== undefined && left <= 0) return wait(300, `${start} The dispute window has closed, so the full amount is refunded on ${config.chain} shortly.`);
+    const when = due === undefined ? `, ${config.terms.finalAfter} after grading` : ` at ${due}`;
+    return wait(
+      left === undefined ? 900 : left + 60,
+      `${start} The full amount is refunded on ${config.chain} when the dispute window closes${when}, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`,
+    );
+  };
+
   switch (view.state) {
     case "paid-out":
-      return { done: true, next: "Jev accepted the work and the model was paid." };
+      return paid();
     case "refunded":
-      return { done: true, next: `${why} The full amount was refunded on ${config.chain}${typeof view.refundTx === "string" ? ` in ${view.refundTx}` : ""}.` };
+      return { done: true, next: `${why}The full amount was refunded on ${config.chain}${typeof view.refundTx === "string" ? ` in ${view.refundTx}` : ""}.` };
     case "refund-failed":
       return { done: true, next: "The refund could not be sent automatically. Write to hello@usebrainchain.com with this order id." };
     case "failed":
@@ -356,39 +374,37 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     case "unconfirmed":
       return wait(30, "The payment may have gone through; BrainChain is checking it against the chain. Do not post the task again.");
     case "refunding":
-      return wait(60, `${why} The refund is being sent on ${config.chain}.`);
+      return wait(60, `${why}The refund is being sent on ${config.chain}.`);
   }
-  // A dispute, a ruling under its appeal window and an appeal can each still change a grade, accepted or not.
-  const due = typeof task.due?.by === "string" ? task.due.by : undefined;
-  const by = due ? ` by ${due}` : "";
+
   switch (task.status) {
+    case "paid":
+      return paid();
+    case "refunded":
+      // The board has returned the money to the desk; the payer's refund transaction comes next.
+      return wait(60, `${why}The refund is being sent on ${config.chain}.`);
+    // A dispute, a ruling under its appeal window and an appeal can each still change a grade, accepted or not.
     case "disputed":
-      return wait(600, `The grade is disputed; Jev rules on it${by}. If no ruling comes, the grade stands.`);
+      return wait(600, `The grade is disputed; Jev rules on it${by}. If no ruling comes, the grade stands.${result}`);
     case "ruled":
-      return wait(900, `Jev ruled on the dispute. The ruling settles when its appeal window closes${due ? ` at ${due}` : ""}, unless the side it went against appeals.`);
+      return wait(900, `Jev ruled on the dispute. The ruling settles when its appeal window closes${due ? ` at ${due}` : ""}, unless the side it went against appeals.${result}`);
     case "appealed":
-      return wait(600, `The ruling was appealed; Jev rules again${by}. If no second ruling comes, the first one stands.`);
-  }
-  // A settled task comes first: a ruling can pay work the grade rejected, or refund work it accepted.
-  if (task.status === "paid") {
-    return { done: true, next: `The model was paid.${typeof view.result === "string" ? ` The result is at ${view.result}.` : ""}` };
-  }
-  if (task.status === "refunded") {
-    return { done: true, next: `${why} The full amount was refunded on ${config.chain}.` };
-  }
-  if (task.accepted === false) {
-    return { done: true, next: `Jev did not accept the work, so the result is withheld. The full amount is refunded on ${config.chain} when the dispute window closes, ${config.terms.finalAfter} after grading.` };
-  }
-  switch (task.status) {
+      return wait(600, `The ruling was appealed; Jev rules again${by}. If no second ruling comes, the first one stands.${result}`);
+    case "graded":
+      if (task.accepted === true) {
+        // The caller has what it paid for, and on a desk task only the model could still dispute, against its own payment.
+        if (result) return { done: true, next: `Jev accepted the work.${result} The payment becomes final when the dispute window closes, ${config.terms.finalAfter} after grading.` };
+        return wait(60, typeof view.resultError === "string" ? "Jev accepted the work, but the result could not be read just now." : "Jev accepted the work; the result is being prepared.");
+      }
+      if (task.accepted === false) return rejected();
+      return wait(60, "Jev graded the work; the verdict is being recorded.");
     case "open":
-      return wait(60, `Waiting for Jev to hire a model.${unless("the work is not delivered")}`);
+      return wait(60, `Waiting for Jev to hire a model.${unless("no model is hired")}`);
     case "hired":
       return wait(60, `A model is working on the task.${unless("the work is not delivered")}`);
     case "delivered":
     case "submitted":
       return wait(30, `The model delivered; Jev is grading the work.${unless("Jev has not graded it")}`);
-    case "graded":
-      return wait(60, task.accepted === true ? "Jev accepted the work; the result is being prepared." : "Jev graded the work; the verdict is being recorded.");
   }
   // The order can read posted a moment before the task's status reaches it.
   if (view.state === "posted" && task.status === undefined) return wait(20, "The task is posted; its status shows here shortly.");
