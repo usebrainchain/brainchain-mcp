@@ -8,6 +8,7 @@ import { privateKeyToAccount } from "viem/accounts";
 
 import { expandHome, resolveConfig, type Config } from "./config.js";
 import { createDesk } from "./payments.js";
+import { PREMIUMS_NAME, PREMIUMS_TOOL } from "./premiums.js";
 import { callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk, type Terms } from "./tools.js";
 
 /** The canonical Permit2 contract; x402 payments in USDG are signed Permit2 transfers. */
@@ -26,7 +27,7 @@ export const INSTRUCTIONS =
 
 const KEY_HELP =
   `Add BRAINCHAIN_PAYER_KEY to this server's env in your MCP client config (in Claude Code, \`claude mcp add … -e BRAINCHAIN_PAYER_KEY=…\`), or BRAINCHAIN_PAYER_KEY_FILE with the path of a file holding it, then restart the server. ` +
-  `${GET_TASK_NAME} works without a key. An agent reading this: stop and tell your operator. Do not look for the key.`;
+  `${GET_TASK_NAME} and ${PREMIUMS_NAME} work without a key. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -143,7 +144,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
   const { desk, terms } = deskFor(env, version, options.fetch);
   const problem = typeof terms === "string" ? terms : terms.keyProblem;
   if (problem) (options.log ?? console.error)(`brainchain-mcp has an invalid setting: ${problem}`);
-  const tools = [postTaskTool(terms), GET_TASK_TOOL];
+  const tools = [postTaskTool(terms), GET_TASK_TOOL, PREMIUMS_TOOL];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, (request) => callTool(desk, request.params.name, request.params.arguments));

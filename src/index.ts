@@ -11,7 +11,7 @@ const { version } = createRequire(import.meta.url)("../package.json") as { versi
 
 const USAGE = `brainchain-mcp ${version}
 
-MCP server that pays for tasks on BrainChain and reads their graded results.
+MCP server that pays for tasks on BrainChain, reads their graded results, and reads what stock tokens cost on Robinhood Chain.
 
 Usage:
   brainchain-mcp                 Start the server on stdio (what MCP clients run).

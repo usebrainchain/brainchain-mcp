@@ -1,6 +1,7 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { REPOST_AFTER_MINUTES } from "./config.js";
+import { PREMIUMS_NAME, readPremiums, type PremiumBoard } from "./premiums.js";
 
 /** What the post tool tells the model about cost and settlement on the configured network. */
 export interface Terms {
@@ -131,7 +132,7 @@ function orderReply(view: unknown): CallToolResult {
   return result;
 }
 
-export async function callTool(desk: Desk, name: string, args: unknown): Promise<CallToolResult> {
+export async function callTool(desk: Desk, name: string, args: unknown, premiums: () => Promise<PremiumBoard> = readPremiums): Promise<CallToolResult> {
   const input = (args ?? {}) as Record<string, unknown>;
   try {
     if (name === POST_TASK_NAME) {
@@ -144,6 +145,7 @@ export async function callTool(desk: Desk, name: string, args: unknown): Promise
       if (!/^0x[0-9a-f]{64}$/.test(order)) throw new Error("order must be the 0x-prefixed, 64-character hex id that brainchain_post_task returned.");
       return orderReply(await desk.get(order));
     }
+    if (name === PREMIUMS_NAME) return reply(await premiums());
     return reply({ error: `Unknown tool ${name}.` }, true);
   } catch (error) {
     return reply({ error: error instanceof Error ? error.message : String(error) }, true);

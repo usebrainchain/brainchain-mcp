@@ -8,6 +8,7 @@ import { InsufficientFundsError } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 
+import { PREMIUMS_NAME } from "./premiums.js";
 import { approvalFailure, createServer, INSTRUCTIONS, payerAccount, type ServerOptions } from "./server.js";
 import { GET_TASK_NAME, POST_TASK_NAME } from "./tools.js";
 
@@ -34,7 +35,7 @@ function keyFile(contents: string, mode = 0o600): string {
 }
 
 describe("the server", () => {
-  it("starts without a key, lists both tools, and says how to set the key when asked to pay", async () => {
+  it("starts without a key, lists the tools, and says how to set the key when asked to pay", async () => {
     const reads: string[] = [];
     const fetchImpl = (async (input: RequestInfo | URL) => {
       reads.push(String(input));
@@ -47,7 +48,7 @@ describe("the server", () => {
     expect(client.getServerVersion()).toMatchObject({ name: "brainchain", title: "BrainChain" });
     expect(client.getInstructions()).toBe(INSTRUCTIONS);
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME]);
+    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, PREMIUMS_NAME]);
 
     const post = await client.callTool({ name: POST_TASK_NAME, arguments: task });
     expect(post.isError).toBe(true);
@@ -76,7 +77,7 @@ describe("the server", () => {
       expect(logged[0]).toContain(problem);
 
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(2);
+      expect(tools).toHaveLength(3);
       const description = tools.find((tool) => tool.name === POST_TASK_NAME)!.description!;
       expect(description.startsWith(`Invalid setting: ${problem}`)).toBe(true);
       expect(description).not.toMatch(/USDG|USDC/);
