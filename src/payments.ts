@@ -247,18 +247,25 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       if (!signed) await unreserve();
     });
 
+    // Short enough that a possiblyCharged reply reaches a client that gives up after 60 seconds.
+    // The x402 client sends clones of the request, and a clone follows the request's signal
+    // through weak references only, so once garbage is collected a deadline set on the request
+    // never fires. Each request it sends carries the deadline itself, which the timer keeps alive.
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")), options.postTimeoutMs ?? 45_000);
+    const timed: typeof fetch = (input, init) => fetchImpl(input, { ...init, signal: deadline.signal });
     let response: Response;
     try {
-      response = await wrapFetchWithPayment(fetchImpl, client)(endpoint, {
+      response = await wrapFetchWithPayment(timed, client)(endpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(task),
-        // Short enough that a possiblyCharged reply reaches a client that gives up after 60 seconds.
-        signal: AbortSignal.timeout(options.postTimeoutMs ?? 45_000),
       });
     } catch (error) {
       if (signed) return possiblyCharged(receipt(orderIdOf(signed)), `The desk did not confirm the order (${firstLine(error)}).`);
       throw new Error(await explainUnsigned(error));
+    } finally {
+      clearTimeout(timer);
     }
 
     const reply = (await jsonObject(response)) ?? {};

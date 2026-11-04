@@ -1,6 +1,10 @@
 import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it, vi } from "vitest";
@@ -118,6 +122,35 @@ describe("posting", () => {
       const reply = (await d.post(task)) as { order: string; possiblyCharged: boolean };
       expect(reply).toMatchObject({ possiblyCharged: true, order: orderIdOf(seen[0]!) });
       expect(d.spent()).toBe(1_000_000n);
+    }
+  });
+
+  it("answers possiblyCharged by its deadline while the desk holds a paid request, through garbage collection", async () => {
+    // The real fetch, against a desk that never answers the paid request, with garbage collected all along.
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const held: ServerResponse[] = [];
+    const server = createServer((request, response) => {
+      request.resume();
+      if (request.headers["payment-signature"]) return void held.push(response);
+      response.writeHead(402, { "payment-required": challenge() }).end("{}");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const collect = setInterval(gc, 20);
+    try {
+      const local = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      const d = createDesk({ config: { ...config, desk: local }, signer, approveCommand: "npx -y brainchain-mcp approve", postTimeoutMs: 500 });
+      const started = Date.now();
+      const reply = (await d.post(task)) as { possiblyCharged?: boolean; error?: string };
+      expect(Date.now() - started).toBeLessThan(2_500);
+      expect(held).toHaveLength(1);
+      expect(reply.possiblyCharged).toBe(true);
+      expect(reply.error).toMatch(/do not post the task again/);
+    } finally {
+      clearInterval(collect);
+      for (const response of held) response.destroy();
+      server.closeAllConnections();
+      server.close();
     }
   });
 
