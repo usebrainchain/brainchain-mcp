@@ -24,6 +24,65 @@ describe("callTool", () => {
     expect(result.isError).toBe(true);
   });
 
+  it("refuses fields the schema does not list, before anything is paid", async () => {
+    let calls = 0;
+    const counting: Desk = {
+      post: async () => ({ calls: ++calls }),
+      get: async () => ({ calls: ++calls }),
+    };
+    const post = await callTool(counting, POST_TASK_NAME, { title: "t", brief: "b", levels: ["good", "ok"], extra: "field" });
+    expect(post.isError).toBe(true);
+    expect(body(post)).toEqual({ error: "Unknown field: extra. This tool takes only title, brief, levels." });
+    const get = await callTool(counting, GET_TASK_NAME, { order: `0x${"a".repeat(64)}`, one: 1, two: 2 });
+    expect(get.isError).toBe(true);
+    expect(body(get)).toEqual({ error: "Unknown fields: one, two. This tool takes only order." });
+    expect(calls).toBe(0);
+  });
+
+  it("says what is wrong with a post, field by field", async () => {
+    const task = { title: "t", brief: "b", levels: ["good", "ok"] };
+    const { title: _title, ...noTitle } = task;
+    const { brief: _brief, ...noBrief } = task;
+    const { levels: _levels, ...noLevels } = task;
+    for (const [input, error] of [
+      [{}, "title is required."],
+      [noTitle, "title is required."],
+      [noBrief, "brief is required."],
+      [noLevels, "levels is required."],
+      [{ ...task, title: 123 }, "title must be a string, not a number."],
+      [{ ...task, title: null }, "title must be a string, not null."],
+      [{ ...task, title: true }, "title must be a string, not a boolean."],
+      [{ ...task, title: "   " }, "title is empty."],
+      [{ ...task, title: "x".repeat(121) }, "title is 121 characters; the limit is 120."],
+      [{ ...task, brief: ["not", "a", "string"] }, "brief must be a string, not an array."],
+      [{ ...task, brief: {} }, "brief must be a string, not an object."],
+      [{ ...task, brief: "x".repeat(32_001) }, "brief is 32,001 characters; the limit is 32,000."],
+      [{ ...task, levels: "good" }, "levels must be an array of strings, not a string."],
+      [{ ...task, levels: ["good"] }, "levels must list 2 or 3 quality levels, best first; this lists 1."],
+      [{ ...task, levels: ["a", "b", "c", "d"] }, "levels must list 2 or 3 quality levels, best first; this lists 4."],
+      [{ ...task, levels: ["good", 5] }, "levels[1] must be a string, not a number."],
+      [{ ...task, levels: ["good", " "] }, "levels[1] is empty."],
+      [{ ...task, levels: ["x".repeat(201), "ok"] }, "levels[0] is 201 characters; the limit is 200."],
+    ] as const) {
+      const result = await callTool(desk, POST_TASK_NAME, input);
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error });
+    }
+  });
+
+  it("says what is wrong with an order id", async () => {
+    for (const [input, error] of [
+      [{}, "order is required."],
+      [{ order: 42 }, "order must be a string, not a number."],
+      [{ order: " " }, "order is empty."],
+      [{ order: "42" }, "order must be the 0x-prefixed, 64-character hex id that brainchain_post_task returned."],
+    ] as const) {
+      const result = await callTool(desk, GET_TASK_NAME, input);
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error });
+    }
+  });
+
   it("rejects a malformed order id and accepts one in capitals", async () => {
     const pattern = new RegExp((GET_TASK_TOOL.inputSchema.properties!.order as { pattern: string }).pattern);
     expect(pattern.test(`0x${"AB".repeat(32)}`)).toBe(true);

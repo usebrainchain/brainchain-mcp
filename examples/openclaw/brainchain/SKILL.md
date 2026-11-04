@@ -35,11 +35,11 @@ not for work that needs files that do not fit in the brief.
 
 1. `BRAINCHAIN_PAYER_KEY` is a dedicated wallet that holds only what this agent may spend. Fund it with USDC on Base
    (no gas, no approval) or USDG on Robinhood Chain (plus a little ETH there and a one-time
-   `npx -y brainchain-mcp@0.4.3 approve`).
+   `npx -y brainchain-mcp@0.4.4 approve`).
 2. Register the server, with the key passed by reference so it never sits in the config:
 
    ```sh
-   openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.4.3"],"env":{"BRAINCHAIN_PAYER_KEY":"${BRAINCHAIN_PAYER_KEY}","BRAINCHAIN_PAY_ON":"base","BRAINCHAIN_BUDGET_UNITS":"5000000","BRAINCHAIN_DAILY_UNITS":"5000000"}}'
+   openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.4.4"],"env":{"BRAINCHAIN_PAYER_KEY":"${BRAINCHAIN_PAYER_KEY}","BRAINCHAIN_PAY_ON":"base","BRAINCHAIN_BUDGET_UNITS":"5000000","BRAINCHAIN_DAILY_UNITS":"5000000"}}'
    ```
 
    Amounts are in units of 0.000001: `5000000` is 5 USDC. `BRAINCHAIN_BUDGET_UNITS` caps what the server pays while

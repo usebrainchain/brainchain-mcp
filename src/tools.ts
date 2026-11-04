@@ -15,6 +15,29 @@ export interface Terms {
 export const POST_TASK_NAME = "brainchain_post_task";
 export const GET_TASK_NAME = "brainchain_get_task";
 
+const POST_TASK_INPUT: Tool["inputSchema"] = {
+  type: "object",
+  properties: {
+    title: { type: "string", minLength: 1, maxLength: 120, description: "One line naming the deliverable." },
+    brief: {
+      type: "string",
+      minLength: 1,
+      maxLength: 32000,
+      description: "What to produce, in what format, and anything the model must not do. Models cannot browse, so include every fact they need.",
+    },
+    levels: {
+      type: "array",
+      items: { type: "string", minLength: 1, maxLength: 200 },
+      minItems: 2,
+      maxItems: 3,
+      description:
+        "Two or three quality levels, best first, each a short description a reader could check. With three, the work is paid if it reaches the second level or better; with two, only the first.",
+    },
+  },
+  required: ["title", "brief", "levels"],
+  additionalProperties: false,
+};
+
 /** Given a configuration error instead of terms, the description leads with it. */
 export function postTaskTool(terms: Terms | string): Tool {
   const about =
@@ -30,28 +53,7 @@ export function postTaskTool(terms: Terms | string): Tool {
           `Each task costs ${terms.cost}, paid from this server's wallet on ${terms.chain}. The result is delivered only if Jev accepts the work. If Jev rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading. If no model delivers within 24 hours, the full amount is refunded. ` +
           `Returns an order id for ${GET_TASK_NAME}; results usually arrive within minutes. If the reply says possiblyCharged, do not post the task again: read the order with ${GET_TASK_NAME}. ` +
           `While this server keeps running, an identical post within ${REPOST_AFTER_MINUTES} minutes returns the first post's order, marked duplicate, instead of paying again.`,
-    inputSchema: {
-      type: "object",
-      properties: {
-        title: { type: "string", minLength: 1, maxLength: 120, description: "One line naming the deliverable." },
-        brief: {
-          type: "string",
-          minLength: 1,
-          maxLength: 32000,
-          description: "What to produce, in what format, and anything the model must not do. Models cannot browse, so include every fact they need.",
-        },
-        levels: {
-          type: "array",
-          items: { type: "string", minLength: 1, maxLength: 200 },
-          minItems: 2,
-          maxItems: 3,
-          description:
-            "Two or three quality levels, best first, each a short description a reader could check. With three, the work is paid if it reaches the second level or better; with two, only the first.",
-        },
-      },
-      required: ["title", "brief", "levels"],
-      additionalProperties: false,
-    },
+    inputSchema: POST_TASK_INPUT,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   };
 }
@@ -82,19 +84,34 @@ export interface Desk {
   get(order: string): Promise<unknown>;
 }
 
-const trimmed = (value: unknown, max: number) => (typeof value === "string" && value.trim().length > 0 && value.trim().length <= max ? value.trim() : undefined);
+const typeName = (value: unknown) => (value === null ? "null" : Array.isArray(value) ? "an array" : typeof value === "object" ? "an object" : `a ${typeof value}`);
+const count = (n: number) => n.toLocaleString("en-US");
 
-/** The desk's own limits, applied to what is sent, before anything is signed. Returns an error message, or the trimmed brief. */
-export function checkBrief(input: Record<string, unknown>): TaskRequest | string {
-  const title = trimmed(input.title, 120);
-  if (!title) return "title must be 1 to 120 characters.";
-  const brief = trimmed(input.brief, 32_000);
-  if (!brief) return "brief must be 1 to 32,000 characters.";
-  const levels = Array.isArray(input.levels) ? input.levels.map((l: unknown) => trimmed(l, 200)) : [];
-  if (levels.length < 2 || levels.length > 3 || !levels.every((l): l is string => l !== undefined)) {
-    return "levels must list 2 or 3 quality levels, best first, each 1 to 200 characters.";
-  }
-  return { title, brief, levels };
+/** A string field as it is sent, trimmed; throws what is wrong with it. */
+function text(name: string, value: unknown, max = Infinity): string {
+  if (value === undefined) throw new Error(`${name} is required.`);
+  if (typeof value !== "string") throw new Error(`${name} must be a string, not ${typeName(value)}.`);
+  const sent = value.trim();
+  if (sent.length === 0) throw new Error(`${name} is empty.`);
+  if (sent.length > max) throw new Error(`${name} is ${count(sent.length)} characters; the limit is ${count(max)}.`);
+  return sent;
+}
+
+function refuseUnknownFields(input: Record<string, unknown>, schema: Tool["inputSchema"]): void {
+  const known = Object.keys(schema.properties ?? {});
+  const unknown = Object.keys(input).filter((key) => !known.includes(key));
+  if (unknown.length > 0) throw new Error(`Unknown field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}. This tool takes only ${known.join(", ")}.`);
+}
+
+/** The desk's own limits, applied to what is sent, before anything is signed. Returns the trimmed brief; throws what is wrong with it. */
+export function checkBrief(input: Record<string, unknown>): TaskRequest {
+  const title = text("title", input.title, 120);
+  const brief = text("brief", input.brief, 32_000);
+  const { levels } = input;
+  if (levels === undefined) throw new Error("levels is required.");
+  if (!Array.isArray(levels)) throw new Error(`levels must be an array of strings, not ${typeName(levels)}.`);
+  if (levels.length < 2 || levels.length > 3) throw new Error(`levels must list 2 or 3 quality levels, best first; this lists ${levels.length}.`);
+  return { title, brief, levels: levels.map((level: unknown, i) => text(`levels[${i}]`, level, 200)) };
 }
 
 function reply(value: unknown, isError = false): CallToolResult {
@@ -113,13 +130,13 @@ export async function callTool(desk: Desk, name: string, args: unknown): Promise
   const input = (args ?? {}) as Record<string, unknown>;
   try {
     if (name === POST_TASK_NAME) {
-      const brief = checkBrief(input);
-      if (typeof brief === "string") return reply({ error: brief }, true);
-      return reply(await desk.post(brief));
+      refuseUnknownFields(input, POST_TASK_INPUT);
+      return reply(await desk.post(checkBrief(input)));
     }
     if (name === GET_TASK_NAME) {
-      const order = typeof input.order === "string" ? input.order.trim().toLowerCase() : "";
-      if (!/^0x[0-9a-f]{64}$/.test(order)) return reply({ error: "order must be the 0x-prefixed, 64-character hex id that brainchain_post_task returned." }, true);
+      refuseUnknownFields(input, GET_TASK_TOOL.inputSchema);
+      const order = text("order", input.order).toLowerCase();
+      if (!/^0x[0-9a-f]{64}$/.test(order)) throw new Error("order must be the 0x-prefixed, 64-character hex id that brainchain_post_task returned.");
       return orderReply(await desk.get(order));
     }
     return reply({ error: `Unknown tool ${name}.` }, true);
