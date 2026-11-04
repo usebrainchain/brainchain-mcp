@@ -141,7 +141,8 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(message)) {
       return `Could not reach the desk at ${config.desk}. Nothing was charged. Check your connection or BRAINCHAIN_DESK_URL and try again.`;
     }
-    return `The payment could not be prepared: ${sentence(message)} Nothing was charged.`;
+    // The x402 client puts its own words before an error raised while it prepared the payment.
+    return `The payment could not be prepared: ${sentence(message.replace(/^Failed to create payment payload: /, ""))} Nothing was charged.`;
   }
 
   /** Explains a payment the desk refused, from the wallet's balance and Permit2 allowance where possible. */

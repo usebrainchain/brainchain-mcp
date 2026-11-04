@@ -14,8 +14,8 @@ export interface Terms {
   finalAfter: string;
   /** The paying wallet's address, so an agent can check its balance without going near the key. */
   wallet?: string;
-  /** Why the key that was given cannot be used; absent when none was given. */
-  keyProblem?: string;
+  /** A setting that keeps this tool from paying, such as a key given that cannot be used; absent when there is none. */
+  problem?: string;
 }
 
 export const POST_TASK_NAME = "brainchain_post_task";
@@ -61,7 +61,7 @@ export function postTaskTool(terms: Terms | string): Tool {
     description:
       typeof terms === "string"
         ? `Invalid setting: ${terms} Until then this tool only returns that error. ${about}`
-        : (terms.keyProblem ? `Invalid setting: ${terms.keyProblem} Until the operator fixes it, this tool only returns that error. ` : "") +
+        : (terms.problem ? `Invalid setting: ${terms.problem} Until the operator fixes it, this tool only returns that error. ` : "") +
           about +
           `Each task costs ${terms.cost}, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. The result is delivered only if Jev accepts the work. If Jev rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. If no model delivers within 24 hours, the full amount is refunded. ` +
           `Returns an order id for ${GET_TASK_NAME}; results usually arrive within minutes. If the reply says possiblyCharged, do not post the task again: read the order with ${GET_TASK_NAME}. ` +

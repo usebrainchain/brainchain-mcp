@@ -9,7 +9,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 
 import { PREMIUMS_NAME } from "./premiums.js";
-import { approvalFailure, createServer, INSTRUCTIONS, payerAccount, type ServerOptions } from "./server.js";
+import { resolveConfig } from "./config.js";
+import { approvalFailure, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
 import { GET_TASK_NAME, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
@@ -127,6 +128,19 @@ describe("the server", () => {
     }
   });
 
+  it("reports at startup a state folder that cannot hold the daily limit's record, only when a daily limit is set", async () => {
+    const file = join(mkdtempSync(join(tmpdir(), "brainchain-state-")), "not-a-folder");
+    writeFileSync(file, "");
+    const env = { BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAYER_KEY: KEY, BRAINCHAIN_STATE_DIR: file };
+    const logged: string[] = [];
+    const client = await connect({ ...env, BRAINCHAIN_DAILY_UNITS: "2000000" }, { log: (message) => logged.push(message) });
+    expect(logged).toEqual([`brainchain-mcp has an invalid setting: BRAINCHAIN_STATE_DIR is ${file}, which is not a folder, so the daily limit's record cannot be kept there. Set it to a folder this account can write, then restart the server.`]);
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toMatch(/^Invalid setting: BRAINCHAIN_STATE_DIR is /);
+    await connect(env, { log: (message) => logged.push(message) });
+    expect(logged).toHaveLength(1);
+  });
+
   it("names the wallet that pays in the post tool, so an agent never needs the key to find it", async () => {
     const { address } = privateKeyToAccount(`0x${KEY}`);
     for (const env of [{ BRAINCHAIN_PAYER_KEY: KEY }, { BRAINCHAIN_PAYER_KEY_FILE: keyFile(`${KEY}\n`) }]) {
@@ -202,5 +216,34 @@ describe("approvalFailure", () => {
 
   it("passes on anything else, one line of it", () => {
     expect(approvalFailure(address, "Base", new Error("nonce too low\nmore detail"))).toBe("The approval failed: nonce too low");
+  });
+});
+
+describe("wallet", () => {
+  const address = privateKeyToAccount(`0x${KEY}`).address;
+  const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
+  const approve = "BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.0.0-test approve";
+
+  it("says what the wallet holds and what it still needs before a post can be paid", () => {
+    expect(walletReport(testnet, address, { balance: 0n, allowance: 0n, eth: 0n }, approve)).toBe(
+      [
+        `${address} pays for tasks in test USDG on Robinhood Chain testnet.`,
+        "It holds 0 test USDG. A task costs 1 test USDG, so send at least 1 test USDG to it on Robinhood Chain testnet before posting.",
+        `Permit2 is not approved to spend enough of its test USDG for a task. Run \`${approve}\` once; it needs a little ETH on Robinhood Chain testnet, and the wallet holds 0 ETH there.`,
+      ].join("\n"),
+    );
+    expect(walletReport(testnet, address, { balance: 2_500_000n, allowance: 500_000n, eth: 10n ** 15n }, approve)).toContain(
+      "It holds 2.5 test USDG.\nPermit2 is not approved to spend enough of its test USDG for a task (only 0.5). Run",
+    );
+    expect(walletReport(testnet, address, { balance: 1_000_000n, allowance: 100_000_000n, eth: 0n }, approve)).toContain("It holds 1 test USDG.\nPermit2 may spend up to 100 of its test USDG.");
+    expect(walletReport(testnet, address, { balance: 1_000_000n, allowance: 2n ** 256n - 1n, eth: 0n }, approve)).toContain("Permit2 may spend any amount of its test USDG.");
+  });
+
+  it("names no approval for USDC, which pays by signature, and says when the chain could not be read", () => {
+    const base = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "base" });
+    expect(walletReport(base, address, { balance: 3_000_000n, eth: 0n }, approve)).toBe(`${address} pays for tasks in test USDC on Base Sepolia.\nIt holds 3 test USDC.`);
+    expect(walletReport(testnet, address, new Error("HTTP request failed.\n\nURL: http://127.0.0.1:1"), approve)).toBe(
+      `${address} pays for tasks in test USDG on Robinhood Chain testnet.\nIts balance could not be read from Robinhood Chain testnet (HTTP request failed.). The key and settings are fine.`,
+    );
   });
 });

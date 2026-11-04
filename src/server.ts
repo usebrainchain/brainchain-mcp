@@ -3,10 +3,11 @@ import { isAbsolute } from "node:path";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { createPublicClient, defineChain, http, parseAbi, type PrivateKeyAccount } from "viem";
+import { createPublicClient, defineChain, formatEther, http, maxUint256, parseAbi, type PrivateKeyAccount } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-import { expandHome, resolveConfig, type Config } from "./config.js";
+import { expandHome, formatUnits, resolveConfig, type Config } from "./config.js";
+import { stateDirProblem } from "./daily.js";
 import { createDesk } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL } from "./premiums.js";
 import { callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk, type Terms } from "./tools.js";
@@ -84,6 +85,48 @@ export function chainClients(config: Config) {
   return { chain, reader: createPublicClient({ chain, transport: http(config.rpc, { retryCount: 2, timeout: 15_000 }) }) };
 }
 
+export interface WalletFunds {
+  balance: bigint;
+  /** Permit2's allowance, for a token paid through Permit2. */
+  allowance?: bigint;
+  /** ETH for gas on the payment chain, which only the approval needs. */
+  eth: bigint;
+}
+
+/** Reads what `wallet` reports, on the payment chain only. */
+export async function walletFunds(config: Config, address: `0x${string}`): Promise<WalletFunds> {
+  const { reader } = chainClients(config);
+  const [balance, allowance, eth] = await Promise.all([
+    reader.readContract({ address: config.asset, abi: erc20, functionName: "balanceOf", args: [address] }),
+    config.permit2 ? reader.readContract({ address: config.asset, abi: erc20, functionName: "allowance", args: [address, PERMIT2] }) : undefined,
+    reader.getBalance({ address }),
+  ]);
+  return { balance, ...(allowance === undefined ? {} : { allowance }), eth };
+}
+
+/** What `wallet` says: the wallet that pays, what it holds, and what it still needs before a post can be paid. */
+export function walletReport(config: Config, address: string, funds: WalletFunds | Error, approve: string): string {
+  const lines = [`${address} pays for tasks in ${config.token} on ${config.chain}.`];
+  if (funds instanceof Error) {
+    lines.push(`Its balance could not be read from ${config.chain} (${messageOf(funds).split("\n")[0]}). The key and settings are fine.`);
+    return lines.join("\n");
+  }
+  const { balance, allowance, eth } = funds;
+  const short = balance < config.maxPrice ? ` A task costs ${config.terms.cost}, so send at least ${formatUnits(config.maxPrice - balance)} ${config.token} to it on ${config.chain} before posting.` : "";
+  lines.push(`It holds ${formatUnits(balance)} ${config.token}.${short}`);
+  if (allowance !== undefined) {
+    if (allowance >= maxUint256 / 2n) lines.push(`Permit2 may spend any amount of its ${config.token}.`);
+    else if (allowance >= config.maxPrice) lines.push(`Permit2 may spend up to ${formatUnits(allowance)} of its ${config.token}.`);
+    else {
+      const only = allowance > 0n ? ` (only ${formatUnits(allowance)})` : "";
+      lines.push(
+        `Permit2 is not approved to spend enough of its ${config.token} for a task${only}. Run \`${approve}\` once; it needs a little ETH on ${config.chain}, and the wallet holds ${formatEther(eth)} ETH there.`,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
 export function approveCommand(config: Config, version: string): string {
   return `${config.name === "testnet" ? "BRAINCHAIN_NETWORK=testnet " : ""}npx -y brainchain-mcp@${version} approve`;
 }
@@ -109,6 +152,8 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
     // No key at all is a read-only server, which is allowed. A key that is there and unusable is a mistake to report.
     if (env.BRAINCHAIN_PAYER_KEY?.trim() || env.BRAINCHAIN_PAYER_KEY_FILE?.trim()) keyProblem = messageOf(error);
   }
+  // Said at start, not at the first post: with a daily limit set, no payment can be signed without its record.
+  const problem = [keyProblem, config.daily === undefined ? undefined : stateDirProblem(config.stateDir)].filter(Boolean).join(" ");
   const payer = () => {
     try {
       return (account ??= payerAccount(env));
@@ -131,7 +176,7 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
       return { balance, allowance };
     },
   });
-  return { desk, terms: { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(keyProblem ? { keyProblem } : {}) } };
+  return { desk, terms: { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(problem ? { problem } : {}) } };
 }
 
 export interface ServerOptions {
@@ -142,7 +187,7 @@ export interface ServerOptions {
 
 export function createServer(env: Record<string, string | undefined>, version: string, options: ServerOptions = {}): Server {
   const { desk, terms } = deskFor(env, version, options.fetch);
-  const problem = typeof terms === "string" ? terms : terms.keyProblem;
+  const problem = typeof terms === "string" ? terms : terms.problem;
   if (problem) (options.log ?? console.error)(`brainchain-mcp has an invalid setting: ${problem}`);
   const tools = [postTaskTool(terms), GET_TASK_TOOL, PREMIUMS_TOOL];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });

@@ -1,5 +1,6 @@
 // The daily limit is kept on disk, so restarting the server, or a second server
 // paying from the same wallet, does not reset what the wallet may spend today.
+import { accessSync, constants, mkdirSync } from "node:fs";
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -24,6 +25,30 @@ export interface DailyLedger {
 /** The UTC date, which is when the limit resets. */
 export function utcDay(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
+}
+
+function stateDirMessage(dir: string, error: unknown): string {
+  const { code } = error as NodeJS.ErrnoException;
+  const which =
+    code === "EEXIST" || code === "ENOTDIR"
+      ? "is not a folder"
+      : code === "EACCES" || code === "EPERM"
+        ? "this account cannot write to"
+        : code === "EROFS"
+          ? "is on a read-only disk"
+          : `cannot be used (${code ?? String(error)})`;
+  return `BRAINCHAIN_STATE_DIR is ${dir}, which ${which}, so the daily limit's record cannot be kept there. Set it to a folder this account can write, then restart the server.`;
+}
+
+/** Why the daily limit's record cannot be kept in `dir`, creating the folder if it is missing; undefined when it can. */
+export function stateDirProblem(dir: string): string | undefined {
+  try {
+    mkdirSync(dir, { recursive: true });
+    accessSync(dir, constants.W_OK);
+    return undefined;
+  } catch (error) {
+    return stateDirMessage(dir, error);
+  }
 }
 
 /** How long ago a file was last written, or 0 when it is gone. */
@@ -56,14 +81,16 @@ export function dailyLedger(path: string, limit: bigint, now: () => number = Dat
   const lockPath = `${path}.lock`;
 
   async function locked<T>(work: () => Promise<T>): Promise<T> {
-    await mkdir(dirname(path), { recursive: true });
+    await mkdir(dirname(path), { recursive: true }).catch((error: unknown) => {
+      throw new Error(stateDirMessage(dirname(path), error));
+    });
     const deadline = Date.now() + LOCK_WAIT_MS;
     for (;;) {
       try {
         await (await open(lockPath, "wx")).close();
         break;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw new Error(stateDirMessage(dirname(path), error));
       }
       if ((await ageOf(lockPath)) > LOCK_STALE_MS && (await clearStale(lockPath))) continue;
       if (Date.now() > deadline) throw new Error(`The daily spending record at ${path} is locked by another process; try again`);

@@ -103,7 +103,7 @@ chmod 600 ~/.brainchain/payer.key
 openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.6.0"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
 ```
 
-The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.6.0 wallet` checks the file and prints the wallet it holds. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
+The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.6.0 wallet` checks the file and prints the wallet it holds and its balance. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
 
 Each setup above pays in USDG on Robinhood Chain. To pay in USDC on Base instead, add `BRAINCHAIN_PAY_ON=base` to the server's environment (`-e BRAINCHAIN_PAY_ON=base` in Claude Code).
 
@@ -163,7 +163,7 @@ Every hire and grade is recorded on BrainChain and listed at [usebrainchain.com/
 | `BRAINCHAIN_STATE_DIR` | `~/.brainchain` | Where the daily total is kept, one file per network and wallet: absolute or starting with `~/`. |
 | `BRAINCHAIN_DESK_URL`, `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC` | network preset | Override a single setting. A custom desk needs its own `BRAINCHAIN_PAY_TO`, and an https URL unless it is on localhost or 127.0.0.1. |
 
-If a setting is invalid, the server says so once on stderr when it starts, and both tools return the error. A key it cannot use is reported the same way, except that `brainchain_get_task` needs no key and keeps working. `npx -y brainchain-mcp@0.6.0 wallet` checks the settings and the key, and prints the wallet that pays. `--help` lists the commands and variables, and `--version` prints the version.
+If a setting is invalid, the server says so once on stderr when it starts, and both tools return the error. A key it cannot use is reported the same way, except that `brainchain_get_task` needs no key and keeps working, and so is a `BRAINCHAIN_STATE_DIR` that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set. `npx -y brainchain-mcp@0.6.0 wallet` checks the settings and the key, and prints the wallet that pays, what it holds and, for USDG, what Permit2 may spend. `--help` lists the commands and variables, and `--version` prints the version.
 
 ## Try it on testnet
 
