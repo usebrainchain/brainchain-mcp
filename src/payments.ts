@@ -49,6 +49,8 @@ export interface DeskOptions {
 
 const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const firstLine = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0] ?? "";
+/** Text from the desk or a library, ended as a sentence so what this server adds after it reads apart. */
+const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
 /** Statuses that say "not now" rather than "no", alongside every 5xx. */
 const RETRY_LATER = new Set([408, 425, 429]);
 
@@ -139,12 +141,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(message)) {
       return `Could not reach the desk at ${config.desk}. Nothing was charged. Check your connection or BRAINCHAIN_DESK_URL and try again.`;
     }
-    return `The payment could not be prepared: ${message}. Nothing was charged.`;
+    return `The payment could not be prepared: ${sentence(message)} Nothing was charged.`;
   }
 
   /** Explains a payment the desk refused, from the wallet's balance and Permit2 allowance where possible. */
   async function explainRefusal(reason: unknown): Promise<string> {
-    const fallback = typeof reason === "string" ? `The desk refused the payment: ${reason}. Nothing was charged.` : "The desk refused the payment. Nothing was charged.";
+    const fallback =
+      typeof reason === "string" && reason.trim() ? `The desk refused the payment: ${sentence(reason)} Nothing was charged.` : "The desk refused the payment. Nothing was charged.";
     if (!options.funds) return fallback;
     try {
       // One deadline for both reads, so a slow chain cannot hold the reply.
@@ -284,7 +287,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
 
     await unreserve();
     if (response.status === 402) throw new Error(await explainRefusal(reply.error));
-    throw new Error(typeof reply.error === "string" ? `${reply.error} Nothing was charged.` : `The desk answered ${response.status}. Nothing was charged.`);
+    throw new Error(typeof reply.error === "string" && reply.error.trim() ? `${sentence(reply.error)} Nothing was charged.` : `The desk answered ${response.status}. Nothing was charged.`);
   }
 
   async function get(order: string): Promise<unknown> {

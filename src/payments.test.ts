@@ -171,6 +171,19 @@ describe("posting", () => {
     await expect(desk((async () => tooLarge()) as typeof fetch).post(task)).rejects.toThrow("The task is too large to post. Nothing was charged.");
   });
 
+  it("ends the desk's reason as a sentence before saying nothing was charged", async () => {
+    for (const [error, said] of [
+      ["brief refused", "brief refused. Nothing was charged."],
+      ["The brief is refused.", "The brief is refused. Nothing was charged."],
+      ["", "The desk answered 400. Nothing was charged."],
+    ]) {
+      const refuse = (async () => new Response(JSON.stringify({ error }), { status: 400 })) as typeof fetch;
+      await expect(desk(refuse).post(task)).rejects.toThrow(said);
+    }
+    const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "insufficient_funds" }), { status: 402 }));
+    await expect(desk(fetchImpl).post(task)).rejects.toThrow("The desk refused the payment: insufficient_funds. Nothing was charged.");
+  });
+
   it("refuses a desk that answers without asking for payment", async () => {
     const free = (async () => new Response("<html>ok</html>", { status: 200 })) as typeof fetch;
     await expect(desk(free).post(task)).rejects.toThrow(`The desk at ${config.desk} answered 200 without asking for payment`);
