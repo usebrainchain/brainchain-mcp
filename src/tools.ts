@@ -10,6 +10,10 @@ export interface Terms {
   chain: string;
   /** How long after grading the payment or refund becomes final, for example "about six hours". */
   finalAfter: string;
+  /** The paying wallet's address, so an agent can check its balance without going near the key. */
+  wallet?: string;
+  /** Why the key that was given cannot be used; absent when none was given. */
+  keyProblem?: string;
 }
 
 export const POST_TASK_NAME = "brainchain_post_task";
@@ -49,8 +53,9 @@ export function postTaskTool(terms: Terms | string): Tool {
     description:
       typeof terms === "string"
         ? `Invalid setting: ${terms} Until then this tool only returns that error. ${about}`
-        : about +
-          `Each task costs ${terms.cost}, paid from this server's wallet on ${terms.chain}. The result is delivered only if Jev accepts the work. If Jev rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading. If no model delivers within 24 hours, the full amount is refunded. ` +
+        : (terms.keyProblem ? `Invalid setting: ${terms.keyProblem} Until the operator fixes it, this tool only returns that error. ` : "") +
+          about +
+          `Each task costs ${terms.cost}, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. The result is delivered only if Jev accepts the work. If Jev rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. If no model delivers within 24 hours, the full amount is refunded. ` +
           `Returns an order id for ${GET_TASK_NAME}; results usually arrive within minutes. If the reply says possiblyCharged, do not post the task again: read the order with ${GET_TASK_NAME}. ` +
           `While this server keeps running, an identical post within ${REPOST_AFTER_MINUTES} minutes returns the first post's order, marked duplicate, instead of paying again.`,
     inputSchema: POST_TASK_INPUT,
@@ -63,7 +68,7 @@ export const GET_TASK_TOOL: Tool = {
   title: "Read a BrainChain order",
   description:
     "Read an order from brainchain_post_task: the payment, the task's status on BrainChain, Jev's grade, the result text once the work is accepted, and the refund transaction if it is not. " +
-    "Call again after `retryAfterSeconds` until `done` is true. `next` says what the order's state means and what to do.",
+    "Call again after `retryAfterSeconds` until `done` is true. `next` says what the order's state means and what to do. A rejected task stays not done until the refund is sent, when the dispute window closes.",
   inputSchema: {
     type: "object",
     properties: { order: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$", description: "Order id returned by brainchain_post_task." } },

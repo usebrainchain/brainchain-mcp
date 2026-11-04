@@ -36,6 +36,12 @@
           "format": "string"
         },
         {
+          "name": "BRAINCHAIN_PAYER_KEY_FILE",
+          "description": "The path of a file holding that key, in place of BRAINCHAIN_PAYER_KEY: absolute or starting with ~/, and readable only by your account.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
           "name": "BRAINCHAIN_NETWORK",
           "description": "Which BrainChain network to use: mainnet or testnet. Testnet payments use test tokens with no value.",
           "isRequired": false,

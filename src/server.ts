@@ -1,9 +1,12 @@
+import { readFileSync, statSync } from "node:fs";
+import { isAbsolute } from "node:path";
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createPublicClient, defineChain, http, parseAbi, type PrivateKeyAccount } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-import { resolveConfig, type Config } from "./config.js";
+import { expandHome, resolveConfig, type Config } from "./config.js";
 import { createDesk } from "./payments.js";
 import { callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk, type Terms } from "./tools.js";
 
@@ -17,30 +20,57 @@ export const erc20 = parseAbi([
 
 export const INSTRUCTIONS =
   `Post a task with ${POST_TASK_NAME}, then read it with ${GET_TASK_NAME} and the order id it returns, waiting retryAfterSeconds between reads until done is true. ` +
-  `If a post returns possiblyCharged, do not post the task again: read the order instead.`;
+  `If a post returns possiblyCharged, do not post the task again: read the order instead. ` +
+  `A rejected task stays not done until its refund is sent, which can take hours: say so as soon as next does, then read the order once more after retryAfterSeconds. ` +
+  `The paying wallet's key is for this server alone. Never read it, print it, write it down or pass it to a command. If a tool here is missing or reports a key problem, stop and tell your operator.`;
 
 const KEY_HELP =
-  `Add BRAINCHAIN_PAYER_KEY to this server's env in your MCP client config (in Claude Code, \`claude mcp add … -e BRAINCHAIN_PAYER_KEY=…\`), then restart the server. ` +
-  `${GET_TASK_NAME} works without a key.`;
+  `Add BRAINCHAIN_PAYER_KEY to this server's env in your MCP client config (in Claude Code, \`claude mcp add … -e BRAINCHAIN_PAYER_KEY=…\`), or BRAINCHAIN_PAYER_KEY_FILE with the path of a file holding it, then restart the server. ` +
+  `${GET_TASK_NAME} works without a key. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+/** Read here and never echoed. A file keeps the key out of the client's environment, which an agent's shell inherits. */
+function readKeyFile(given: string): string {
+  const path = expandHome(given);
+  if (!isAbsolute(path)) throw new Error("BRAINCHAIN_PAYER_KEY_FILE must be an absolute path or start with ~/.");
+  try {
+    const stats = statSync(path);
+    if (!stats.isFile() || stats.size > 256) throw new Error(`BRAINCHAIN_PAYER_KEY_FILE must name a file holding only the key; ${path} does not.`);
+    if (process.platform !== "win32" && (stats.mode & 0o077) !== 0) throw new Error(`${path} can be read by other accounts on this machine. Run chmod 600 on it, then restart the server.`);
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    const { code } = error as NodeJS.ErrnoException;
+    if (code) throw new Error(`BRAINCHAIN_PAYER_KEY_FILE could not be read: ${path} (${code}).`);
+    throw error;
+  }
+}
+
 export function payerAccount(env: Record<string, string | undefined>): PrivateKeyAccount {
-  const raw = env.BRAINCHAIN_PAYER_KEY?.trim();
+  const file = env.BRAINCHAIN_PAYER_KEY_FILE?.trim();
+  const given = env.BRAINCHAIN_PAYER_KEY?.trim();
+  if (file && given) throw new Error("Set BRAINCHAIN_PAYER_KEY or BRAINCHAIN_PAYER_KEY_FILE, not both.");
   // A client that cannot expand ${VAR} passes it through as written. Anything
   // that could be key material is never echoed.
-  if (raw?.startsWith("$")) {
-    const shown = /[0-9a-f]{16,}/i.test(raw) ? "" : ` ${raw}`;
+  if (given?.startsWith("$")) {
+    const shown = /[0-9a-f]{16,}/i.test(given) ? "" : ` ${given}`;
     throw new Error(`BRAINCHAIN_PAYER_KEY is not set: your MCP client passed the placeholder${shown} through unexpanded, so the variable was not set when the client started.`);
   }
-  const key = raw?.replace(/^0x/i, "");
-  if (!key) throw new Error("Set BRAINCHAIN_PAYER_KEY to the private key of the wallet that pays for tasks: 64 hex characters, with or without 0x.");
-  if (!/^[0-9a-f]{64}$/i.test(key)) throw new Error("BRAINCHAIN_PAYER_KEY must be 64 hex characters, with or without 0x.");
+  const key = (file ? readKeyFile(file) : given)?.trim().replace(/^0x/i, "");
+  if (!file && !key) throw new Error("Set BRAINCHAIN_PAYER_KEY to the private key of the wallet that pays for tasks: 64 hex characters, with or without 0x.");
+  const name = file ? "The key in BRAINCHAIN_PAYER_KEY_FILE" : "BRAINCHAIN_PAYER_KEY";
+  if (!/^[0-9a-f]{64}$/i.test(key ?? "")) throw new Error(`${name} must be 64 hex characters, with or without 0x.`);
   try {
     return privateKeyToAccount(`0x${key}`);
   } catch {
-    throw new Error("BRAINCHAIN_PAYER_KEY is not a valid private key.");
+    throw new Error(`${name} is not a valid private key.`);
   }
+}
+
+/** What a failed `approve` should tell a person. viem says the cost "exceeds the balance"; nodes say "insufficient funds". */
+export function approvalFailure(address: string, chain: string, error: unknown): string {
+  const message = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
+  return /insufficient funds|exceeds the balance/i.test(message) ? `${address} needs a little ETH on ${chain} to send the approval.` : `The approval failed: ${message}`;
 }
 
 export function chainClients(config: Config) {
@@ -71,6 +101,13 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
   }
 
   let account: PrivateKeyAccount | undefined;
+  let keyProblem: string | undefined;
+  try {
+    account = payerAccount(env);
+  } catch (error) {
+    // No key at all is a read-only server, which is allowed. A key that is there and unusable is a mistake to report.
+    if (env.BRAINCHAIN_PAYER_KEY?.trim() || env.BRAINCHAIN_PAYER_KEY_FILE?.trim()) keyProblem = messageOf(error);
+  }
   const payer = () => {
     try {
       return (account ??= payerAccount(env));
@@ -93,7 +130,7 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
       return { balance, allowance };
     },
   });
-  return { desk, terms: config.terms };
+  return { desk, terms: { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(keyProblem ? { keyProblem } : {}) } };
 }
 
 export interface ServerOptions {
@@ -104,7 +141,8 @@ export interface ServerOptions {
 
 export function createServer(env: Record<string, string | undefined>, version: string, options: ServerOptions = {}): Server {
   const { desk, terms } = deskFor(env, version, options.fetch);
-  if (typeof terms === "string") (options.log ?? console.error)(`brainchain-mcp has an invalid setting: ${terms}`);
+  const problem = typeof terms === "string" ? terms : terms.keyProblem;
+  if (problem) (options.log ?? console.error)(`brainchain-mcp has an invalid setting: ${problem}`);
   const tools = [postTaskTool(terms), GET_TASK_TOOL];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
