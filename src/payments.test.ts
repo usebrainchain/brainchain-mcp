@@ -1,4 +1,4 @@
-import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -161,6 +161,36 @@ describe("posting", () => {
       /already signed payments for 1 of its 1\.5 test USDG daily limit\. The limit resets at 00:00 UTC.*Nothing was charged\.$/,
     );
     expect(seen).toHaveLength(1);
+  });
+
+  it("holds the budget and the daily limit for posts made at once", async () => {
+    const tasks = ["one", "two", "three"].map((brief) => ({ ...task, brief }));
+    const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+    const byBudget = fakeDesk(accepted);
+    const d = desk(byBudget.fetchImpl, { budget: 1_000_000n, daily: 5_000_000n, stateDir });
+    const replies = await Promise.allSettled(tasks.map((t) => d.post(t)));
+    expect(byBudget.seen).toHaveLength(1);
+    expect(replies.filter((r) => r.status === "rejected").map((r) => String(r.reason))).toEqual([expect.stringMatching(/BRAINCHAIN_BUDGET_UNITS/), expect.stringMatching(/BRAINCHAIN_BUDGET_UNITS/)]);
+    expect(d.spent()).toBe(1_000_000n);
+    expect(JSON.parse(await readFile(join(stateDir, `spend-testnet-${signer.address.toLowerCase()}.json`), "utf8"))).toMatchObject({ units: "1000000" });
+
+    const byDay = fakeDesk(accepted);
+    const e = desk(byDay.fetchImpl, { daily: 1_000_000n, stateDir: await mkdtemp(join(tmpdir(), "brainchain-mcp-")) });
+    const daily = await Promise.allSettled(tasks.map((t) => e.post(t)));
+    expect(byDay.seen).toHaveLength(1);
+    expect(daily.filter((r) => r.status === "rejected").map((r) => String(r.reason))).toEqual([expect.stringMatching(/daily limit/), expect.stringMatching(/daily limit/)]);
+    // A payment the daily limit refused gives its share of the budget back.
+    expect(e.spent()).toBe(1_000_000n);
+  });
+
+  it("gives the budget back when the daily record cannot be read", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+    await writeFile(join(stateDir, `spend-testnet-${signer.address.toLowerCase()}.json`), "{not json");
+    const { fetchImpl, seen } = fakeDesk(accepted);
+    const d = desk(fetchImpl, { daily: 5_000_000n, stateDir });
+    await expect(d.post(task)).rejects.toThrow(/cannot be read/);
+    expect(seen).toHaveLength(0);
+    expect(d.spent()).toBe(0n);
   });
 
   it("returns to the daily limit what the desk refused", async () => {

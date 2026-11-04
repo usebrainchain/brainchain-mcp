@@ -219,17 +219,25 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       ],
     });
     // A payment is reserved against the budget and the daily limit before it is
-    // signed, so parallel calls cannot overshoot either.
+    // signed, so parallel calls cannot overshoot either. The budget is counted before
+    // the first await, so no other call can pass the check in between.
     client.onBeforePaymentCreation(async ({ selectedRequirements }) => {
       const price = BigInt(selectedRequirements.amount);
       if (spent + price > config.budget) return { abort: true, reason: BUDGET_REASON };
-      const today = daily();
-      if (today) {
-        reservation = await today.reserve(price);
-        if (!reservation) return { abort: true, reason: DAILY_REASON };
-      }
       spent += price;
       amount = price;
+      let today: DailyLedger | undefined;
+      try {
+        today = daily();
+        if (today) reservation = await today.reserve(price);
+      } catch (error) {
+        await unreserve();
+        throw error;
+      }
+      if (today && !reservation) {
+        await unreserve();
+        return { abort: true, reason: DAILY_REASON };
+      }
     });
     client.onAfterPaymentCreation(async ({ paymentPayload }) => {
       signed = paymentPayload;
