@@ -163,3 +163,12 @@ describe("post tool and config", () => {
     expect(formatUnits(0n)).toBe("0");
   });
 });
+
+describe("stock premiums", () => {
+  it("serves the board without a desk or a key", async () => {
+    const board = { chain: "Robinhood Chain" as const, readAt: "2026-11-04T14:40:00.000Z", usMarketOpen: true, stocks: [] };
+    const result = await callTool(desk, "brainchain_stock_premiums", {}, async () => board);
+    expect(result.isError).toBe(false);
+    expect(body(result)).toEqual(board);
+  });
+});
