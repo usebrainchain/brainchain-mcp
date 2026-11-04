@@ -5,7 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { createWalletClient, http, maxUint256, type PrivateKeyAccount } from "viem";
 
 import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
-import { chainClients, createServer, erc20, payerAccount, PERMIT2 } from "./server.js";
+import { approvalFailure, chainClients, createServer, erc20, payerAccount, PERMIT2 } from "./server.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -18,17 +18,19 @@ Usage:
   brainchain-mcp approve [USDG]  Let Permit2 spend the paying wallet's USDG.
                                  Default 100 USDG; pass a number, "max", or 0 to revoke.
                                  Not needed when paying in USDC on Base.
+  brainchain-mcp wallet          Check the key and settings, and print the wallet that pays.
 
 Environment:
   BRAINCHAIN_PAYER_KEY        Private key of the paying wallet, 64 hex characters with or without 0x.
                               Needed to post tasks and to approve; reading orders works without it.
+  BRAINCHAIN_PAYER_KEY_FILE   A file holding that key instead, readable only by your account. Absolute or starting with ~/.
   BRAINCHAIN_NETWORK          mainnet (default) or testnet.
   BRAINCHAIN_PAY_ON           robinhood (default) pays in USDG on Robinhood Chain;
                               base pays in USDC on Base (Base Sepolia on testnet).
   BRAINCHAIN_MAX_PRICE_UNITS  Maximum paid per task, in base units (default 1000000 = 1 USDG or USDC).
   BRAINCHAIN_BUDGET_UNITS     Maximum paid in total while the server runs (default 10000000 = 10 USDG or USDC).
-  BRAINCHAIN_DAILY_UNITS      Maximum the wallet pays per UTC day, kept across restarts (default: no daily limit).
-  BRAINCHAIN_STATE_DIR        Where the daily limit's record is kept (default ~/.brainchain).
+  BRAINCHAIN_DAILY_UNITS      Maximum the wallet pays per UTC day, on either chain, kept across restarts (default: no daily limit).
+  BRAINCHAIN_STATE_DIR        Where the daily limit's record is kept (default ~/.brainchain). Absolute or starting with ~/.
   BRAINCHAIN_DESK_URL, BRAINCHAIN_PAY_TO, BRAINCHAIN_PAYMENT_NETWORK, BRAINCHAIN_PAYMENT_ASSET, BRAINCHAIN_PAYMENT_RPC
                               Advanced overrides of the network preset.
 `;
@@ -39,7 +41,8 @@ function fail(message: string): never {
 }
 
 const command = process.argv[2];
-if (command === "--help" || command === "-h" || command === "help") {
+const HELP = ["--help", "-h", "help"];
+if ((command !== undefined && HELP.includes(command)) || (["approve", "wallet"].includes(command ?? "") && HELP.includes(process.argv[3] ?? ""))) {
   console.log(USAGE);
   process.exit(0);
 }
@@ -47,27 +50,27 @@ if (command === "--version" || command === "-v" || command === "version") {
   console.log(version);
   process.exit(0);
 }
-if (command !== undefined && command !== "approve") fail(`Unknown command ${command}.\n\n${USAGE}`);
+if (command !== undefined && command !== "approve" && command !== "wallet") fail(`Unknown command ${command}.\n\n${USAGE}`);
 
 if (command === undefined) {
   await createServer(process.env, version).connect(new StdioServerTransport());
+} else if (command === "wallet") {
+  const { config, account } = settings();
+  console.log(`${account.address} pays for tasks in ${config.token} on ${config.chain}.`);
 } else {
   await approve(process.argv[3] ?? "100");
 }
 
+function settings(): { config: Config; account: PrivateKeyAccount } {
+  try {
+    return { config: resolveConfig(process.env), account: payerAccount(process.env) };
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function approve(arg: string): Promise<void> {
-  let config: Config;
-  try {
-    config = resolveConfig(process.env);
-  } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
-  }
-  let account: PrivateKeyAccount;
-  try {
-    account = payerAccount(process.env);
-  } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
-  }
+  const { config, account } = settings();
   if (!config.permit2) {
     console.log(`${config.token} on ${config.chain} pays by signature alone, so there is nothing to approve.`);
     process.exit(0);
@@ -90,7 +93,6 @@ async function approve(arg: string): Promise<void> {
     );
     process.exit(0);
   } catch (error) {
-    const message = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
-    fail(/insufficient funds/i.test(message) ? `${account.address} needs a little ETH on ${config.chain} to send the approval.` : `The approval failed: ${message}`);
+    fail(approvalFailure(account.address, config.chain, error));
   }
 }

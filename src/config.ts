@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import type { Terms } from "./tools.js";
 
@@ -81,7 +81,7 @@ export interface Config {
   maxPrice: bigint;
   /** The most this server process pays in total, in the asset's smallest unit. */
   budget: bigint;
-  /** The most the wallet pays per UTC day across restarts and servers, when set. */
+  /** The most the wallet pays per UTC day across restarts, servers and payment chains, when set. */
   daily?: bigint;
   /** Where the daily limit's spending record is kept. */
   stateDir: string;
@@ -112,6 +112,27 @@ function envAddress(env: Record<string, string | undefined>, name: string, fallb
   return value as `0x${string}`;
 }
 
+/** MCP clients start servers without a shell, so nothing else expands the ~ in a config file. */
+export function expandHome(path: string): string {
+  return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
+}
+
+/** A relative path would follow whatever directory the client starts in, and a daily limit kept there would reset without a word. */
+function envDirectory(env: Record<string, string | undefined>, name: string, fallback: string): string {
+  const raw = envString(env, name);
+  if (raw === undefined) return fallback;
+  const path = expandHome(raw);
+  if (!isAbsolute(path)) throw new Error(`${name} must be an absolute path or start with ~/.`);
+  return path;
+}
+
+/** The value is never echoed: an RPC URL can carry a key. */
+function envUrl(env: Record<string, string | undefined>, name: string, fallback: string): string {
+  const value = envString(env, name) ?? fallback;
+  if (!URL.canParse(value) || !["http:", "https:"].includes(new URL(value).protocol)) throw new Error(`${name} must be an http or https URL.`);
+  return value;
+}
+
 export function resolveConfig(env: Record<string, string | undefined>): Config {
   const name = (envString(env, "BRAINCHAIN_NETWORK") ?? "mainnet").toLowerCase();
   if (name !== "mainnet" && name !== "testnet") throw new Error("BRAINCHAIN_NETWORK must be mainnet or testnet.");
@@ -132,18 +153,18 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
     name,
     payOn,
     permit2: preset.permit2,
-    desk: (envString(env, "BRAINCHAIN_DESK_URL") ?? preset.desk).replace(/\/$/, ""),
+    desk: envUrl(env, "BRAINCHAIN_DESK_URL", preset.desk).replace(/\/$/, ""),
     network: network as `eip155:${number}`,
     chainId: Number(match[1]),
     asset: envAddress(env, "BRAINCHAIN_PAYMENT_ASSET", preset.asset),
     payTo: envAddress(env, "BRAINCHAIN_PAY_TO", preset.payTo),
-    rpc: envString(env, "BRAINCHAIN_PAYMENT_RPC") ?? preset.rpc,
+    rpc: envUrl(env, "BRAINCHAIN_PAYMENT_RPC", preset.rpc),
     chain: preset.chain,
     token: preset.token,
     maxPrice,
     budget,
     ...(daily !== undefined ? { daily } : {}),
-    stateDir: envString(env, "BRAINCHAIN_STATE_DIR") ?? join(homedir(), ".brainchain"),
+    stateDir: envDirectory(env, "BRAINCHAIN_STATE_DIR", join(homedir(), ".brainchain")),
     terms: {
       cost: maxPrice === DEFAULT_MAX_PRICE ? `1 ${preset.token}` : `at most ${formatUnits(maxPrice)} ${preset.token}`,
       chain: preset.chain,
