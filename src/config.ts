@@ -69,6 +69,7 @@ const BONDS: Record<"mainnet" | "testnet", BondsConfig | undefined> = {
     registry: "0xD5Da523ee49CB7Fe855B0C6fa38707190A9D531F",
     check: "0x2e7C4F0F2e6079C3B5F7Cd2440308234CBDc537D",
     usdg: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+    proofIndex: "0x0fb02559e704549794EdF3FBBBe91DB88bB849ee",
     rpc: "https://rpc.mainnet.chain.robinhood.com",
     chain: "Robinhood Chain",
     brainchain: { rpc: "https://rpc.usebrainchain.com", chainId: 274663, board: "0x8385bb4b8990411CcdD8e851B2676da1A4C1f3C4" },
