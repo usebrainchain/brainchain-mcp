@@ -40,11 +40,16 @@ function fakeChain(options: { task?: TaskFacts; bonds?: BondView[]; usdg?: bigin
   } satisfies BondChain;
 }
 
-function setup(chain: BondChain, env: Record<string, string> = {}) {
+const offline = (async () => {
+  throw new Error("no network in tests");
+}) as unknown as typeof fetch;
+const answering = (body: unknown) => (async () => ({ ok: true, json: async () => body })) as unknown as typeof fetch;
+
+function setup(chain: BondChain, env: Record<string, string> = {}, fetchImpl: typeof fetch = offline) {
   const config = resolveConfig({ BRAINCHAIN_NETWORK: "mainnet", BRAINCHAIN_BUDGET_UNITS: "20000000", ...env });
   const open = { ...config, bonds: { ...config.bonds!, proofIndex: INDEX } };
   const limits = createLimits(open, () => account);
-  return { bonds: createBonds({ config: open, signer: () => account, limits, connect: () => chain }), limits, config: open };
+  return { bonds: createBonds({ config: open, signer: () => account, limits, connect: () => chain, fetch: fetchImpl }), limits, config: open };
 }
 
 describe("ShippedDeeds' enums", () => {
@@ -197,7 +202,7 @@ describe("bond", () => {
     expect(bondsClosed(mainnet)).toContain("BrainChain's ProofIndex on Robinhood Chain, which a bond's check reads, is not deployed");
     const chain = fakeChain({ task: task() });
     const connect = vi.fn(() => chain);
-    const bonds = createBonds({ config: mainnet, signer: () => account, limits: createLimits(mainnet, () => account), connect });
+    const bonds = createBonds({ config: mainnet, signer: () => account, limits: createLimits(mainnet, () => account), connect, fetch: offline });
     await expect(bonds.bond(12n, USDG(5))).rejects.toThrow("Delivery bonds are not open yet");
     await expect(bonds.status(12n)).rejects.toThrow("Delivery bonds are not open yet");
     expect(connect).not.toHaveBeenCalled();
@@ -216,5 +221,15 @@ describe("bond status", () => {
       { bond: "2", amount: "5 USDG", deadline: "2027-01-15T07:59:59.000Z", state: "lapsed", next: `No Proof was recorded by the deadline. The bond settles to the poster ${POSTER} after 2027-01-16T08:59:59.000Z.` },
     ]);
     expect(await setup(fakeChain()).bonds.status(12n)).toEqual({ task: "12", wallet: account.address, bonds: [] });
+  });
+});
+
+describe("deed page", () => {
+  it("names a bond by Shipped's number and page when the API knows it", async () => {
+    const page = answering({ deed: { number: "3", url: "https://app.shipped.bond/bonds/3" } });
+    const made = await setup(fakeChain({ task: task() }), {}, page).bonds.bond(12n, USDG(5));
+    expect(made).toMatchObject({ bond: "7", number: "3", url: "https://app.shipped.bond/bonds/3" });
+    const status = await setup(fakeChain({ task: task(), bonds: [view()] }), {}, page).bonds.status(12n);
+    expect(status.bonds[0]).toMatchObject({ bond: "4", number: "3", url: "https://app.shipped.bond/bonds/3" });
   });
 });
