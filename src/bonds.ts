@@ -162,6 +162,21 @@ export function bondsClosed(config: Config): string | undefined {
   return undefined;
 }
 
+/** Shipped's own number and page for a deed; absent for a test bond or when the API cannot be reached. */
+export const SHIPPED_API = "https://api.shipped.bond";
+
+export async function deedPage(deed: bigint, fetchImpl: typeof fetch = fetch): Promise<{ number: string; url: string } | undefined> {
+  try {
+    const response = await fetchImpl(`${SHIPPED_API}/v1/deeds/${deed}`, { signal: AbortSignal.timeout(5_000) });
+    if (!response.ok) return undefined;
+    const body = (await response.json()) as { deed?: { number?: unknown; url?: unknown } };
+    const { number, url } = body.deed ?? {};
+    return typeof number === "string" && typeof url === "string" ? { number, url } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function createBonds(options: BondsOptions): Bonds {
   const { config, limits } = options;
   let chain: BondChain | undefined;
@@ -213,8 +228,10 @@ export function createBonds(options: BondsOptions): Bonds {
         const terms = bondTerms({ check: config.bonds!.check, proofIndex: config.bonds!.proofIndex!, usdg: config.bonds!.usdg }, { id: task, refundTo, paidThroughDesk: payer !== undefined, deadline: t.deadline }, { address: config.bonds!.brainchain.board, chainId: config.bonds!.brainchain.chainId });
         if (approves) await c.approve(amount);
         const { deed, tx } = await c.create(terms, amount);
+        const page = await deedPage(deed, options.fetch);
         return {
           bond: deed.toString(),
+          ...(page ? { number: page.number, url: page.url } : {}),
           tx,
           task: task.toString(),
           amount: `${formatUnits(amount)} USDG`,
@@ -232,12 +249,15 @@ export function createBonds(options: BondsOptions): Bonds {
       const c = connected();
       const bonds = await c.bondsOn(task);
       if (bonds.length === 0) return { task: task.toString(), wallet: c.account, bonds: [] };
-      const [now, indexed] = await Promise.all([c.now(), c.proofOf(task)]);
+      const [now, indexed, pages] = await Promise.all([c.now(), c.proofOf(task), Promise.all(bonds.map((b) => deedPage(b.deed, options.fetch)))]);
       return {
         task: task.toString(),
         wallet: c.account,
         proofIndexed: indexed > 0n,
-        bonds: bonds.map((b) => ({ bond: b.deed.toString(), amount: `${formatUnits(b.amount)} USDG`, deadline: iso(b.deadline), ...state(b, indexed > 0n, now) })),
+        bonds: bonds.map((b, i) => {
+          const page = pages[i];
+          return { bond: b.deed.toString(), ...(page ? { number: page.number, url: page.url } : {}), amount: `${formatUnits(b.amount)} USDG`, deadline: iso(b.deadline), ...state(b, indexed > 0n, now) };
+        }),
       };
     },
   };
