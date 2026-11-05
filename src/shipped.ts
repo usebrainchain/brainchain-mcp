@@ -4,7 +4,7 @@
 // refund side.
 import { decodeAbiParameters, decodeFunctionData, encodeAbiParameters, encodeFunctionData, parseAbi, type Address, type Hex } from "viem";
 
-export const proofIndexAbi = parseAbi(["function proofOf(uint256 taskId) view returns (uint256)"]);
+export const proofIndexAbi = parseAbi(["function proofOf(address board, uint256 taskId) view returns (uint256)"]);
 
 const TERMS =
   "(string title, string milestone, address project, uint8 projectKind, address asset, uint64 deadline, address verifier, address backupVerifier, address appealPanel, address check, bytes checkData, address refundTo, uint16 defaultRemainderBps, uint16 refundCapBps, bool allowPartial, uint32 verifierGrace, uint32 backupGrace, uint32 appealWindow, uint32 panelWindow, uint128 appealBond, uint128 verifierFee, address[] refundExcluded)";
@@ -65,33 +65,35 @@ export interface BondTerms {
 
 const checkDataTypes = [{ type: "address" }, { type: "bytes" }, { type: "uint8" }, { type: "uint256" }] as const;
 
-export function encodeCheckData(proofIndex: Address, task: bigint): Hex {
-  return encodeAbiParameters(checkDataTypes, [proofIndex, encodeFunctionData({ abi: proofIndexAbi, functionName: "proofOf", args: [task] }), 0, 1n]);
+/** Task ids restart with each board, so the board is part of the key. */
+export function encodeCheckData(proofIndex: Address, board: Address, task: bigint): Hex {
+  return encodeAbiParameters(checkDataTypes, [proofIndex, encodeFunctionData({ abi: proofIndexAbi, functionName: "proofOf", args: [board, task] }), 0, 1n]);
 }
 
-/** The task a bond's check reads on `proofIndex`, or undefined for any other check. */
-export function taskOfCheck(data: Hex, proofIndex: Address): bigint | undefined {
+/** The task a bond's check reads on `proofIndex` for `board`, or undefined for any other check. */
+export function taskOfCheck(data: Hex, proofIndex: Address, board: Address): bigint | undefined {
   try {
     const [target, call, op, threshold] = decodeAbiParameters(checkDataTypes, data);
     if (target.toLowerCase() !== proofIndex.toLowerCase() || op !== 0 || threshold !== 1n) return undefined;
     const { functionName, args } = decodeFunctionData({ abi: proofIndexAbi, data: call });
-    return functionName === "proofOf" ? args[0] : undefined;
+    return functionName === "proofOf" && args[0].toLowerCase() === board.toLowerCase() ? args[1] : undefined;
   } catch {
     return undefined;
   }
 }
 
+/** The refund side is the agent that paid for the task: the poster on the board, or the payer the desk recorded. */
 export function bondTerms(
   config: { check: Address; proofIndex: Address; usdg: Address },
-  task: { id: bigint; poster: Address; deadline: bigint },
+  task: { id: bigint; refundTo: Address; paidThroughDesk: boolean; deadline: bigint },
   board: { address: Address; chainId: number },
 ): BondTerms {
   return {
     title: `BrainChain task #${task.id}`,
     milestone:
       `The Proof NFT for BrainChain task #${task.id} (task board ${board.address} on BrainChain, chain ${board.chainId}) is recorded in BrainChain's ProofIndex at ${config.proofIndex} on Robinhood Chain, ` +
-      `read as proofOf(${task.id}) >= 1. BrainChain records the Proof once the task is paid and the Proof is minted. ` +
-      `If no Proof is recorded by the deadline, the bond is paid to the task's poster, ${task.poster}.`,
+      `read as proofOf(${board.address}, ${task.id}) >= 1. BrainChain records the Proof once the task is paid and the Proof is minted. ` +
+      `If no Proof is recorded by the deadline, the bond is paid to ${task.refundTo}, ${task.paidThroughDesk ? "the agent that paid BrainChain's desk for the task" : "the task's poster"}.`,
     project: ZERO,
     projectKind: 0,
     asset: config.usdg,
@@ -100,8 +102,8 @@ export function bondTerms(
     backupVerifier: ZERO,
     appealPanel: ZERO,
     check: config.check,
-    checkData: encodeCheckData(config.proofIndex, task.id),
-    refundTo: task.poster,
+    checkData: encodeCheckData(config.proofIndex, board.address, task.id),
+    refundTo: task.refundTo,
     defaultRemainderBps: 0,
     refundCapBps: 0,
     allowPartial: false,

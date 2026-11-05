@@ -2,7 +2,7 @@
 // BrainChain task, released by the task's Proof and paid to the poster when
 // the task is not paid by its deadline. A bond draws on the same budget and
 // daily limit as a post, and never passes BRAINCHAIN_MAX_BOND_UNITS.
-import { createPublicClient, createWalletClient, defineChain, formatEther, http, parseAbi, parseEventLogs, type Address, type Hex, type PrivateKeyAccount } from "viem";
+import { createPublicClient, createWalletClient, defineChain, formatEther, http, isAddress, parseAbi, parseEventLogs, type Address, type Hex, type PrivateKeyAccount } from "viem";
 
 import { formatUnits, type BondsConfig, type Config } from "./config.js";
 import type { Limits } from "./limits.js";
@@ -15,7 +15,7 @@ const erc20 = parseAbi([
   "function approve(address spender, uint256 amount) returns (bool)",
 ]);
 /** Gas the transactions take, measured on a fork of Robinhood Chain, with room. */
-const GAS = { approve: 60_000n, create: 980_000n };
+const GAS = { approve: 60_000n, create: 1_100_000n };
 const DEED_BATCH = 200;
 const DEED_SCAN = 5_000;
 
@@ -52,9 +52,11 @@ export interface BondChain {
   /** The wallet's bonds on one task, newest first. */
   bondsOn(task: bigint): Promise<BondView[]>;
   proofOf(task: bigint): Promise<bigint>;
+  /** The agent that paid BrainChain's desk for the task, as the desk records it; undefined for a plain on-chain post. */
+  payerOf(task: bigint): Promise<Address | undefined>;
 }
 
-export function createBondChain(bonds: BondsConfig, account: PrivateKeyAccount): BondChain {
+export function createBondChain(bonds: BondsConfig, account: PrivateKeyAccount, desk: string, fetchImpl: typeof fetch = fetch): BondChain {
   const brainchain = createPublicClient({
     chain: defineChain({ id: bonds.brainchain.chainId, name: "BrainChain", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: [bonds.brainchain.rpc] } } }),
     transport: http(bonds.brainchain.rpc, { retryCount: 2, timeout: 15_000 }),
@@ -115,11 +117,24 @@ export function createBondChain(bonds: BondsConfig, account: PrivateKeyAccount):
       const deeds = await client.multicall({ contracts: mine.map((id) => ({ ...registry, functionName: "getDeed", args: [id] }) as const), allowFailure: false });
       return mine.flatMap((deed, i) => {
         const d = deeds[i]!;
-        if (d.terms.check.toLowerCase() !== bonds.check.toLowerCase() || taskOfCheck(d.terms.checkData, bonds.proofIndex!) !== task) return [];
+        if (d.terms.check.toLowerCase() !== bonds.check.toLowerCase() || taskOfCheck(d.terms.checkData, bonds.proofIndex!, bonds.brainchain.board) !== task) return [];
         return [{ deed, amount: d.balance, deadline: d.terms.deadline, status: d.status, remainderBps: d.remainderBps, checkMetAt: d.checkMetAt, settledAt: d.settledAt, refundTo: d.terms.refundTo }];
       });
     },
-    proofOf: (task) => client.readContract({ address: bonds.proofIndex!, abi: parseAbi(["function proofOf(uint256 taskId) view returns (uint256)"]), functionName: "proofOf", args: [task] }),
+    proofOf: (task) => client.readContract({ address: bonds.proofIndex!, abi: parseAbi(["function proofOf(address board, uint256 taskId) view returns (uint256)"]), functionName: "proofOf", args: [bonds.brainchain.board, task] }),
+    async payerOf(task) {
+      let response: Response;
+      try {
+        response = await fetchImpl(`${desk}/bonds/refund-to/${task}`, { signal: AbortSignal.timeout(15_000) });
+      } catch (error) {
+        throw new Error(`Could not reach the desk at ${desk} to ask who paid for task ${task} (${error instanceof Error ? error.message.split("\n")[0] : String(error)}). Nothing was bonded.`);
+      }
+      if (!response.ok) throw new Error(`The desk at ${desk} answered ${response.status} when asked who paid for task ${task}. Nothing was bonded.`);
+      const { refundTo } = ((await response.json().catch(() => undefined)) as { refundTo?: unknown } | undefined) ?? {};
+      if (refundTo === null || refundTo === undefined) return undefined;
+      if (typeof refundTo !== "string" || !isAddress(refundTo)) throw new Error(`The desk at ${desk} named the payer of task ${task} in a form this server cannot read. Nothing was bonded.`);
+      return refundTo;
+    },
   };
 }
 
@@ -133,7 +148,8 @@ export interface BondsOptions {
   /** Called when a bond is about to be sent, so the server can start without a key. */
   signer: () => PrivateKeyAccount;
   limits: Limits;
-  connect?: (bonds: BondsConfig, account: PrivateKeyAccount) => BondChain;
+  fetch?: typeof fetch;
+  connect?: (bonds: BondsConfig, account: PrivateKeyAccount, desk: string, fetchImpl: typeof fetch) => BondChain;
 }
 
 const iso = (seconds: bigint) => new Date(Number(seconds) * 1000).toISOString();
@@ -152,7 +168,7 @@ export function createBonds(options: BondsOptions): Bonds {
   const connected = () => {
     const closed = bondsClosed(config);
     if (closed) throw new Error(closed);
-    return (chain ??= (options.connect ?? createBondChain)(config.bonds!, options.signer()));
+    return (chain ??= (options.connect ?? createBondChain)(config.bonds!, options.signer(), config.desk, options.fetch ?? fetch));
   };
 
   function state(b: BondView, indexed: boolean, now: bigint) {
@@ -181,6 +197,10 @@ export function createBonds(options: BondsOptions): Bonds {
       if (amount > config.maxBond) throw new Error(`This server bonds at most ${formatUnits(config.maxBond)} USDG on one task. Raise BRAINCHAIN_MAX_BOND_UNITS and restart the server to allow more. Nothing was bonded.`);
       const existing = (await c.bondsOn(task)).find((b) => b.status !== DeedStatus.Settled);
       if (existing) throw new Error(`This wallet already has bond No. ${existing.deed} open on task ${task}. Nothing was bonded.`);
+      // A task paid through the desk has the desk as its poster on the board; the bond pays the agent that paid.
+      const payer = await c.payerOf(task);
+      if (payer?.toLowerCase() === c.account.toLowerCase()) throw new Error(`Task ${task} was paid for by this wallet. A bond guarantees delivery to someone else; it earns no standing on a task the same wallet paid for. Nothing was bonded.`);
+      const refundTo = payer ?? t.poster;
 
       const hold = await limits.take(amount);
       if (typeof hold === "string") throw new Error(await limitReached(config, limits, hold, "signed payments and bonds for"));
@@ -190,7 +210,7 @@ export function createBonds(options: BondsOptions): Bonds {
         const gas = (GAS.create + (approves ? GAS.approve : 0n)) * gasPrice;
         if (balance < amount) throw new Error(`${c.account} holds ${formatUnits(balance)} USDG on ${config.bonds!.chain}, under the ${formatUnits(amount)} USDG to bond. Nothing was bonded.`);
         if (eth < gas) throw new Error(`${c.account} holds ${formatEther(eth)} ETH on ${config.bonds!.chain}, under the ${formatEther(gas)} ETH the approval and the bond need. Nothing was bonded.`);
-        const terms = bondTerms({ check: config.bonds!.check, proofIndex: config.bonds!.proofIndex!, usdg: config.bonds!.usdg }, { id: task, poster: t.poster, deadline: t.deadline }, { address: config.bonds!.brainchain.board, chainId: config.bonds!.brainchain.chainId });
+        const terms = bondTerms({ check: config.bonds!.check, proofIndex: config.bonds!.proofIndex!, usdg: config.bonds!.usdg }, { id: task, refundTo, paidThroughDesk: payer !== undefined, deadline: t.deadline }, { address: config.bonds!.brainchain.board, chainId: config.bonds!.brainchain.chainId });
         if (approves) await c.approve(amount);
         const { deed, tx } = await c.create(terms, amount);
         return {
@@ -200,7 +220,7 @@ export function createBonds(options: BondsOptions): Bonds {
           amount: `${formatUnits(amount)} USDG`,
           deadline: iso(terms.deadline),
           delivered: `${formatUnits(amount - fee(amount))} USDG back after Shipped's 1% fee, once the task is paid and its Proof recorded`,
-          missed: `${formatUnits(amount)} USDG to the poster ${t.poster} if no Proof is recorded by the deadline`,
+          missed: `${formatUnits(amount)} USDG to ${refundTo}, ${payer ? "the agent that paid for the task" : "the poster"}, if no Proof is recorded by the deadline`,
           next: "Jev reads the bond when it hires. Follow it with brainchain_bond_status.",
         };
       } catch (error) {

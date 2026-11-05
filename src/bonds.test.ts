@@ -23,7 +23,7 @@ const NOW = 1_800_000_000n;
 const task = (overrides: Partial<TaskFacts> = {}): TaskFacts => ({ poster: POSTER, bounty: USDG(1), deadline: NOW + 86_400n, status: TaskStatus.Open, model: `0x${"0".repeat(64)}`, ...overrides });
 const view = (overrides: Partial<BondView> = {}): BondView => ({ deed: 4n, amount: USDG(5), deadline: NOW + 86_400n + BOND_LEAD_SEC, status: DeedStatus.Open, remainderBps: 0, checkMetAt: 0n, settledAt: 0n, refundTo: POSTER, ...overrides });
 
-function fakeChain(options: { task?: TaskFacts; bonds?: BondView[]; usdg?: bigint; eth?: bigint; allowance?: bigint; proof?: bigint } = {}) {
+function fakeChain(options: { task?: TaskFacts; bonds?: BondView[]; usdg?: bigint; eth?: bigint; allowance?: bigint; proof?: bigint; payer?: Address } = {}) {
   return {
     account: account.address,
     task: vi.fn(async () => options.task),
@@ -36,6 +36,7 @@ function fakeChain(options: { task?: TaskFacts; bonds?: BondView[]; usdg?: bigin
     create: vi.fn(async () => ({ deed: 7n, tx: TX })),
     bondsOn: vi.fn(async () => options.bonds ?? []),
     proofOf: vi.fn(async () => options.proof ?? 0n),
+    payerOf: vi.fn(async () => options.payer),
   } satisfies BondChain;
 }
 
@@ -57,12 +58,16 @@ describe("ShippedDeeds' enums", () => {
 });
 
 describe("bondTerms", () => {
-  it("builds the terms Shipped's create accepts for a check-only bond, with the poster as the refund side", () => {
+  it("builds the terms Shipped's create accepts for a check-only bond, keyed by board and task, with the refund side named", () => {
     const config = resolveConfig({ BRAINCHAIN_NETWORK: "mainnet" }).bonds!;
-    const terms = bondTerms({ check: config.check, proofIndex: INDEX, usdg: config.usdg }, { id: 12n, poster: POSTER, deadline: NOW }, { address: config.brainchain.board, chainId: config.brainchain.chainId });
+    const terms = bondTerms({ check: config.check, proofIndex: INDEX, usdg: config.usdg }, { id: 12n, refundTo: POSTER, paidThroughDesk: false, deadline: NOW }, { address: config.brainchain.board, chainId: config.brainchain.chainId });
     expect(terms.title).toBe("BrainChain task #12");
     expect(Buffer.byteLength(terms.milestone)).toBeLessThanOrEqual(2048);
-    expect(terms.milestone).toContain("proofOf(12) >= 1");
+    expect(terms.milestone).toContain(`proofOf(${config.brainchain.board}, 12) >= 1`);
+    expect(terms.milestone).toContain(`paid to ${POSTER}, the task's poster`);
+    expect(bondTerms({ check: config.check, proofIndex: INDEX, usdg: config.usdg }, { id: 12n, refundTo: account.address, paidThroughDesk: true, deadline: NOW }, { address: config.brainchain.board, chainId: 1 }).milestone).toContain(
+      `paid to ${account.address}, the agent that paid BrainChain's desk for the task`,
+    );
     expect(terms).toMatchObject({
       project: "0x0000000000000000000000000000000000000000",
       projectKind: 0,
@@ -86,9 +91,10 @@ describe("bondTerms", () => {
     });
     const [target, call, op, threshold] = decodeAbiParameters([{ type: "address" }, { type: "bytes" }, { type: "uint8" }, { type: "uint256" }], terms.checkData);
     expect([target, op, threshold]).toEqual([INDEX, 0, 1n]);
-    expect(decodeFunctionData({ abi: proofIndexAbi, data: call })).toEqual({ functionName: "proofOf", args: [12n] });
-    expect(taskOfCheck(encodeCheckData(INDEX, 3n), INDEX)).toBe(3n);
-    expect(taskOfCheck(encodeCheckData(INDEX, 3n), POSTER)).toBeUndefined();
+    expect(decodeFunctionData({ abi: proofIndexAbi, data: call })).toEqual({ functionName: "proofOf", args: [config.brainchain.board, 12n] });
+    expect(taskOfCheck(encodeCheckData(INDEX, config.brainchain.board, 3n), INDEX, config.brainchain.board)).toBe(3n);
+    expect(taskOfCheck(encodeCheckData(INDEX, config.brainchain.board, 3n), POSTER, config.brainchain.board)).toBeUndefined();
+    expect(taskOfCheck(encodeCheckData(INDEX, config.brainchain.board, 3n), INDEX, POSTER)).toBeUndefined();
   });
 });
 
@@ -109,10 +115,26 @@ describe("bond", () => {
       amount: "5 USDG",
       deadline: "2027-01-18T08:00:00.000Z",
       delivered: "4.95 USDG back after Shipped's 1% fee, once the task is paid and its Proof recorded",
-      missed: `5 USDG to the poster ${POSTER} if no Proof is recorded by the deadline`,
+      missed: `5 USDG to ${POSTER}, the poster, if no Proof is recorded by the deadline`,
       next: "Jev reads the bond when it hires. Follow it with brainchain_bond_status.",
     });
     expect(limits.spent()).toBe(USDG(5));
+  });
+
+  it("pays the agent that paid the desk for the task, and refuses a task this wallet paid for", async () => {
+    const payer: Address = "0x00000000000000000000000000000000000000e1";
+    const chain = fakeChain({ task: task({ poster: "0x00000000000000000000000000000000000000de" }), payer });
+    const reply = (await setup(chain).bonds.bond(12n, USDG(5))) as { missed: string };
+    expect(chain.payerOf).toHaveBeenCalledWith(12n);
+    const [terms] = chain.create.mock.calls[0]!;
+    expect(terms.refundTo).toBe(payer);
+    expect(terms.milestone).toContain(`paid to ${payer}, the agent that paid BrainChain's desk for the task`);
+    expect(reply.missed).toBe(`5 USDG to ${payer}, the agent that paid for the task, if no Proof is recorded by the deadline`);
+    const own = fakeChain({ task: task({ poster: "0x00000000000000000000000000000000000000de" }), payer: account.address });
+    const { bonds, limits } = setup(own);
+    await expect(bonds.bond(12n, USDG(5))).rejects.toThrow("Task 12 was paid for by this wallet.");
+    expect(own.create).not.toHaveBeenCalled();
+    expect(limits.spent()).toBe(0n);
   });
 
   it("skips the approval when the allowance covers the bond", async () => {
