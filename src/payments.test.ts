@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 
+import { createKeyPairSignerFromBytes, getBase58Decoder, getBase64Encoder, getCompiledTransactionMessageDecoder, getTransactionDecoder } from "@solana/kit";
+import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from "@solana-program/token";
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -65,6 +67,114 @@ const accepted = (payment: { payload: unknown }) =>
 function desk(fetchImpl: typeof fetch, overrides: Partial<typeof config> = {}) {
   return createDesk({ config: { ...config, ...overrides }, signer, approveCommand: "npx -y brainchain-mcp approve", fetch: fetchImpl, postTimeoutMs: 10_000 });
 }
+
+describe("paying on Solana", () => {
+  const solana = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "solana" });
+  const evm = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
+
+  /** A Solana node that knows one account: the USDC mint, with 6 decimals. */
+  async function solanaNode() {
+    const mint = new Uint8Array(82);
+    mint[44] = 6;
+    mint[45] = 1;
+    const server = createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk) => (body += chunk));
+      request.on("end", () => {
+        const { id, method } = JSON.parse(body) as { id: unknown; method: string };
+        const result =
+          method === "getAccountInfo"
+            ? { context: { slot: 1 }, value: { data: [Buffer.from(mint).toString("base64"), "base64"], executable: false, lamports: 1461600, owner: TOKEN_PROGRAM_ADDRESS, rentEpoch: 0, space: 82 } }
+            : null;
+        response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id, result }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close: () => server.close() };
+  }
+
+  async function payer() {
+    const pair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+    const secret = new Uint8Array(64);
+    secret.set(new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey)).slice(-32), 0);
+    secret.set(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)), 32);
+    return { address: (await createKeyPairSignerFromBytes(secret)).address as string, secret };
+  }
+
+  /** The desk's challenge as it stands with every lane on: Robinhood Chain, Base and Solana. */
+  function challengeAll(payTo = solana.payTo): string {
+    const accepts = [
+      { scheme: "exact", network: evm.network, amount: "1000000", asset: evm.asset, payTo: evm.payTo, maxTimeoutSeconds: 300, extra: { assetTransferMethod: "permit2" } },
+      {
+        scheme: "exact",
+        network: solana.network,
+        amount: "1000000",
+        asset: solana.asset,
+        payTo,
+        maxTimeoutSeconds: 300,
+        extra: { feePayer: "BENrLoUbndxoNMUS5JXApGMtNykLjFXXixMtpDwDR9SP", recentBlockhash: getBase58Decoder().decode(new Uint8Array(32).fill(9)), lastValidBlockHeight: "1000" },
+      },
+    ];
+    return Buffer.from(JSON.stringify({ x402Version: 2, error: "Payment required", resource: { url: endpoint, description: "A BrainChain task", mimeType: "application/json" }, accepts })).toString("base64");
+  }
+
+  function deskWithSolana(payTo?: string) {
+    const seen: { payload: { transaction?: string }; accepted: { network: string } }[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      const header = request.headers.get("payment-signature");
+      if (!header) return new Response("{}", { status: 402, headers: { "payment-required": challengeAll(payTo) } });
+      const payment = JSON.parse(Buffer.from(header, "base64").toString("utf8")) as (typeof seen)[number];
+      seen.push(payment);
+      return accepted(payment);
+    }) as typeof fetch;
+    return { fetchImpl, seen };
+  }
+
+  it("signs one USDC transfer to the desk's Solana wallet, picking the Solana accept, and names the order as the desk does", async () => {
+    const node = await solanaNode();
+    try {
+      const wallet = await payer();
+      const { fetchImpl, seen } = deskWithSolana();
+      const d = createDesk({ config: { ...solana, rpc: node.url }, signer: wallet, approveCommand: "unused", fetch: fetchImpl, postTimeoutMs: 10_000 });
+      const reply = (await d.post(task)) as Record<string, unknown>;
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.accepted.network).toBe(solana.network);
+      expect(reply).toMatchObject({ order: orderIdOf(seen[0]!), price: "1 test USDC" });
+      expect(d.spent()).toBe(1_000_000n);
+
+      const wire = getTransactionDecoder().decode(getBase64Encoder().encode(seen[0]!.payload.transaction!));
+      const message = getCompiledTransactionMessageDecoder().decode(wire.messageBytes);
+      const transfer = message.instructions.find((ix) => message.staticAccounts[ix.programAddressIndex] === TOKEN_PROGRAM_ADDRESS)!;
+      const [source, mint, destination, authority] = transfer.accountIndices!.map((i) => message.staticAccounts[i]);
+      const ata = async (owner: string) => (await findAssociatedTokenPda({ owner: owner as never, mint: solana.asset as never, tokenProgram: TOKEN_PROGRAM_ADDRESS }))[0];
+      expect({ source, mint, destination, authority }).toEqual({ source: await ata(wallet.address), mint: solana.asset, destination: await ata(solana.payTo), authority: wallet.address });
+      expect(new DataView(transfer.data!.buffer, transfer.data!.byteOffset + 1, 8).getBigUint64(0, true)).toBe(1_000_000n);
+    } finally {
+      node.close();
+    }
+  });
+
+  it("refuses a Solana accept paying anyone but the desk, even one that differs only in case", async () => {
+    const node = await solanaNode();
+    try {
+      const swapped = solana.payTo.replace(/[a-z]/, (c) => c.toUpperCase());
+      const { fetchImpl, seen } = deskWithSolana(swapped);
+      const d = createDesk({ config: { ...solana, rpc: node.url }, signer: await payer(), approveCommand: "unused", fetch: fetchImpl });
+      await expect(d.post(task)).rejects.toThrow(`the payee must be ${solana.payTo}`);
+      expect(seen).toHaveLength(0);
+      expect(d.spent()).toBe(0n);
+    } finally {
+      node.close();
+    }
+  });
+
+  it("refuses a key for the wrong chain before signing anything", async () => {
+    const { fetchImpl, seen } = deskWithSolana();
+    await expect(createDesk({ config: solana, signer, approveCommand: "unused", fetch: fetchImpl }).post(task)).rejects.toThrow("The paying key is not for Solana devnet.");
+    expect(seen).toHaveLength(0);
+  });
+});
 
 describe("order ids", () => {
   it("match the desk's: keccak256 of the payload with sorted keys", () => {

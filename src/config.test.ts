@@ -75,7 +75,45 @@ describe("resolveConfig", () => {
     expect(resolveConfig({ BRAINCHAIN_DESK_URL: "https://desk.example.com//" }).desk).toBe("https://desk.example.com");
   });
 
+  it("pays in USDC on Solana with BRAINCHAIN_PAY_ON=solana, to the desk's Solana wallet", () => {
+    const config = resolveConfig({ BRAINCHAIN_PAY_ON: "solana" });
+    expect(config).toMatchObject({
+      payOn: "solana",
+      network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+      asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      payTo: "3dE26QRuereRQWFd8ZTKcoAmNVPxdzJyPUsgarYScCrL",
+      rpc: "https://api.mainnet-beta.solana.com",
+      desk: resolveConfig({}).desk,
+      token: "USDC",
+      chain: "Solana",
+      permit2: false,
+    });
+    expect(config.chainId).toBeUndefined();
+    expect(config.terms).toEqual({ cost: "1 USDC", chain: "Solana", finalAfter: "about six hours" });
+  });
+
+  it("pairs testnet with Solana devnet and the testnet desk's Solana wallet", () => {
+    expect(resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "Solana" })).toMatchObject({
+      network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+      asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      payTo: "AeRePM6UDB8onv5Mt9crXSaxfH8ivd7L7X71iqRaZ3Qi",
+      rpc: "https://api.devnet.solana.com",
+      desk: resolveConfig({ BRAINCHAIN_NETWORK: "testnet" }).desk,
+      chain: "Solana devnet",
+      token: "test USDC",
+    });
+  });
+
+  it("checks overrides on Solana as Solana addresses and a solana: network", () => {
+    const solana = { BRAINCHAIN_PAY_ON: "solana" };
+    expect(() => resolveConfig({ ...solana, BRAINCHAIN_PAY_TO: "0xafB0C4Ef895D4895040cdC6435B96D3EE8350c6E" })).toThrow("BRAINCHAIN_PAY_TO must be a Solana address when BRAINCHAIN_PAY_ON is solana.");
+    expect(() => resolveConfig({ ...solana, BRAINCHAIN_PAYMENT_ASSET: "not-a-mint" })).toThrow("BRAINCHAIN_PAYMENT_ASSET must be a Solana address");
+    expect(() => resolveConfig({ ...solana, BRAINCHAIN_PAYMENT_NETWORK: "eip155:8453" })).toThrow(/solana:<genesis hash>/);
+    expect(() => resolveConfig({ BRAINCHAIN_PAYMENT_NETWORK: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" })).toThrow(/eip155:<chain id>/);
+    expect(resolveConfig({ ...solana, BRAINCHAIN_PAY_TO: "AeRePM6UDB8onv5Mt9crXSaxfH8ivd7L7X71iqRaZ3Qi" }).payTo).toBe("AeRePM6UDB8onv5Mt9crXSaxfH8ivd7L7X71iqRaZ3Qi");
+  });
+
   it("refuses an unknown chain", () => {
-    expect(() => resolveConfig({ BRAINCHAIN_PAY_ON: "solana" })).toThrow(/robinhood or base/);
+    expect(() => resolveConfig({ BRAINCHAIN_PAY_ON: "ethereum" })).toThrow(/robinhood, base or solana/);
   });
 });

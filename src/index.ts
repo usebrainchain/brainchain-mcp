@@ -4,9 +4,10 @@ import { createRequire } from "node:module";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createWalletClient, http, maxUint256, type PrivateKeyAccount } from "viem";
 
-import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
+import { DECIMALS, evmPayment, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
-import { approvalFailure, approveCommand, chainClients, createServer, erc20, payerAccount, PERMIT2, walletFunds, walletReport } from "./server.js";
+import { solanaSigner, type Payer, type SolanaPayer } from "./payments.js";
+import { approvalFailure, approveCommand, chainClients, createServer, erc20, payerAccount, PERMIT2, solanaPayer, walletFunds, walletReport } from "./server.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -19,7 +20,7 @@ Usage:
   brainchain-mcp                 Start the server on stdio (what MCP clients run).
   brainchain-mcp approve [USDG]  Let Permit2 spend the paying wallet's USDG.
                                  Default 100 USDG; pass a number, "max", or 0 to revoke.
-                                 Not needed when paying in USDC on Base.
+                                 Not needed when paying in USDC on Base or Solana.
   brainchain-mcp wallet          Check the key and settings, and print the wallet that pays, what it
                                  holds and, for USDG, what Permit2 may spend.
 
@@ -29,7 +30,11 @@ Environment:
   BRAINCHAIN_PAYER_KEY_FILE   A file holding that key instead, readable only by your account. Absolute or starting with ~/.
   BRAINCHAIN_NETWORK          mainnet (default) or testnet.
   BRAINCHAIN_PAY_ON           robinhood (default) pays in USDG on Robinhood Chain;
-                              base pays in USDC on Base (Base Sepolia on testnet).
+                              base pays in USDC on Base (Base Sepolia on testnet);
+                              solana pays in USDC on Solana (devnet on testnet).
+  BRAINCHAIN_SOLANA_KEY       With BRAINCHAIN_PAY_ON=solana: the paying Solana wallet's secret key, base58 or a JSON
+                              array of 64 numbers. The wallet needs USDC only; the network fee is paid for it.
+  BRAINCHAIN_SOLANA_KEY_FILE  A file holding that key instead, readable only by your account. Absolute or starting with ~/.
   BRAINCHAIN_MAX_PRICE_UNITS  Maximum paid per task, in base units (default 1000000 = 1 USDG or USDC).
   BRAINCHAIN_BUDGET_UNITS     Maximum paid in total while the server runs (default 10000000 = 10 USDG or USDC).
   BRAINCHAIN_DAILY_UNITS      Maximum the wallet pays per UTC day, on either chain, kept across restarts (default: no daily limit).
@@ -37,7 +42,7 @@ Environment:
                               the budget and the daily limit.
   BRAINCHAIN_STATE_DIR        Where the daily limit's record is kept (default ~/.brainchain). Absolute or starting with ~/.
   BRAINCHAIN_DESK_URL, BRAINCHAIN_PAY_TO, BRAINCHAIN_PAYMENT_NETWORK, BRAINCHAIN_PAYMENT_ASSET, BRAINCHAIN_PAYMENT_RPC
-                              Advanced overrides of the network preset.
+                              Advanced overrides of the network preset. On Solana, BRAINCHAIN_PAYMENT_RPC is a Solana RPC.
 `;
 
 function fail(message: string): never {
@@ -63,18 +68,19 @@ if (command === undefined) {
   await createServer(process.env, version).connect(new StdioServerTransport());
 } else if (command === "wallet") {
   const { config, account } = settings();
+  if (config.payOn === "solana") await solanaSigner(account as SolanaPayer).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
   const funds = await walletFunds(config, account.address).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
   console.log(walletReport(config, account.address, funds, approveCommand(config, version)));
 } else {
   await approve(process.argv[3] ?? "100");
 }
 
-function settings(): { config: Config; account: PrivateKeyAccount } {
+function settings(): { config: Config; account: Payer } {
   let config: Config;
-  let account: PrivateKeyAccount;
+  let account: Payer;
   try {
     config = resolveConfig(process.env);
-    account = payerAccount(process.env);
+    account = config.payOn === "solana" ? solanaPayer(process.env) : payerAccount(process.env);
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }
@@ -84,11 +90,13 @@ function settings(): { config: Config; account: PrivateKeyAccount } {
 }
 
 async function approve(arg: string): Promise<void> {
-  const { config, account } = settings();
+  const { config, account: payer } = settings();
   if (!config.permit2) {
     console.log(`${config.token} on ${config.chain} pays by signature alone, so there is nothing to approve.`);
     process.exit(0);
   }
+  // Only USDG on Robinhood Chain pays through Permit2, so the key is an EVM key.
+  const account = payer as PrivateKeyAccount;
   const max = arg.toLowerCase() === "max";
   if (!max && !/^\d+(\.\d{1,6})?$/.test(arg)) fail(`"${arg}" is not an amount. Pass USDG with up to 6 decimals (for example 100), "max", or 0 to revoke.`);
   const [whole, fraction = ""] = arg.split(".");
@@ -96,7 +104,7 @@ async function approve(arg: string): Promise<void> {
   const { chain, reader } = chainClients(config);
   const wallet = createWalletClient({ account, chain, transport: http(config.rpc, { timeout: 30_000 }) });
   try {
-    const hash = await wallet.writeContract({ address: config.asset, abi: erc20, functionName: "approve", args: [PERMIT2, amount] });
+    const hash = await wallet.writeContract({ address: evmPayment(config).asset, abi: erc20, functionName: "approve", args: [PERMIT2, amount] });
     console.log(`Sent ${hash} on ${config.chain}. Waiting for it to confirm…`);
     const receipt = await reader.waitForTransactionReceipt({ hash, timeout: 180_000 });
     if (receipt.status !== "success") fail(`The approval ${hash} reverted on ${config.chain}. Nothing changed; run approve again.`);

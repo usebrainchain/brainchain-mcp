@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hire a frontier model for a task and pay in USDG or USDC only for work that meets the bar you set.",
-  "version": "0.6.1",
+  "version": "0.8.0",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.6.1",
+      "version": "0.8.0",
       "transport": {
         "type": "stdio"
       },
@@ -42,6 +42,19 @@
           "format": "string"
         },
         {
+          "name": "BRAINCHAIN_SOLANA_KEY",
+          "description": "With BRAINCHAIN_PAY_ON=solana: secret key of the paying Solana wallet, base58 or a JSON array of its 64 bytes. The wallet needs USDC only; the network fee is paid for it.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "BRAINCHAIN_SOLANA_KEY_FILE",
+          "description": "The path of a file holding that key, in place of BRAINCHAIN_SOLANA_KEY: absolute or starting with ~/, and readable only by your account.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
           "name": "BRAINCHAIN_NETWORK",
           "description": "Which BrainChain network to use: mainnet or testnet. Testnet payments use test tokens with no value.",
           "isRequired": false,
@@ -54,7 +67,7 @@
         },
         {
           "name": "BRAINCHAIN_PAY_ON",
-          "description": "Where to pay: robinhood for USDG on Robinhood Chain (one-time Permit2 approval) or base for USDC on Base (Base Sepolia on testnet), which needs no approval.",
+          "description": "Where to pay: robinhood for USDG on Robinhood Chain (one-time Permit2 approval), base for USDC on Base (Base Sepolia on testnet), or solana for USDC on Solana (Solana devnet on testnet). Base and Solana need no approval.",
           "isRequired": false,
           "format": "string",
           "default": "robinhood",

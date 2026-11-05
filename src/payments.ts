@@ -1,6 +1,8 @@
+import { createKeyPairSignerFromBytes, type KeyPairSigner } from "@solana/kit";
 import type { ClientEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
+import { ExactSvmScheme } from "@x402/svm/exact/client";
 import { keccak256, toBytes } from "viem";
 
 import { formatUnits, MAX_TIMEOUT_SECONDS, REPOST_AFTER_MINUTES, type Config } from "./config.js";
@@ -44,10 +46,29 @@ export interface Funds {
   allowance?: bigint;
 }
 
+/** A Solana wallet: its 64-byte secret key, the private half then the public half, and the address the public half names. */
+export interface SolanaPayer {
+  address: string;
+  secret: Uint8Array;
+}
+
+export type Payer = ClientEvmSigner | SolanaPayer;
+
+const isSolanaPayer = (payer: Payer): payer is SolanaPayer => "secret" in payer;
+
+/** The signer for a Solana key, which also checks that its two halves belong together. */
+export async function solanaSigner(payer: SolanaPayer): Promise<KeyPairSigner> {
+  try {
+    return await createKeyPairSignerFromBytes(payer.secret);
+  } catch {
+    throw new Error("The Solana key is not a valid key pair: its public half does not match its private half.");
+  }
+}
+
 export interface DeskOptions {
   config: Config;
   /** A function is called when a payment is about to be signed, so a desk can exist before its key does. */
-  signer: ClientEvmSigner | (() => ClientEvmSigner);
+  signer: Payer | (() => Payer);
   /** The command a person runs to approve Permit2, for refusal messages. */
   approveCommand: string;
   fetch?: typeof fetch;
@@ -59,6 +80,8 @@ export interface DeskOptions {
 }
 
 const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+/** Solana addresses are base58, where case matters. */
+const sameSolanaAddress = (a: string, b: string) => a === b;
 const firstLine = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0] ?? "";
 /** Text from the desk or a library, ended as a sentence so what this server adds after it reads apart. */
 const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
@@ -204,17 +227,19 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     };
     const receipt = (order: string) => ({ order, price: `${formatUnits(hold?.amount ?? 0n)} ${config.token}`, statusUrl: `${endpoint}/${order}` });
 
+    const payer = account();
+    const solana = config.payOn === "solana";
+    if (solana !== isSolanaPayer(payer)) throw new Error(`The paying key is not for ${config.chain}. Nothing was charged.`);
+    // On Solana the RPC also gives the client the mint's decimals and a recent blockhash.
+    const scheme = isSolanaPayer(payer) ? new ExactSvmScheme(await solanaSigner(payer), { rpcUrl: config.rpc }) : new ExactEvmScheme(payer);
+    const same = solana ? sameSolanaAddress : sameAddress;
     const client = x402Client.fromConfig({
-      schemes: [{ network: config.network, client: new ExactEvmScheme(account()) }],
+      schemes: [{ network: config.network, client: scheme }],
       spendControls: { allowedAssets: [{ network: config.network, asset: config.asset, maxAmountPerPayment: config.maxPrice.toString() }] },
       policies: [
         (_version, requirements) =>
           requirements.filter(
-            (r) =>
-              r.network === config.network &&
-              sameAddress(r.asset, config.asset) &&
-              sameAddress(r.payTo, config.payTo) &&
-              r.maxTimeoutSeconds <= MAX_TIMEOUT_SECONDS,
+            (r) => r.network === config.network && same(r.asset, config.asset) && same(r.payTo, config.payTo) && r.maxTimeoutSeconds <= MAX_TIMEOUT_SECONDS,
           ),
       ],
     });

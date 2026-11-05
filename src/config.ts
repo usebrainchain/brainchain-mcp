@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
+import { isAddress as isSolanaAddress } from "@solana/kit";
+
 import type { Terms } from "./tools.js";
 
 const MAINNET_DESK = { desk: "https://brain.usebrainchain.com", payTo: "0xafB0C4Ef895D4895040cdC6435B96D3EE8350c6E", finalAfter: "about six hours" } as const;
@@ -26,6 +28,16 @@ const PRESETS = {
       token: "USDC",
       permit2: false,
     },
+    solana: {
+      ...MAINNET_DESK,
+      payTo: "3dE26QRuereRQWFd8ZTKcoAmNVPxdzJyPUsgarYScCrL",
+      network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+      asset: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      rpc: "https://api.mainnet-beta.solana.com",
+      chain: "Solana",
+      token: "USDC",
+      permit2: false,
+    },
   },
   testnet: {
     robinhood: {
@@ -43,6 +55,16 @@ const PRESETS = {
       asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
       rpc: "https://sepolia.base.org",
       chain: "Base Sepolia",
+      token: "test USDC",
+      permit2: false,
+    },
+    solana: {
+      ...TESTNET_DESK,
+      payTo: "AeRePM6UDB8onv5Mt9crXSaxfH8ivd7L7X71iqRaZ3Qi",
+      network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+      asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      rpc: "https://api.devnet.solana.com",
+      chain: "Solana devnet",
       token: "test USDC",
       permit2: false,
     },
@@ -94,15 +116,18 @@ const DEFAULT_MAX_BOND = 10_000_000n;
 export interface Config {
   name: "mainnet" | "testnet";
   /** The chain payments are taken on, and refunds sent back on. */
-  payOn: "robinhood" | "base";
-  /** USDG pays through Permit2 after a one-time approval; USDC pays by EIP-3009 signature. */
+  payOn: "robinhood" | "base" | "solana";
+  /** USDG pays through Permit2 after a one-time approval; USDC pays by EIP-3009 signature, or by a signed transfer on Solana. */
   permit2: boolean;
   desk: string;
-  network: `eip155:${number}`;
-  chainId: number;
-  asset: `0x${string}`;
+  /** CAIP-2: eip155:<chain id>, or solana:<genesis hash>. */
+  network: `${string}:${string}`;
+  /** The EVM chain payments are taken on; absent on Solana. */
+  chainId?: number;
+  /** A token contract on an EVM chain, or a mint on Solana. */
+  asset: string;
   /** The desk's address; the server refuses to pay anyone else. */
-  payTo: `0x${string}`;
+  payTo: string;
   rpc: string;
   chain: string;
   token: string;
@@ -119,6 +144,12 @@ export interface Config {
   maxBond: bigint;
   /** Shipped's registry and BrainChain's index for bonds; absent on a network without them. */
   bonds?: BondsConfig;
+}
+
+/** The chain id and token contract of a config that pays on an EVM chain. */
+export function evmPayment(config: Pick<Config, "chainId" | "asset" | "chain">): { chainId: number; asset: `0x${string}` } {
+  if (config.chainId === undefined) throw new Error(`${config.chain} is not an EVM chain.`);
+  return { chainId: config.chainId, asset: config.asset as `0x${string}` };
 }
 
 export function formatUnits(units: bigint): string {
@@ -143,6 +174,12 @@ function envAddress(env: Record<string, string | undefined>, name: string, fallb
   const value = envString(env, name) ?? fallback;
   if (!/^0x[0-9a-fA-F]{40}$/.test(value)) throw new Error(`${name} must be a 0x-prefixed, 40-character hex address.`);
   return value as `0x${string}`;
+}
+
+function envSolanaAddress(env: Record<string, string | undefined>, name: string, fallback: string): string {
+  const value = envString(env, name) ?? fallback;
+  if (!isSolanaAddress(value)) throw new Error(`${name} must be a Solana address when BRAINCHAIN_PAY_ON is solana.`);
+  return value;
 }
 
 /** MCP clients start servers without a shell, so nothing else expands the ~ in a config file. */
@@ -180,12 +217,15 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
   const name = (envString(env, "BRAINCHAIN_NETWORK") ?? "mainnet").toLowerCase();
   if (name !== "mainnet" && name !== "testnet") throw new Error("BRAINCHAIN_NETWORK must be mainnet or testnet.");
   const payOn = (envString(env, "BRAINCHAIN_PAY_ON") ?? "robinhood").toLowerCase();
-  if (payOn !== "robinhood" && payOn !== "base") throw new Error("BRAINCHAIN_PAY_ON must be robinhood or base.");
+  if (payOn !== "robinhood" && payOn !== "base" && payOn !== "solana") throw new Error("BRAINCHAIN_PAY_ON must be robinhood, base or solana.");
   const preset = PRESETS[name][payOn];
+  const solana = payOn === "solana";
 
   const network = envString(env, "BRAINCHAIN_PAYMENT_NETWORK") ?? preset.network;
   const match = /^eip155:(\d+)$/.exec(network);
-  if (!match) throw new Error("BRAINCHAIN_PAYMENT_NETWORK must look like eip155:<chain id>.");
+  if (solana ? !/^solana:[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(network) : !match) {
+    throw new Error(solana ? "BRAINCHAIN_PAYMENT_NETWORK must look like solana:<genesis hash> when BRAINCHAIN_PAY_ON is solana." : "BRAINCHAIN_PAYMENT_NETWORK must look like eip155:<chain id>.");
+  }
   const maxPrice = envUnits(env, "BRAINCHAIN_MAX_PRICE_UNITS", DEFAULT_MAX_PRICE);
   const budget = envUnits(env, "BRAINCHAIN_BUDGET_UNITS", DEFAULT_BUDGET);
   if (budget < maxPrice) throw new Error("BRAINCHAIN_BUDGET_UNITS must be at least BRAINCHAIN_MAX_PRICE_UNITS.");
@@ -199,10 +239,10 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
     payOn,
     permit2: preset.permit2,
     desk: envDesk(env, preset.desk),
-    network: network as `eip155:${number}`,
-    chainId: Number(match[1]),
-    asset: envAddress(env, "BRAINCHAIN_PAYMENT_ASSET", preset.asset),
-    payTo: envAddress(env, "BRAINCHAIN_PAY_TO", preset.payTo),
+    network: network as `${string}:${string}`,
+    ...(match ? { chainId: Number(match[1]) } : {}),
+    asset: (solana ? envSolanaAddress : envAddress)(env, "BRAINCHAIN_PAYMENT_ASSET", preset.asset),
+    payTo: (solana ? envSolanaAddress : envAddress)(env, "BRAINCHAIN_PAY_TO", preset.payTo),
     rpc: envUrl(env, "BRAINCHAIN_PAYMENT_RPC", preset.rpc),
     chain: preset.chain,
     token: preset.token,

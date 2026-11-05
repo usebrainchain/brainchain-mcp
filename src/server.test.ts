@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { createKeyPairSignerFromBytes, getBase58Decoder } from "@solana/kit";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { InsufficientFundsError } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -10,7 +11,8 @@ import { describe, expect, it } from "vitest";
 
 import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
-import { approvalFailure, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
+import { solanaSigner } from "./payments.js";
+import { approvalFailure, createServer, INSTRUCTIONS, payerAccount, solanaPayer, walletReport, type ServerOptions } from "./server.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_TASK_NAME, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
@@ -27,6 +29,15 @@ async function connect(env: Record<string, string | undefined>, options: ServerO
 }
 
 const text = (result: Awaited<ReturnType<Client["callTool"]>>) => (result.content as { text: string }[])[0]!.text;
+
+/** A fresh Solana key as wallets export it: the 32-byte seed, then the public key. */
+async function solanaKey() {
+  const pair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+  const secret = new Uint8Array(64);
+  secret.set(new Uint8Array(await crypto.subtle.exportKey("pkcs8", pair.privateKey)).slice(-32), 0);
+  secret.set(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)), 32);
+  return { secret, base58: getBase58Decoder().decode(secret), address: (await createKeyPairSignerFromBytes(secret)).address as string };
+}
 
 function keyFile(contents: string, mode = 0o600): string {
   const path = join(mkdtempSync(join(tmpdir(), "brainchain-key-")), "payer.key");
@@ -66,7 +77,7 @@ describe("the server", () => {
   it("reports a bad setting once at startup, in the post tool's description, and from both tools", async () => {
     for (const [env, problem] of [
       [{ BRAINCHAIN_NETWORK: "devnet" }, "BRAINCHAIN_NETWORK must be mainnet or testnet."],
-      [{ BRAINCHAIN_PAY_ON: "bse" }, "BRAINCHAIN_PAY_ON must be robinhood or base."],
+      [{ BRAINCHAIN_PAY_ON: "bse" }, "BRAINCHAIN_PAY_ON must be robinhood, base or solana."],
       [{ BRAINCHAIN_MAX_PRICE_UNITS: "abc" }, "BRAINCHAIN_MAX_PRICE_UNITS must be a positive whole number of base units."],
       [{ BRAINCHAIN_DESK_URL: "notaurl" }, "BRAINCHAIN_DESK_URL must be an http or https URL."],
       [{ BRAINCHAIN_PAYMENT_RPC: "notaurl" }, "BRAINCHAIN_PAYMENT_RPC must be an http or https URL."],
@@ -169,6 +180,69 @@ describe("the server", () => {
   });
 });
 
+describe("paying on Solana", () => {
+  it("reads the wallet's key as base58 or a JSON array, from the environment or a file, and derives its address", async () => {
+    const key = await solanaKey();
+    const array = JSON.stringify([...key.secret]);
+    for (const env of [{ BRAINCHAIN_SOLANA_KEY: key.base58 }, { BRAINCHAIN_SOLANA_KEY: ` ${array}\n` }, { BRAINCHAIN_SOLANA_KEY_FILE: keyFile(`${key.base58}\n`) }, { BRAINCHAIN_SOLANA_KEY_FILE: keyFile(array) }]) {
+      const payer = solanaPayer(env);
+      expect(payer.address).toBe(key.address);
+      expect(payer.secret).toEqual(key.secret);
+    }
+  });
+
+  it("refuses both ways at once, a placeholder, a file others can read, or anything but 64 bytes, and never echoes the key", async () => {
+    const key = await solanaKey();
+    expect(() => solanaPayer({ BRAINCHAIN_SOLANA_KEY: key.base58, BRAINCHAIN_SOLANA_KEY_FILE: keyFile(key.base58) })).toThrow("not both");
+    expect(() => solanaPayer({ BRAINCHAIN_SOLANA_KEY: `$${key.base58}` })).toThrow(/^BRAINCHAIN_SOLANA_KEY is not set: your MCP client passed the placeholder through unexpanded,/);
+    expect(() => solanaPayer({ BRAINCHAIN_SOLANA_KEY: "${BRAINCHAIN_SOLANA_KEY}" })).toThrow("placeholder ${BRAINCHAIN_SOLANA_KEY} through");
+    if (process.platform !== "win32") expect(() => solanaPayer({ BRAINCHAIN_SOLANA_KEY_FILE: keyFile(key.base58, 0o644) })).toThrow(/chmod 600/);
+    expect(() => solanaPayer({ BRAINCHAIN_SOLANA_KEY: " " })).toThrow(/Set BRAINCHAIN_SOLANA_KEY/);
+    for (const bad of [getBase58Decoder().decode(key.secret.subarray(0, 32)), "0OIl", JSON.stringify([...key.secret.subarray(0, 63)]), JSON.stringify([...key.secret.subarray(0, 63), 256])]) {
+      let message = "";
+      try {
+        solanaPayer({ BRAINCHAIN_SOLANA_KEY: bad });
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toBe("BRAINCHAIN_SOLANA_KEY must be a 64-byte Solana secret key: base58, or a JSON array of 64 numbers.");
+    }
+  });
+
+  it("refuses to sign with a key whose public half belongs to another key", async () => {
+    const [one, two] = [await solanaKey(), await solanaKey()];
+    const mixed = new Uint8Array([...one.secret.subarray(0, 32), ...two.secret.subarray(32)]);
+    await expect(solanaSigner({ address: two.address, secret: mixed })).rejects.toThrow("not a valid key pair");
+    expect((await solanaSigner(solanaPayer({ BRAINCHAIN_SOLANA_KEY: one.base58 }))).address).toBe(one.address);
+  });
+
+  it("names the Solana wallet in the post tool, asks for the Solana key, and keeps bonds on a Robinhood Chain key", async () => {
+    const key = await solanaKey();
+    const { tools } = await (await connect({ BRAINCHAIN_PAY_ON: "solana", BRAINCHAIN_SOLANA_KEY: key.base58 })).listTools();
+    expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toContain(`Each task costs 1 USDC, paid from this server's wallet ${key.address} on Solana.`);
+    expect(tools.find((tool) => tool.name === BOND_TASK_NAME)!.description).toContain("Delivery bonds lock USDG on Robinhood Chain, so they need a Robinhood Chain key beside the Solana one");
+
+    const both = await connect({ BRAINCHAIN_PAY_ON: "solana", BRAINCHAIN_SOLANA_KEY: key.base58, BRAINCHAIN_PAYER_KEY: KEY });
+    const bond = (await both.listTools()).tools.find((tool) => tool.name === BOND_TASK_NAME)!.description!;
+    expect(bond).not.toContain("need a Robinhood Chain key");
+    expect(bond).toContain(privateKeyToAccount(`0x${KEY}`).address);
+
+    const keyless = await connect({ BRAINCHAIN_PAY_ON: "solana" });
+    const post = await keyless.callTool({ name: POST_TASK_NAME, arguments: task });
+    expect(post.isError).toBe(true);
+    expect(text(post)).toContain("Set BRAINCHAIN_SOLANA_KEY to the secret key of the Solana wallet that pays for tasks");
+    expect(text(post)).toContain("Add BRAINCHAIN_SOLANA_KEY to this server's env in your MCP client config");
+    const bonded = await keyless.callTool({ name: BOND_TASK_NAME, arguments: { task: "1", amount: "5" } });
+    expect(text(bonded)).toContain("need a Robinhood Chain key");
+  });
+
+  it("reports a Solana key it cannot use once at startup, without echoing it", async () => {
+    const logged: string[] = [];
+    await connect({ BRAINCHAIN_PAY_ON: "solana", BRAINCHAIN_SOLANA_KEY: "4Nd1mBQtrMJVYVfKf2PJy9NZUZdTAsp7D4xWLs4gDB4T" }, { log: (message) => logged.push(message) });
+    expect(logged).toEqual(["brainchain-mcp has an invalid setting: BRAINCHAIN_SOLANA_KEY must be a 64-byte Solana secret key: base58, or a JSON array of 64 numbers."]);
+  });
+});
+
 describe("payerAccount", () => {
   it("takes the key trimmed, with or without 0x", () => {
     const { address } = privateKeyToAccount(`0x${KEY}`);
@@ -240,6 +314,15 @@ describe("wallet", () => {
     );
     expect(walletReport(testnet, address, { balance: 1_000_000n, allowance: 100_000_000n, eth: 0n }, approve)).toContain("It holds 1 test USDG.\nPermit2 may spend up to 100 of its test USDG.");
     expect(walletReport(testnet, address, { balance: 1_000_000n, allowance: 2n ** 256n - 1n, eth: 0n }, approve)).toContain("Permit2 may spend any amount of its test USDG.");
+  });
+
+  it("says on Solana that the wallet needs USDC only", () => {
+    const solana = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "solana" });
+    const owner = "9Qet6akwwgw1EMKbEY8H8QmE1VYtjHWXuAfq9mGiMheK";
+    expect(walletReport(solana, owner, { balance: 3_000_000n }, approve)).toBe(
+      `${owner} pays for tasks in test USDC on Solana devnet.\nIt holds 3 test USDC.\nThe payment facilitator pays the Solana network fee, so the wallet needs no SOL.`,
+    );
+    expect(walletReport(solana, owner, { balance: 0n }, approve)).toContain("send at least 1 test USDC to it on Solana devnet before posting.");
   });
 
   it("names no approval for USDC, which pays by signature, and says when the chain could not be read", () => {
