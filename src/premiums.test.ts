@@ -39,9 +39,15 @@ describe("stockPremiums", () => {
     expect(nvda!.feedAgeSeconds).toBe(1478);
   });
 
-  it("knows the regular session", () => {
+  it("knows the regular session in New York time, winter and summer", () => {
     expect(usMarketOpen(new Date("2026-11-04T14:29:00Z"))).toBe(false);
+    expect(usMarketOpen(new Date("2026-11-04T14:30:00Z"))).toBe(true);
     expect(usMarketOpen(new Date("2026-11-04T20:59:00Z"))).toBe(true);
+    expect(usMarketOpen(new Date("2026-11-04T21:00:00Z"))).toBe(false);
+    expect(usMarketOpen(new Date("2026-07-01T13:29:00Z"))).toBe(false);
+    expect(usMarketOpen(new Date("2026-07-01T13:30:00Z"))).toBe(true);
+    expect(usMarketOpen(new Date("2026-07-01T19:59:00Z"))).toBe(true);
+    expect(usMarketOpen(new Date("2026-07-01T20:00:00Z"))).toBe(false);
     expect(usMarketOpen(new Date("2026-11-07T16:00:00Z"))).toBe(false);
   });
 });

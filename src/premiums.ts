@@ -57,12 +57,14 @@ export function chainReader(rpc = ROBINHOOD_RPC): ChainReader {
   return createPublicClient({ transport: http(rpc) });
 }
 
-/** Monday to Friday, 14:30 to 21:00 UTC, the regular NYSE session in winter time. */
+/** The regular NYSE session, 09:30 to 16:00 New York time, Monday to Friday; exchange holidays are not known here. */
 export function usMarketOpen(now: Date): boolean {
-  const day = now.getUTCDay();
-  if (day === 0 || day === 6) return false;
-  const minutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-  return minutes >= 14 * 60 + 30 && minutes < 21 * 60;
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+  const part = (type: string): string => parts.find((p) => p.type === type)?.value ?? "";
+  const weekday = part("weekday");
+  if (weekday === "Sat" || weekday === "Sun") return false;
+  const minutes = (Number(part("hour")) % 24) * 60 + Number(part("minute"));
+  return minutes >= 9 * 60 + 30 && minutes < 16 * 60;
 }
 
 const usd = (units: bigint): string => `${units / 1_000_000n}.${((units % 1_000_000n) / 10_000n).toString().padStart(2, "0")}`;
