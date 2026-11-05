@@ -20,7 +20,7 @@ const TX: Hex = `0x${"fe".repeat(32)}`;
 const USDG = (n: number) => BigInt(Math.round(n * 1_000_000));
 const NOW = 1_800_000_000n;
 
-const task = (overrides: Partial<TaskFacts> = {}): TaskFacts => ({ poster: POSTER, bounty: USDG(1), deadline: NOW + 86_400n, status: TaskStatus.Open, model: `0x${"0".repeat(64)}`, ...overrides });
+const task = (overrides: Partial<TaskFacts> = {}): TaskFacts => ({ poster: POSTER, bounty: USDG(1), deadline: NOW + 86_400n, status: TaskStatus.Hired, model: `0x${"0".repeat(24)}${account.address.slice(2)}`, ...overrides });
 const view = (overrides: Partial<BondView> = {}): BondView => ({ deed: 4n, amount: USDG(5), deadline: NOW + 86_400n + BOND_LEAD_SEC, status: DeedStatus.Open, remainderBps: 0, checkMetAt: 0n, settledAt: 0n, refundTo: POSTER, ...overrides });
 
 function fakeChain(options: { task?: TaskFacts; bonds?: BondView[]; usdg?: bigint; eth?: bigint; allowance?: bigint; proof?: bigint; payer?: Address } = {}) {
@@ -156,7 +156,7 @@ describe("bond", () => {
       [fakeChain({ task: task() }), USDG(1.5), "The bond must be at least 2 USDG"],
       [fakeChain({ task: task() }), USDG(11), "This server bonds at most 10 USDG on one task. Raise BRAINCHAIN_MAX_BOND_UNITS"],
       [fakeChain({ task: undefined }), USDG(5), "There is no task 12 on BrainChain."],
-      [fakeChain({ task: task({ status: 6 }) }), USDG(5), "Task 12 is not open and not hired to this wallet"],
+      [fakeChain({ task: task({ status: 6 }) }), USDG(5), "Task 12 is not hired to this wallet"],
       [fakeChain({ task: task({ deadline: NOW - 1n }) }), USDG(5), "deadline, 2027-01-15T07:59:59.000Z, has passed"],
       [fakeChain({ task: task(), bonds: [view()] }), USDG(5), "This wallet already has bond No. 4 open on task 12."],
     ] as const) {
