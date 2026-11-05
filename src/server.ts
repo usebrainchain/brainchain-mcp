@@ -2,15 +2,17 @@ import { readFileSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { createPublicClient, defineChain, formatEther, http, maxUint256, parseAbi, type PrivateKeyAccount } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
+import { bondsClosed, createBonds, type Bonds } from "./bonds.js";
 import { expandHome, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
+import { createLimits } from "./limits.js";
 import { createDesk } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL } from "./premiums.js";
-import { callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk, type Terms } from "./tools.js";
+import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk, type Terms } from "./tools.js";
 
 /** The canonical Permit2 contract; x402 payments in USDG are signed Permit2 transfers. */
 export const PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
@@ -24,11 +26,12 @@ export const INSTRUCTIONS =
   `Post a task with ${POST_TASK_NAME}, then read it with ${GET_TASK_NAME} and the order id it returns, waiting retryAfterSeconds between reads until done is true. ` +
   `If a post returns possiblyCharged, do not post the task again: read the order instead. ` +
   `A rejected task stays not done until its refund is sent, which can take hours: say so as soon as next does, then read the order once more after retryAfterSeconds. ` +
+  `${BOND_TASK_NAME} locks USDG behind a BrainChain task this wallet will deliver as a worker, and ${BOND_STATUS_NAME} follows it; neither posts a task. ` +
   `The paying wallet's key is for this server alone. Never read it, print it, write it down or pass it to a command. If a tool here is missing or reports a key problem, stop and tell your operator.`;
 
 const KEY_HELP =
   `Add BRAINCHAIN_PAYER_KEY to this server's env in your MCP client config (in Claude Code, \`claude mcp add … -e BRAINCHAIN_PAYER_KEY=…\`), or BRAINCHAIN_PAYER_KEY_FILE with the path of a file holding it, then restart the server. ` +
-  `${GET_TASK_NAME} and ${PREMIUMS_NAME} work without a key. An agent reading this: stop and tell your operator. Do not look for the key.`;
+  `${GET_TASK_NAME}, ${PREMIUMS_NAME} and ${BOND_STATUS_NAME} work without a key. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -132,7 +135,7 @@ export function approveCommand(config: Config, version: string): string {
 }
 
 /** A missing key or a bad setting is reported when a tool needs it, so the server always starts and lists its tools. */
-function deskFor(env: Record<string, string | undefined>, version: string, fetchImpl?: typeof fetch): { desk: Desk; terms: Terms | string } {
+function deskFor(env: Record<string, string | undefined>, version: string, fetchImpl?: typeof fetch): { desk: Desk; terms: Terms | string; bonds: Bonds; bondTools: [Tool, Tool] } {
   let config: Config;
   try {
     config = resolveConfig(env);
@@ -141,7 +144,7 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
     const refuse = async (): Promise<never> => {
       throw new Error(problem);
     };
-    return { desk: { post: refuse, get: refuse }, terms: problem };
+    return { desk: { post: refuse, get: refuse }, terms: problem, bonds: { bond: refuse, status: refuse }, bondTools: bondTools({ maxBond: 0n, budget: 0n }, undefined, `Invalid setting: ${problem}`) };
   }
 
   let account: PrivateKeyAccount | undefined;
@@ -162,11 +165,13 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
     }
   };
   const { reader } = chainClients(config);
+  const limits = createLimits(config, payer);
   const desk = createDesk({
     config,
     signer: payer,
     approveCommand: approveCommand(config, version),
     fetch: fetchImpl,
+    limits,
     funds: async () => {
       const { address } = payer();
       const [balance, allowance] = await Promise.all([
@@ -176,7 +181,13 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
       return { balance, allowance };
     },
   });
-  return { desk, terms: { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(problem ? { problem } : {}) } };
+  const closed = bondsClosed(config) ?? (problem ? `Invalid setting: ${problem}` : undefined);
+  return {
+    desk,
+    terms: { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(problem ? { problem } : {}) },
+    bonds: createBonds({ config, signer: payer, limits }),
+    bondTools: bondTools(config, account?.address, closed),
+  };
 }
 
 export interface ServerOptions {
@@ -186,12 +197,12 @@ export interface ServerOptions {
 }
 
 export function createServer(env: Record<string, string | undefined>, version: string, options: ServerOptions = {}): Server {
-  const { desk, terms } = deskFor(env, version, options.fetch);
+  const { desk, terms, bonds, bondTools: bondToolList } = deskFor(env, version, options.fetch);
   const problem = typeof terms === "string" ? terms : terms.problem;
   if (problem) (options.log ?? console.error)(`brainchain-mcp has an invalid setting: ${problem}`);
-  const tools = [postTaskTool(terms), GET_TASK_TOOL, PREMIUMS_TOOL];
+  const tools = [postTaskTool(terms), GET_TASK_TOOL, PREMIUMS_TOOL, ...bondToolList];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
-  server.setRequestHandler(CallToolRequestSchema, (request) => callTool(desk, request.params.name, request.params.arguments));
+  server.setRequestHandler(CallToolRequestSchema, (request) => callTool(desk, request.params.name, request.params.arguments, undefined, bonds));
   return server;
 }

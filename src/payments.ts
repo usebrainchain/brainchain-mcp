@@ -1,16 +1,25 @@
 import type { ClientEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
-import { join } from "node:path";
 import { keccak256, toBytes } from "viem";
 
 import { formatUnits, MAX_TIMEOUT_SECONDS, REPOST_AFTER_MINUTES, type Config } from "./config.js";
-import { dailyLedger, type DailyLedger, type Reservation } from "./daily.js";
+import { createLimits, type Hold, type Limits } from "./limits.js";
 import type { TaskRequest, Desk } from "./tools.js";
 
 const BUDGET_REASON = "budget";
 const DAILY_REASON = "daily limit";
 const RESULT_LIMIT = 20_000;
+
+/** What a refused budget or daily limit tells a person, for a post and for a bond alike. */
+export async function limitReached(config: Config, limits: Limits, which: "budget" | "daily limit", verb = "signed payments for"): Promise<string> {
+  if (which === "budget") {
+    return `This server has already ${verb} ${formatUnits(limits.spent())} of its ${formatUnits(config.budget)} ${config.token} budget. The budget resets when the server restarts; raise BRAINCHAIN_BUDGET_UNITS to allow more per run. Nothing was charged.`;
+  }
+  const today = await limits.spentToday();
+  // One limit covers both chains, so it is named without a token.
+  return `This wallet has already ${verb} ${today === undefined ? "most" : formatUnits(today)} of its daily limit of ${formatUnits(config.daily!)}, counting USDG and USDC together. The limit resets at 00:00 UTC; raise BRAINCHAIN_DAILY_UNITS to allow more. Nothing was charged.`;
+}
 
 /** Same serialization the desk hashes into an order id: sorted keys, no whitespace. */
 export function canonicalStringify(value: unknown): string {
@@ -45,6 +54,8 @@ export interface DeskOptions {
   /** Reads the paying wallet's balance and, for USDG, its Permit2 allowance, to explain a refused payment. */
   funds?: () => Promise<Funds>;
   postTimeoutMs?: number;
+  /** The budget and daily limit, shared with whatever else spends from the wallet; made here when absent. */
+  limits?: Limits;
 }
 
 const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -75,15 +86,8 @@ async function jsonObject(response: Response): Promise<Record<string, unknown> |
 export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   const { config, signer, approveCommand } = options;
   const fetchImpl = options.fetch ?? fetch;
-  let spent = 0n;
   const account = () => (typeof signer === "function" ? signer() : signer);
-  let ledger: DailyLedger | undefined;
-  // Kept per network and wallet, so a testnet wallet never spends from the mainnet limit, and one
-  // limit holds whichever chain the wallet pays on: USDG and USDC count in the same units.
-  const daily = () =>
-    config.daily === undefined
-      ? undefined
-      : (ledger ??= dailyLedger(join(config.stateDir, `spend-${config.name}-${account().address.toLowerCase()}.json`), config.daily));
+  const limits = options.limits ?? createLimits(config, account);
   const endpoint = `${config.desk}/x402/tasks`;
   const recent = new Map<string, { at: number; reply: Promise<unknown> }>();
   /** When this process paid, or may have paid, for each order; the desk can take minutes to know one. */
@@ -111,14 +115,8 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   /** Turns an x402 client error, raised before anything was signed, into a step a person or model can act on. */
   async function explainUnsigned(error: unknown): Promise<string> {
     const message = firstLine(error);
-    if (message.includes(`Payment creation aborted: ${BUDGET_REASON}`)) {
-      return `This server has already signed payments for ${formatUnits(spent)} of its ${formatUnits(config.budget)} ${config.token} budget. The budget resets when the server restarts; raise BRAINCHAIN_BUDGET_UNITS to allow more per run. Nothing was charged.`;
-    }
-    if (message.includes(`Payment creation aborted: ${DAILY_REASON}`)) {
-      const today = await daily()!.spentToday().catch(() => undefined);
-      // One limit covers both chains, so it is named without a token.
-      return `This wallet has already signed payments for ${today === undefined ? "most" : formatUnits(today)} of its daily limit of ${formatUnits(config.daily!)}, counting USDG and USDC together. The limit resets at 00:00 UTC; raise BRAINCHAIN_DAILY_UNITS to allow more. Nothing was charged.`;
-    }
+    if (message.includes(`Payment creation aborted: ${BUDGET_REASON}`)) return await limitReached(config, limits, "budget");
+    if (message.includes(`Payment creation aborted: ${DAILY_REASON}`)) return await limitReached(config, limits, "daily limit");
     if (/rejected by spendControls/.test(message)) {
       const price = await quotedPrice();
       if (price !== undefined && price > config.maxPrice) {
@@ -199,15 +197,12 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
 
   async function pay(task: TaskRequest): Promise<unknown> {
     let signed: { payload: unknown } | undefined;
-    let amount = 0n;
-    let reservation: Reservation | undefined;
+    let hold: Hold | undefined;
     const unreserve = async () => {
-      spent -= amount;
-      amount = 0n;
-      if (reservation) await daily()!.release(reservation);
-      reservation = undefined;
+      if (hold) await limits.give(hold);
+      hold = undefined;
     };
-    const receipt = (order: string) => ({ order, price: `${formatUnits(amount)} ${config.token}`, statusUrl: `${endpoint}/${order}` });
+    const receipt = (order: string) => ({ order, price: `${formatUnits(hold?.amount ?? 0n)} ${config.token}`, statusUrl: `${endpoint}/${order}` });
 
     const client = x402Client.fromConfig({
       schemes: [{ network: config.network, client: new ExactEvmScheme(account()) }],
@@ -227,22 +222,9 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     // signed, so parallel calls cannot overshoot either. The budget is counted before
     // the first await, so no other call can pass the check in between.
     client.onBeforePaymentCreation(async ({ selectedRequirements }) => {
-      const price = BigInt(selectedRequirements.amount);
-      if (spent + price > config.budget) return { abort: true, reason: BUDGET_REASON };
-      spent += price;
-      amount = price;
-      let today: DailyLedger | undefined;
-      try {
-        today = daily();
-        if (today) reservation = await today.reserve(price);
-      } catch (error) {
-        await unreserve();
-        throw error;
-      }
-      if (today && !reservation) {
-        await unreserve();
-        return { abort: true, reason: DAILY_REASON };
-      }
+      const taken = await limits.take(BigInt(selectedRequirements.amount));
+      if (typeof taken === "string") return { abort: true, reason: taken };
+      hold = taken;
     });
     client.onAfterPaymentCreation(async ({ paymentPayload }) => {
       signed = paymentPayload;
@@ -341,7 +323,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     return { ...view, ...guidance(view, config) };
   }
 
-  return { post, get, spent: () => spent };
+  return { post, get, spent: () => limits.spent() };
 }
 
 interface Guidance {

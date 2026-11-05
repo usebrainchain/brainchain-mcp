@@ -49,6 +49,33 @@ const PRESETS = {
   },
 } as const;
 
+/**
+ * Delivery bonds on Shipped, which lives on Robinhood Chain only. The ProofIndex
+ * is named once BrainChain deploys it; until then bonds are closed.
+ */
+export interface BondsConfig {
+  registry: `0x${string}`;
+  check: `0x${string}`;
+  proofIndex?: `0x${string}`;
+  usdg: `0x${string}`;
+  rpc: string;
+  chain: string;
+  /** BrainChain itself, where the task is read. */
+  brainchain: { rpc: string; chainId: number; board: `0x${string}` };
+}
+
+const BONDS: Record<"mainnet" | "testnet", BondsConfig | undefined> = {
+  mainnet: {
+    registry: "0xD5Da523ee49CB7Fe855B0C6fa38707190A9D531F",
+    check: "0x2e7C4F0F2e6079C3B5F7Cd2440308234CBDc537D",
+    usdg: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+    rpc: "https://rpc.mainnet.chain.robinhood.com",
+    chain: "Robinhood Chain",
+    brainchain: { rpc: "https://rpc.usebrainchain.com", chainId: 274663, board: "0x8385bb4b8990411CcdD8e851B2676da1A4C1f3C4" },
+  },
+  testnet: undefined,
+};
+
 /** USDG, USDC and their test versions all use 6 decimals. */
 export const DECIMALS = 6;
 /** A payment authorization may stay valid for at most this long. */
@@ -61,6 +88,7 @@ export const MAX_TIMEOUT_SECONDS = 600;
 export const REPOST_AFTER_MINUTES = 15;
 const DEFAULT_MAX_PRICE = 1_000_000n;
 const DEFAULT_BUDGET = 10_000_000n;
+const DEFAULT_MAX_BOND = 10_000_000n;
 
 export interface Config {
   name: "mainnet" | "testnet";
@@ -86,6 +114,10 @@ export interface Config {
   /** Where the daily limit's spending record is kept. */
   stateDir: string;
   terms: Terms;
+  /** The most this server locks in one delivery bond, in USDG units; bonds also draw on the budget and the daily limit. */
+  maxBond: bigint;
+  /** Shipped's registry and BrainChain's index for bonds; absent on a network without them. */
+  bonds?: BondsConfig;
 }
 
 export function formatUnits(units: bigint): string {
@@ -158,6 +190,8 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
   if (budget < maxPrice) throw new Error("BRAINCHAIN_BUDGET_UNITS must be at least BRAINCHAIN_MAX_PRICE_UNITS.");
   const daily = envString(env, "BRAINCHAIN_DAILY_UNITS") === undefined ? undefined : envUnits(env, "BRAINCHAIN_DAILY_UNITS", 0n);
   if (daily !== undefined && daily < maxPrice) throw new Error("BRAINCHAIN_DAILY_UNITS must be at least BRAINCHAIN_MAX_PRICE_UNITS.");
+  const maxBond = envUnits(env, "BRAINCHAIN_MAX_BOND_UNITS", DEFAULT_MAX_BOND);
+  const bonds = BONDS[name];
 
   return {
     name,
@@ -175,6 +209,8 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
     budget,
     ...(daily !== undefined ? { daily } : {}),
     stateDir: envDirectory(env, "BRAINCHAIN_STATE_DIR", join(homedir(), ".brainchain")),
+    maxBond,
+    ...(bonds ? { bonds } : {}),
     terms: {
       cost: maxPrice === DEFAULT_MAX_PRICE ? `1 ${preset.token}` : `at most ${formatUnits(maxPrice)} ${preset.token}`,
       chain: preset.chain,
