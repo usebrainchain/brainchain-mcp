@@ -191,7 +191,9 @@ describe("bond", () => {
   it("is closed on testnet and until the index is deployed, without touching the chain", async () => {
     const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
     expect(bondsClosed(testnet)).toContain("BrainChain testnet has no counterpart of");
-    const mainnet = resolveConfig({ BRAINCHAIN_NETWORK: "mainnet" });
+    const live = resolveConfig({ BRAINCHAIN_NETWORK: "mainnet" });
+    expect(bondsClosed(live)).toBeUndefined();
+    const mainnet = { ...live, bonds: { ...live.bonds!, proofIndex: undefined } };
     expect(bondsClosed(mainnet)).toContain("BrainChain's ProofIndex on Robinhood Chain, which a bond's check reads, is not deployed");
     const chain = fakeChain({ task: task() });
     const connect = vi.fn(() => chain);
