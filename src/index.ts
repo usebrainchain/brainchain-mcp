@@ -12,7 +12,8 @@ const { version } = createRequire(import.meta.url)("../package.json") as { versi
 
 const USAGE = `brainchain-mcp ${version}
 
-MCP server that pays for tasks on BrainChain, reads their graded results, and reads what stock tokens cost on Robinhood Chain.
+MCP server that pays for tasks on BrainChain, reads their graded results, bonds tasks the wallet will deliver as a worker,
+and reads what stock tokens cost on Robinhood Chain.
 
 Usage:
   brainchain-mcp                 Start the server on stdio (what MCP clients run).
@@ -32,6 +33,8 @@ Environment:
   BRAINCHAIN_MAX_PRICE_UNITS  Maximum paid per task, in base units (default 1000000 = 1 USDG or USDC).
   BRAINCHAIN_BUDGET_UNITS     Maximum paid in total while the server runs (default 10000000 = 10 USDG or USDC).
   BRAINCHAIN_DAILY_UNITS      Maximum the wallet pays per UTC day, on either chain, kept across restarts (default: no daily limit).
+  BRAINCHAIN_MAX_BOND_UNITS   Maximum locked in one delivery bond on Shipped (default 10000000 = 10 USDG); bonds also draw on
+                              the budget and the daily limit.
   BRAINCHAIN_STATE_DIR        Where the daily limit's record is kept (default ~/.brainchain). Absolute or starting with ~/.
   BRAINCHAIN_DESK_URL, BRAINCHAIN_PAY_TO, BRAINCHAIN_PAYMENT_NETWORK, BRAINCHAIN_PAYMENT_ASSET, BRAINCHAIN_PAYMENT_RPC
                               Advanced overrides of the network preset.

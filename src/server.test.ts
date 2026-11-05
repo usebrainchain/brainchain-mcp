@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
 import { approvalFailure, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
-import { GET_TASK_NAME, POST_TASK_NAME } from "./tools.js";
+import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_TASK_NAME, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
 const KEY = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -49,7 +49,7 @@ describe("the server", () => {
     expect(client.getServerVersion()).toMatchObject({ name: "brainchain", title: "BrainChain" });
     expect(client.getInstructions()).toBe(INSTRUCTIONS);
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, PREMIUMS_NAME]);
+    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, PREMIUMS_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]);
 
     const post = await client.callTool({ name: POST_TASK_NAME, arguments: task });
     expect(post.isError).toBe(true);
@@ -78,14 +78,17 @@ describe("the server", () => {
       expect(logged[0]).toContain(problem);
 
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(3);
+      expect(tools).toHaveLength(5);
       const description = tools.find((tool) => tool.name === POST_TASK_NAME)!.description!;
       expect(description.startsWith(`Invalid setting: ${problem}`)).toBe(true);
       expect(description).not.toMatch(/USDG|USDC/);
+      expect(tools.find((tool) => tool.name === BOND_TASK_NAME)!.description!.startsWith(`Invalid setting: ${problem}`)).toBe(true);
 
       for (const call of [
         { name: POST_TASK_NAME, arguments: task },
         { name: GET_TASK_NAME, arguments: { order } },
+        { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } },
+        { name: BOND_STATUS_NAME, arguments: { task: "12" } },
       ]) {
         const result = await client.callTool(call);
         expect(result.isError).toBe(true);

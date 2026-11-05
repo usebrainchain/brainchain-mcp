@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { formatUnits, resolveConfig } from "./config.js";
-import { callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
+import type { Bonds } from "./bonds.js";
+import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
 
 const desk: Desk = {
   post: async (task) => ({ order: "0x01", task }),
@@ -11,6 +12,56 @@ const desk: Desk = {
 function body(result: Awaited<ReturnType<typeof callTool>>): unknown {
   return JSON.parse((result.content[0] as { text: string }).text);
 }
+
+describe("bond tools", () => {
+  const bonds: Bonds = {
+    bond: async (task, amount) => ({ bonded: { task: task.toString(), amount: amount.toString() } }),
+    status: async (task) => ({ task: task.toString(), bonds: [] }),
+  };
+
+  it("sends the task and the amount in USDG units, and reads a bond's status", async () => {
+    const bonded = await callTool(desk, BOND_TASK_NAME, { task: "12", amount: "2.5" }, undefined, bonds);
+    expect(bonded.isError).toBe(false);
+    expect(body(bonded)).toEqual({ bonded: { task: "12", amount: "2500000" } });
+    expect(body(await callTool(desk, BOND_TASK_NAME, { task: "12", amount: "5" }, undefined, bonds))).toEqual({ bonded: { task: "12", amount: "5000000" } });
+    expect(body(await callTool(desk, BOND_STATUS_NAME, { task: "12" }, undefined, bonds))).toEqual({ task: "12", bonds: [] });
+  });
+
+  it("refuses a bad task, a bad amount and unknown fields before anything is sent", async () => {
+    let calls = 0;
+    const counting: Bonds = { bond: async () => ++calls, status: async () => ++calls };
+    for (const [name, input, error] of [
+      [BOND_TASK_NAME, { task: "0", amount: "5" }, "task must be the task's id on BrainChain, a whole number above zero."],
+      [BOND_TASK_NAME, { task: "x", amount: "5" }, "task must be the task's id on BrainChain, a whole number above zero."],
+      [BOND_TASK_NAME, { amount: "5" }, "task is required."],
+      [BOND_TASK_NAME, { task: "12" }, "amount is required."],
+      [BOND_TASK_NAME, { task: "12", amount: "0" }, 'amount is in USDG, above zero with at most 6 decimals, such as "5".'],
+      [BOND_TASK_NAME, { task: "12", amount: "1.2345678" }, 'amount is in USDG, above zero with at most 6 decimals, such as "5".'],
+      [BOND_TASK_NAME, { task: "12", amount: 5 }, "amount must be a string, not a number."],
+      [BOND_TASK_NAME, { task: "12", amount: "5", extra: 1 }, "Unknown field: extra. This tool takes only task, amount."],
+      [BOND_STATUS_NAME, { task: "12", extra: 1 }, "Unknown field: extra. This tool takes only task."],
+      [BOND_STATUS_NAME, {}, "task is required."],
+    ] as const) {
+      const result = await callTool(desk, name, input, undefined, counting);
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error });
+    }
+    expect(calls).toBe(0);
+    expect(body(await callTool(desk, BOND_TASK_NAME, { task: "12", amount: "5" }))).toEqual({ error: "This server has no bond tools." });
+  });
+
+  it("words the tools for the wallet and says why bonds are closed", () => {
+    const [bond, status] = bondTools({ maxBond: 10_000_000n, budget: 10_000_000n }, "0xabc", undefined);
+    expect(bond.name).toBe(BOND_TASK_NAME);
+    expect(bond.description).toContain("from this server's wallet 0xabc, as the worker that will deliver it");
+    expect(bond.description).toContain("at least the task's bounty and 2 USDG, at most 10 USDG per task");
+    expect(bond.description).not.toContain("Until then");
+    expect(status.name).toBe(BOND_STATUS_NAME);
+    const [closed] = bondTools({ maxBond: 10_000_000n, budget: 10_000_000n }, undefined, "Delivery bonds are not open yet.");
+    expect(closed.description.startsWith("Delivery bonds are not open yet. Until then this tool only returns that error. ")).toBe(true);
+    expect(closed.description).toContain("from this server's wallet, as the worker");
+  });
+});
 
 describe("callTool", () => {
   it("posts a task", async () => {

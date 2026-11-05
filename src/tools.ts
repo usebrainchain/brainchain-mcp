@@ -1,8 +1,10 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 
-import { REPOST_AFTER_MINUTES } from "./config.js";
+import type { Bonds } from "./bonds.js";
+import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { canonicalStringify } from "./payments.js";
 import { PREMIUMS_NAME, readPremiums, type PremiumBoard } from "./premiums.js";
+import { MIN_BOND } from "./shipped.js";
 
 /** What the post tool tells the model about cost and settlement on the configured network. */
 export interface Terms {
@@ -22,6 +24,46 @@ export const POST_TASK_NAME = "brainchain_post_task";
 /** The desk's cap on a task as it goes on chain: title, brief, levels and pass level as JSON. */
 export const MAX_TASK_BYTES = 64_000;
 export const GET_TASK_NAME = "brainchain_get_task";
+export const BOND_TASK_NAME = "brainchain_bond_task";
+export const BOND_STATUS_NAME = "brainchain_bond_status";
+
+const TASK_ID = { type: "string", pattern: "^[1-9][0-9]{0,17}$", description: "The task's id on BrainChain's task board." } as const;
+const BOND_TASK_INPUT: Tool["inputSchema"] = {
+  type: "object",
+  properties: {
+    task: TASK_ID,
+    amount: { type: "string", pattern: "^[0-9]{1,9}(\\.[0-9]{1,6})?$", description: "USDG to lock, such as \"5\" or \"2.5\": at least the task's bounty and at least 2 USDG." },
+  },
+  required: ["task", "amount"],
+  additionalProperties: false,
+};
+const BOND_STATUS_INPUT: Tool["inputSchema"] = { type: "object", properties: { task: TASK_ID }, required: ["task"], additionalProperties: false };
+
+/** The bond tools, worded for the network and the wallet this server holds; `closed` says why no bond can be placed. */
+export function bondTools(config: Pick<Config, "maxBond" | "budget">, wallet: string | undefined, closed: string | undefined): [Tool, Tool] {
+  const where = wallet ? `this server's wallet ${wallet}` : "this server's wallet";
+  return [
+    {
+      name: BOND_TASK_NAME,
+      title: "Bond a BrainChain task on Shipped",
+      description:
+        (closed ? `${closed} Until then this tool only returns that error. ` : "") +
+        `Lock USDG on Shipped behind a BrainChain task from ${where}, as the worker that will deliver it. ` +
+        `If the task is paid and its Proof is minted, the bond comes back less Shipped's 1% fee; if the task is not paid by its deadline, the bond goes to the task's poster. ` +
+        `Jev reads the bond when it hires. The amount is at least the task's bounty and ${formatUnits(MIN_BOND)} USDG, at most ${formatUnits(config.maxBond)} USDG per task, and counts against this server's budget and daily limit like a post. ` +
+        `The wallet needs the USDG and a little ETH on Robinhood Chain. Never bond a task this wallet posted. Returns the bond number; follow it with ${BOND_STATUS_NAME}.`,
+      inputSchema: BOND_TASK_INPUT,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    },
+    {
+      name: BOND_STATUS_NAME,
+      title: "Read this wallet's bond on a BrainChain task",
+      description: `${closed ? `${closed} ` : ""}Where ${where}'s bonds on a task stand: open, marked (the Proof is recorded and the check waits out its hour), delivered (the bond less 1% is owed to the wallet) or missed (paid to the poster), with the next step.`,
+      inputSchema: BOND_STATUS_INPUT,
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+  ];
+}
 
 const POST_TASK_INPUT: Tool["inputSchema"] = {
   type: "object",
@@ -161,9 +203,20 @@ function orderReply(view: unknown): CallToolResult {
   return result;
 }
 
-export async function callTool(desk: Desk, name: string, args: unknown, premiums: () => Promise<PremiumBoard> = readPremiums): Promise<CallToolResult> {
+export async function callTool(desk: Desk, name: string, args: unknown, premiums: () => Promise<PremiumBoard> = readPremiums, bonds?: Bonds): Promise<CallToolResult> {
   const input = (args ?? {}) as Record<string, unknown>;
   try {
+    if (name === BOND_TASK_NAME || name === BOND_STATUS_NAME) {
+      if (!bonds) return reply({ error: "This server has no bond tools." }, true);
+      refuseUnknownFields(input, name === BOND_TASK_NAME ? BOND_TASK_INPUT : BOND_STATUS_INPUT);
+      const task = text("task", input.task);
+      if (!/^[1-9]\d{0,17}$/.test(task)) throw new Error("task must be the task's id on BrainChain, a whole number above zero.");
+      if (name === BOND_STATUS_NAME) return reply(await bonds.status(BigInt(task)));
+      const amount = text("amount", input.amount);
+      if (!/^\d{1,9}(\.\d{1,6})?$/.test(amount) || Number(amount) <= 0) throw new Error("amount is in USDG, above zero with at most 6 decimals, such as \"5\".");
+      const [whole, fraction = ""] = amount.split(".");
+      return reply(await bonds.bond(BigInt(task), BigInt(whole! + fraction.padEnd(6, "0"))));
+    }
     if (name === POST_TASK_NAME) {
       refuseUnknownFields(input, POST_TASK_INPUT);
       return reply(await desk.post(checkBrief(input)));
