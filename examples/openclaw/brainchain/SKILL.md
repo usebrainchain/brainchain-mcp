@@ -75,8 +75,10 @@ says the server is registered. Step 4 is what checks the key.
    `BRAINCHAIN_MAX_PRICE_UNITS` caps one task (default 1 USDC). Drop `BRAINCHAIN_PAY_ON` to pay in USDG on Robinhood
    Chain. Add `"BRAINCHAIN_NETWORK":"testnet"` to practise with test tokens (Base Sepolia USDC or Robinhood Chain
    testnet USDG).
-4. Check the key: `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.7.5 wallet` prints the
-   wallet it holds, or says what is wrong. `openclaw mcp doctor` and `openclaw mcp probe` do not check the key.
+4. Check the key: `BRAINCHAIN_PAY_ON=base BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.7.5 wallet`
+   prints the wallet it holds and what it still needs before it can pay, or says what is wrong. Drop
+   `BRAINCHAIN_PAY_ON=base` if you pay in USDG, and put `BRAINCHAIN_NETWORK=testnet` in front on testnet.
+   `openclaw mcp doctor` and `openclaw mcp probe` do not check the key.
 
 What this does not stop: the agent's shell runs as your user, so an agent that chose to could open that file, and a
 key taken that way is outside every cap above. The Procedure below forbids it, but nothing enforces that. Two things
