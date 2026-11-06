@@ -5,7 +5,7 @@ import { keccak256, RpcRequestError, toBytes } from "viem";
 
 import { formatUnits, MAX_TIMEOUT_SECONDS, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { createLimits, type Hold, type Limits } from "./limits.js";
-import type { TaskRequest, Desk } from "./tools.js";
+import type { Desk, GradeRequest, TaskRequest } from "./tools.js";
 
 const BUDGET_REASON = "budget";
 const DAILY_REASON = "daily limit";
@@ -121,6 +121,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   const account = () => (typeof signer === "function" ? signer() : signer);
   const limits = options.limits ?? createLimits(config, account);
   const endpoint = `${config.desk}/x402/tasks`;
+  const gradesEndpoint = `${config.desk}/x402/grades`;
   const recent = new Map<string, { at: number; reply: Promise<unknown> }>();
   /** When this process paid, or may have paid, for each order, and how to forget its post; the desk can take minutes to know one. */
   const paid = new Map<string, { at: number; forget: () => void }>();
@@ -200,12 +201,9 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     return fallback;
   }
 
-  function possiblyCharged(receipt: Record<string, unknown>, cause: string): Record<string, unknown> {
-    return {
-      ...receipt,
-      possiblyCharged: true,
-      error: `${cause} The payment may have gone through. Read this order with brainchain_get_task; do not post the task again.`,
-    };
+  function possiblyCharged(kind: Kind, receipt: Record<string, unknown>, cause: string): Record<string, unknown> {
+    const follow = kind === "task" ? "Read this order with brainchain_get_task; do not post the task again." : "Read the grade with brainchain_get_grade; do not send it again.";
+    return { ...receipt, possiblyCharged: true, error: `${cause} The payment may have gone through. ${follow}` };
   }
 
   /**
@@ -213,17 +211,18 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
    * confirm, which it keeps as an order and checks against the chain. Says why such a
    * payment may still be charged, or undefined when the desk has no order or gave it up.
    */
-  async function stillOpen(order: string): Promise<string | undefined> {
+  async function stillOpen(kind: Kind, id: string): Promise<string | undefined> {
+    const what = kind === "task" ? "order" : "grade";
     let response: Response;
     try {
-      response = await fetchImpl(`${endpoint}/${order}`, { signal: AbortSignal.timeout(10_000) });
+      response = await fetchImpl(`${kind === "task" ? endpoint : gradesEndpoint}/${id}`, { signal: AbortSignal.timeout(10_000) });
     } catch {
-      return "the order could not be read";
+      return `the ${what} could not be read`;
     }
     if (response.status === 404) return undefined;
     const view = response.ok ? await jsonObject(response) : undefined;
-    if (typeof view?.state !== "string") return "the order could not be read";
-    return view.state === "failed" ? undefined : `it holds the order as ${view.state}`;
+    if (typeof view?.state !== "string") return `the ${what} could not be read`;
+    return view.state === "failed" ? undefined : `it holds the ${what} as ${view.state}`;
   }
 
   /** A payment the desk gave up was never charged, so its task can be posted again at once and its amount spent on another. */
@@ -239,32 +238,46 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const now = Date.now();
     for (const [key, entry] of recent) if (now - entry.at >= REPOST_AFTER_MINUTES * 60_000) recent.delete(key);
     const key = canonicalStringify({ network: config.network, title: task.title, brief: task.brief, levels: task.levels });
+    return once(key, now, () => pay("task", task), "order");
+  }
+
+  /** As post, for a grade: an identical request within the window returns the first grade instead of paying again. */
+  function grade(request: GradeRequest): Promise<unknown> {
+    const now = Date.now();
+    for (const [key, entry] of recent) if (now - entry.at >= REPOST_AFTER_MINUTES * 60_000) recent.delete(key);
+    const key = canonicalStringify({ kind: "grade", network: config.network, ...request });
+    return once(key, now, () => pay("grade", request), "grade");
+  }
+
+  function once(key: string, now: number, send: () => Promise<unknown>, idField: "order" | "grade"): Promise<unknown> {
     const previous = recent.get(key);
     if (previous) return previous.reply.then((reply) => ({ ...(reply as object), duplicate: true }));
 
-    const entry = { at: now, reply: pay(task) };
+    const entry = { at: now, reply: send() };
     recent.set(key, entry);
     const forget = () => {
       if (recent.get(key) === entry) recent.delete(key);
     };
     entry.reply.then((reply) => {
-      const { order } = reply as { order?: unknown };
-      if (typeof order === "string") paid.set(order.toLowerCase(), { at: now, forget });
+      const id = (reply as Record<string, unknown>)[idField];
+      if (typeof id === "string") paid.set(id.toLowerCase(), { at: now, forget });
       else forget();
     }, forget);
     return entry.reply;
   }
 
-  async function pay(task: TaskRequest): Promise<unknown> {
+  async function pay(kind: Kind, body: TaskRequest | GradeRequest): Promise<unknown> {
+    const url = kind === "task" ? endpoint : gradesEndpoint;
     let signed: { payload: unknown } | undefined;
     let hold: Hold | undefined;
     const unreserve = async () => {
       if (hold) await limits.give(hold);
       hold = undefined;
     };
-    const receipt = (order: string) => {
-      if (hold) held.set(order.toLowerCase(), hold);
-      return { order, price: `${formatUnits(hold?.amount ?? 0n)} ${config.token}`, statusUrl: `${endpoint}/${order}` };
+    const price = () => `${formatUnits(hold?.amount ?? 0n)} ${config.token}`;
+    const receipt = (id: string) => {
+      if (hold) held.set(id.toLowerCase(), hold);
+      return kind === "task" ? { order: id, price: price(), statusUrl: `${endpoint}/${id}` } : { grade: id, price: price(), statusUrl: `${gradesEndpoint}/${id}` };
     };
 
     const client = x402Client.fromConfig({
@@ -305,36 +318,38 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const timed: typeof fetch = (input, init) => fetchImpl(input, { ...init, signal: deadline.signal });
     let response: Response;
     try {
-      response = await wrapFetchWithPayment(timed, client)(endpoint, {
+      response = await wrapFetchWithPayment(timed, client)(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(task),
+        body: JSON.stringify(body),
       });
     } catch (error) {
-      if (signed) return possiblyCharged(receipt(orderIdOf(signed)), `The desk did not confirm the order (${firstLine(error)}).`);
+      if (signed) return possiblyCharged(kind, receipt(orderIdOf(signed)), `The desk did not confirm the ${kind === "task" ? "order" : "grade"} (${firstLine(error)}).`);
       throw new Error(await explainUnsigned(error));
     } finally {
       clearTimeout(timer);
     }
 
     const reply = (await jsonObject(response)) ?? {};
+    const idOf = (fallback: string) => (kind === "task" ? (typeof reply.order === "string" ? reply.order : fallback) : typeof reply.grade === "string" ? reply.grade : fallback);
     if (response.ok) {
       if (!signed) {
-        throw new Error(`The desk at ${config.desk} answered ${response.status} without asking for payment, so no task was posted. Check BRAINCHAIN_DESK_URL. Nothing was charged.`);
+        throw new Error(`The desk at ${config.desk} answered ${response.status} without asking for payment, so nothing was ${kind === "task" ? "posted" : "graded"}. Check BRAINCHAIN_DESK_URL. Nothing was charged.`);
       }
-      return { ...reply, ...receipt(typeof reply.order === "string" ? reply.order : orderIdOf(signed)) };
+      const done = { ...reply, ...receipt(idOf(orderIdOf(signed))) };
+      return kind === "task" ? done : { ...done, ...gradeGuidance(done) };
     }
     // The desk answers 400 (a brief it refuses, including one too large to post)
     // before settling. Any other answer to a signed payment may have charged it,
     // a 402 included unless the desk has no order for it or gave the payment up.
     if (signed && response.status !== 400 && response.status !== 402) {
-      return possiblyCharged(receipt(typeof reply.order === "string" ? reply.order : orderIdOf(signed)), `The desk answered ${response.status}.`);
+      return possiblyCharged(kind, receipt(idOf(orderIdOf(signed))), `The desk answered ${response.status}.`);
     }
     if (signed && response.status === 402) {
       const order = orderIdOf(signed);
-      const open = await stillOpen(order);
+      const open = await stillOpen(kind, order);
       const reason = typeof reply.error === "string" && reply.error.trim() ? ` (${reply.error.trim().replace(/[.!?]+$/, "")})` : "";
-      if (open) return possiblyCharged(receipt(order), `The desk answered 402${reason}, and ${open}.`);
+      if (open) return possiblyCharged(kind, receipt(order), `The desk answered 402${reason}, and ${open}.`);
     }
 
     await unreserve();
@@ -394,7 +409,50 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     return { ...view, ...guidance(view, config) };
   }
 
-  return { post, get, spent: () => limits.spent() };
+  /** A grade's verdict as the desk keeps it; reading it is free and needs no key. */
+  async function getGrade(id: string): Promise<unknown> {
+    let response: Response;
+    try {
+      response = await fetchImpl(`${gradesEndpoint}/${id}`, { signal: AbortSignal.timeout(20_000) });
+    } catch (error) {
+      return { grade: id, error: `Could not reach the desk (${firstLine(error)}).`, done: false, next: "Read the grade again after retryAfterSeconds.", retryAfterSeconds: 30 };
+    }
+    const view = await jsonObject(response);
+    if (response.status === 404) {
+      const at = paid.get(id)?.at;
+      const settling = at !== undefined && Date.now() - at < REPOST_AFTER_MINUTES * 60_000;
+      if (!settling) await release(id);
+      return {
+        grade: id,
+        error: "The desk has no grade with this id.",
+        done: !settling,
+        next: settling
+          ? "If brainchain_grade said possiblyCharged, the payment is still settling or never reached the desk. Read the grade again in a minute."
+          : "Check the id: it must be one that brainchain_grade returned.",
+        ...(settling ? { retryAfterSeconds: 60 } : {}),
+      };
+    }
+    if (response.status >= 500 || RETRY_LATER.has(response.status)) {
+      return { grade: id, error: `The desk answered ${response.status}.`, done: false, next: "The desk is busy or briefly unavailable. Read the grade again after retryAfterSeconds.", retryAfterSeconds: retryAfter(response) ?? 30 };
+    }
+    if (!response.ok) throw new Error(typeof view?.error === "string" ? view.error : `The desk answered ${response.status}.`);
+    if (!view) return { grade: id, error: "The desk's reply could not be read.", done: false, next: "Read the grade again shortly.", retryAfterSeconds: 30 };
+    if (view.state === "failed") await release(id);
+    return { ...view, ...gradeGuidance(view) };
+  }
+
+  return { post, get, grade, getGrade, spent: () => limits.spent() };
+}
+
+type Kind = "task" | "grade";
+
+/** What a grade's state means for the caller. */
+export function gradeGuidance(view: Record<string, unknown>): Guidance {
+  if (view.state === "graded") {
+    const pass = typeof view.passProbability === "number" ? ` at ${Math.round(view.passProbability * 100)}%` : "";
+    return { done: true, next: view.accepted === true ? `Jev accepts the work${pass}. The record is at decision.page.` : `Jev does not accept the work${pass}. The record is at decision.page.` };
+  }
+  return { done: false, next: "Jev is still grading the work. Read the grade with brainchain_get_grade after retryAfterSeconds; reading it is free.", retryAfterSeconds: 20 };
 }
 
 interface Guidance {

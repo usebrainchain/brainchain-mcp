@@ -12,7 +12,7 @@ import { stateDirProblem } from "./daily.js";
 import { createLimits } from "./limits.js";
 import { createDesk } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL } from "./premiums.js";
-import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk, type Terms } from "./tools.js";
+import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_GRADE_NAME, GET_GRADE_TOOL, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, gradeTool, POST_TASK_NAME, postTaskTool, type Desk, type Terms } from "./tools.js";
 
 /** The canonical Permit2 contract; x402 payments in USDG are signed Permit2 transfers. */
 export const PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
@@ -27,13 +27,14 @@ export const INSTRUCTIONS =
   `If a post returns possiblyCharged, do not post the task again: read the order instead. ` +
   `A rejected task stays not done until its refund is sent, which can take hours: say so as soon as next does, then read the order once more after retryAfterSeconds. ` +
   `Two things end it without a refund transaction: a ruling that pays the model, and a refund the desk gives up sending, when state reads refund-failed and next says who to write to; pass that on. ` +
+  `To have Jev judge work delivered somewhere else, send the brief and the result to ${GRADE_NAME}, and read the verdict with ${GET_GRADE_NAME} until done is true if it is not done at once. ` +
   `${BOND_TASK_NAME} locks USDG behind a BrainChain task this wallet will deliver as a worker, and ${BOND_STATUS_NAME} follows it; neither posts a task. ` +
   `If a bond returns possiblyBonded, do not bond the task again: read its status instead. ` +
   `The paying wallet's key is for this server alone. Never read it, print it, write it down or pass it to a command. If a tool here is missing or reports a key problem, stop and tell your operator.`;
 
 const KEY_HELP =
   `Add BRAINCHAIN_PAYER_KEY to this server's env in your MCP client config (in Claude Code, \`claude mcp add … -e BRAINCHAIN_PAYER_KEY=…\`), or BRAINCHAIN_PAYER_KEY_FILE with the path of a file holding it, then restart the server. ` +
-  `${GET_TASK_NAME} and ${PREMIUMS_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
+  `${GET_TASK_NAME}, ${GET_GRADE_NAME} and ${PREMIUMS_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -144,7 +145,7 @@ function deskFor(
   env: Record<string, string | undefined>,
   version: string,
   fetchImpl?: typeof fetch,
-): { desk: Desk; terms: Terms | string; bonds: Bonds; bondTools: [Tool, Tool]; refused: Map<string, string> } {
+): { desk: Desk; terms: Terms | string; bonds: Bonds; bondTools: [Tool, Tool]; gradeTool: Tool; refused: Map<string, string> } {
   let config: Config;
   try {
     config = resolveConfig(env);
@@ -154,11 +155,12 @@ function deskFor(
       throw new Error(problem);
     };
     return {
-      desk: { post: refuse, get: refuse },
+      desk: { post: refuse, get: refuse, grade: refuse, getGrade: refuse },
       terms: problem,
       bonds: { bond: refuse, status: refuse },
       bondTools: bondTools({}, undefined, { bond: `Invalid setting: ${problem}`, status: `Invalid setting: ${problem}` }),
-      refused: new Map([POST_TASK_NAME, GET_TASK_NAME, BOND_TASK_NAME, BOND_STATUS_NAME].map((name) => [name, problem])),
+      gradeTool: gradeTool(problem, ""),
+      refused: new Map([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, BOND_TASK_NAME, BOND_STATUS_NAME].map((name) => [name, problem])),
     };
   }
 
@@ -198,14 +200,16 @@ function deskFor(
   });
   // What the descriptions promise for a setting that cannot be used: a tool the setting stops answers with it
   // and touches nothing else. A refused state folder could still take a write, or hang on one, so it stops
-  // the two tools that pay. Reading a bond needs the key and no record, so only a key problem stops that.
+  // the tools that pay. Reading a bond needs the key and no record, so only a key problem stops that.
   const closed = bondsClosed(config);
   const refused = new Map<string, string>();
-  if (problem) for (const name of [POST_TASK_NAME, BOND_TASK_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);
+  if (problem) for (const name of [POST_TASK_NAME, GRADE_NAME, BOND_TASK_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);
   if (keyProblem) refused.set(BOND_STATUS_NAME, `${keyProblem} ${KEY_HELP}`);
+  const terms = { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(problem ? { problem } : {}) };
   return {
     desk,
-    terms: { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(problem ? { problem } : {}) },
+    terms,
+    gradeTool: gradeTool(terms, `${formatUnits(config.maxPrice)} ${config.token}`),
     bonds: createBonds({ config, signer: payer, limits }),
     bondTools: bondTools(config, account?.address, { bond: problem ? `Invalid setting: ${problem}` : closed, status: keyProblem ? `Invalid setting: ${keyProblem}` : closed }),
     refused,
@@ -219,10 +223,10 @@ export interface ServerOptions {
 }
 
 export function createServer(env: Record<string, string | undefined>, version: string, options: ServerOptions = {}): Server {
-  const { desk, terms, bonds, bondTools: bondToolList, refused } = deskFor(env, version, options.fetch);
+  const { desk, terms, bonds, bondTools: bondToolList, gradeTool: gradeToolDef, refused } = deskFor(env, version, options.fetch);
   const problem = typeof terms === "string" ? terms : terms.problem;
   if (problem) (options.log ?? console.error)(`brainchain-mcp has an invalid setting: ${problem}`);
-  const tools = [postTaskTool(terms), GET_TASK_TOOL, PREMIUMS_TOOL, ...bondToolList];
+  const tools = [postTaskTool(terms), GET_TASK_TOOL, gradeToolDef, GET_GRADE_TOOL, PREMIUMS_TOOL, ...bondToolList];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, (request) => callTool(desk, request.params.name, request.params.arguments, undefined, bonds, refused));
