@@ -55,12 +55,14 @@ export interface BondView {
   checkMetAt: bigint;
   settledAt: bigint;
   refundTo: Address;
+  /** The task board the bond's task is on. */
+  board: Address;
 }
 
 /** What bonding reads and sends, on BrainChain and on Robinhood Chain. */
 export interface BondChain {
   account: Address;
-  task(id: bigint): Promise<TaskFacts | undefined>;
+  task(id: bigint, board?: Address): Promise<TaskFacts | undefined>;
   now(): Promise<bigint>;
   usdgBalance(): Promise<bigint>;
   ethBalance(): Promise<bigint>;
@@ -71,7 +73,7 @@ export interface BondChain {
   create(terms: BondTerms, amount: bigint): Promise<{ tx: Hex; deed: bigint } | { tx: Hex; unconfirmed: string }>;
   /** The wallet's bonds on one task, newest first. */
   bondsOn(task: bigint): Promise<BondView[]>;
-  proofOf(task: bigint): Promise<bigint>;
+  proofOf(task: bigint, board?: Address): Promise<bigint>;
   /** USDG the registry holds for the wallet to collect: one sum for all its bonds, emptied by a claim. */
   owed(): Promise<bigint>;
   /** The agent that paid BrainChain's desk for the task, as the desk records it; undefined for a plain on-chain post. */
@@ -145,15 +147,17 @@ export function createBondChain(bonds: BondsConfig, account: PrivateKeyAccount, 
     const deeds = await client.multicall({ contracts: mine.map((id) => ({ ...registry, functionName: "getDeed", args: [id] }) as const), allowFailure: false });
     return mine.flatMap((deed, i) => {
       const d = deeds[i]!;
-      if (d.terms.check.toLowerCase() !== bonds.check.toLowerCase() || taskOfCheck(d.terms.checkData, bonds.proofIndex!, bonds.brainchain.board) !== task) return [];
-      return [{ deed, amount: d.balance, deadline: d.terms.deadline, status: d.status, remainderBps: d.remainderBps, checkMetAt: d.checkMetAt, settledAt: d.settledAt, refundTo: d.terms.refundTo }];
+      if (d.terms.check.toLowerCase() !== bonds.check.toLowerCase()) return [];
+      const board = [bonds.brainchain.board, ...(bonds.brainchain.retired ?? [])].find((b) => taskOfCheck(d.terms.checkData, bonds.proofIndex!, b) === task);
+      if (!board) return [];
+      return [{ deed, amount: d.balance, deadline: d.terms.deadline, status: d.status, remainderBps: d.remainderBps, checkMetAt: d.checkMetAt, settledAt: d.settledAt, refundTo: d.terms.refundTo, board }];
     });
   }
 
   return {
     account: account.address,
-    async task(id) {
-      const t = await read("BrainChain", brainchain.readContract({ address: bonds.brainchain.board, abi: taskBoardAbi, functionName: "get", args: [id] }));
+    async task(id, board = bonds.brainchain.board) {
+      const t = await read("BrainChain", brainchain.readContract({ address: board, abi: taskBoardAbi, functionName: "get", args: [id] }));
       return t.status === 0 ? undefined : { poster: t.poster, bounty: t.bounty, deadline: t.deadline, status: t.status, model: t.model };
     },
     now: async () => (await read(bonds.chain, client.getBlock())).timestamp,
@@ -175,7 +179,7 @@ export function createBondChain(bonds: BondsConfig, account: PrivateKeyAccount, 
       return { deed: created.args.deedId, tx: hash };
     },
     bondsOn: (task) => read(bonds.chain, deedsOn(task)),
-    proofOf: (task) => read(bonds.chain, client.readContract({ address: bonds.proofIndex!, abi: parseAbi(["function proofOf(address board, uint256 taskId) view returns (uint256)"]), functionName: "proofOf", args: [bonds.brainchain.board, task] })),
+    proofOf: (task, board = bonds.brainchain.board) => read(bonds.chain, client.readContract({ address: bonds.proofIndex!, abi: parseAbi(["function proofOf(address board, uint256 taskId) view returns (uint256)"]), functionName: "proofOf", args: [board, task] })),
     owed: () => read(bonds.chain, client.readContract({ ...registry, functionName: "owed", args: [account.address, bonds.usdg] })),
     async payerOf(task) {
       let response: Response;
@@ -290,7 +294,8 @@ export function createBonds(options: BondsOptions): Bonds {
     if (amount < t.bounty) throw new Error(`The bond must be at least the task's bounty, ${formatUnits(t.bounty)} USDG; ${formatUnits(amount)} USDG is under it. Nothing was bonded.`);
     if (amount < MIN_BOND) throw new Error(`The bond must be at least ${formatUnits(MIN_BOND)} USDG: under that, Shipped's fee and the gas take too much of it. Nothing was bonded.`);
     if (amount > config.maxBond) throw new Error(`This server bonds at most ${formatUnits(config.maxBond)} USDG on one task. Raise BRAINCHAIN_MAX_BOND_UNITS and restart the server to allow more. Nothing was bonded.`);
-    const existing = (await c.bondsOn(task)).find((b) => b.status !== DeedStatus.Settled);
+    // Task ids restart with each board, so a bond on a retired board's task of this number is another task's.
+    const existing = (await c.bondsOn(task)).find((b) => b.status !== DeedStatus.Settled && b.board.toLowerCase() === config.bonds!.brainchain.board.toLowerCase());
     if (existing) {
       const page = await deedPage(existing.deed, options.fetch);
       throw new Error(`This wallet already has ${page ? `bond No. ${page.number}` : "a bond"} open on task ${task} (registry id ${existing.deed}${page ? `, ${page.url}` : ""}). Nothing was bonded.`);
@@ -364,21 +369,20 @@ export function createBonds(options: BondsOptions): Bonds {
       if (bonds.length === 0) return { task: task.toString(), wallet: c.account, bonds: [] };
       const delivered = bonds.some((b) => b.status === DeedStatus.Settled && b.remainderBps === Number(BPS));
       // Only a bond still waiting for its Proof is worded by where the task stands.
-      const waiting = bonds.some((b) => b.status !== DeedStatus.Settled && b.checkMetAt === 0n);
-      const [now, indexed, t, owed, pages] = await Promise.all([
+      const [now, indexed, tasks, owed, pages] = await Promise.all([
         c.now(),
-        c.proofOf(task),
-        waiting ? c.task(task) : undefined,
+        Promise.all(bonds.map((b) => c.proofOf(task, b.board))),
+        Promise.all(bonds.map((b) => (b.status !== DeedStatus.Settled && b.checkMetAt === 0n ? c.task(task, b.board) : undefined))),
         delivered ? c.owed() : 0n,
         Promise.all(bonds.map((b) => deedPage(b.deed, options.fetch))),
       ]);
       return {
         task: task.toString(),
         wallet: c.account,
-        proofIndexed: indexed > 0n,
+        proofIndexed: indexed.some((n) => n > 0n),
         bonds: bonds.map((b, i) => {
           const page = pages[i];
-          return { bond: b.deed.toString(), ...(page ? { number: page.number, url: page.url } : {}), amount: `${formatUnits(b.amount)} USDG`, deadline: iso(b.deadline), ...state(b, indexed > 0n, now, t, owed) };
+          return { bond: b.deed.toString(), board: b.board, ...(page ? { number: page.number, url: page.url } : {}), amount: `${formatUnits(b.amount)} USDG`, deadline: iso(b.deadline), ...state(b, indexed[i]! > 0n, now, tasks[i], owed) };
         }),
       };
     },

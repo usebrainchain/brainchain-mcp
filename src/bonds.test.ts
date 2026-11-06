@@ -23,8 +23,10 @@ const USDG = (n: number) => BigInt(Math.round(n * 1_000_000));
 const NOW = 1_800_000_000n;
 const MISSED_TO = "the agent that paid BrainChain's desk for the task, or to the poster for a task posted on the board directly";
 
+const BOARD = resolveConfig({ BRAINCHAIN_NETWORK: "mainnet" }).bonds!.brainchain.board as Address;
+const RETIRED = resolveConfig({ BRAINCHAIN_NETWORK: "mainnet" }).bonds!.brainchain.retired![0]! as Address;
 const task = (overrides: Partial<TaskFacts> = {}): TaskFacts => ({ poster: POSTER, bounty: USDG(1), deadline: NOW + 86_400n, status: TaskStatus.Hired, model: `0x${"0".repeat(24)}${account.address.slice(2)}`, ...overrides });
-const view = (overrides: Partial<BondView> = {}): BondView => ({ deed: 4n, amount: USDG(5), deadline: NOW + 86_400n + BOND_LEAD_SEC, status: DeedStatus.Open, remainderBps: 0, checkMetAt: 0n, settledAt: 0n, refundTo: POSTER, ...overrides });
+const view = (overrides: Partial<BondView> = {}): BondView => ({ deed: 4n, amount: USDG(5), deadline: NOW + 86_400n + BOND_LEAD_SEC, status: DeedStatus.Open, remainderBps: 0, checkMetAt: 0n, settledAt: 0n, refundTo: POSTER, board: BOARD, ...overrides });
 
 function fakeChain(options: { task?: TaskFacts; bonds?: BondView[]; usdg?: bigint; eth?: bigint; allowance?: bigint; proof?: bigint; payer?: Address; owed?: bigint } = {}) {
   return {
@@ -81,7 +83,7 @@ describe("bondTerms", () => {
       project: "0x0000000000000000000000000000000000000000",
       projectKind: 0,
       asset: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
-      deadline: NOW + 48n * 3_600n,
+      deadline: NOW + 72n * 3_600n,
       verifier: "0x0000000000000000000000000000000000000000",
       backupVerifier: "0x0000000000000000000000000000000000000000",
       appealPanel: "0x0000000000000000000000000000000000000000",
@@ -108,6 +110,13 @@ describe("bondTerms", () => {
 });
 
 describe("bond", () => {
+  it("does not count an open bond on a retired board's task of the same number", async () => {
+    const chain = fakeChain({ task: task(), bonds: [view({ board: RETIRED })] });
+    const reply = (await setup(chain).bonds.bond(12n, USDG(5))) as { bond?: string };
+    expect(chain.create).toHaveBeenCalledTimes(1);
+    expect(reply.bond).toBeDefined();
+  });
+
   it("approves and opens the bond, counting it against the budget, and says what it returns either way", async () => {
     const chain = fakeChain({ task: task() });
     const { bonds, limits } = setup(chain);
@@ -122,7 +131,7 @@ describe("bond", () => {
       tx: TX,
       task: "12",
       amount: "5 USDG",
-      deadline: "2027-01-18T08:00:00.000Z",
+      deadline: "2027-01-19T08:00:00.000Z",
       delivered: "4.95 USDG back after Shipped's 1% fee, once the task is paid and its Proof recorded",
       missed: `5 USDG to ${POSTER}, the poster, as the task was posted on the board directly, if no Proof is recorded by the deadline`,
       next: "Follow it with brainchain_bond_status. A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires.",
@@ -244,7 +253,7 @@ describe("bond", () => {
       tx: TX,
       task: "12",
       amount: "10 USDG",
-      deadline: "2027-01-18T08:00:00.000Z",
+      deadline: "2027-01-19T08:00:00.000Z",
       error: `The bond's transaction ${TX} could not be confirmed: ${unconfirmed} The bond may have been placed. Read task 12 with brainchain_bond_status; do not bond it again.`,
     });
     expect(limits.spent()).toBe(USDG(10));
@@ -286,7 +295,7 @@ describe("bond", () => {
   it("refuses to bond when the desk names the payer for another task board", async () => {
     const live = resolveConfig({ BRAINCHAIN_NETWORK: "mainnet" }).bonds!;
     const payer: Address = "0x00000000000000000000000000000000000000e1";
-    const other: Address = "0x44b8464342Bbfb9B565FAE494DfDefa37D33A211";
+    const other: Address = "0x8385bb4b8990411CcdD8e851B2676da1A4C1f3C4";
     const asked = (board: unknown) => createBondChain(live, account, "https://desk.example", answering({ board, task: "12", refundTo: payer })).payerOf(12n);
     expect(await asked(live.brainchain.board)).toBe(payer);
     expect(await asked(live.brainchain.board.toLowerCase())).toBe(payer);
@@ -322,16 +331,26 @@ describe("bond", () => {
 });
 
 describe("bond status", () => {
+  it("reads a bond on a retired board's task on that board, and names the board", async () => {
+    const chain = fakeChain({ task: task({ status: TaskStatus.Refunded }), bonds: [view({ board: RETIRED })] });
+    const { bonds } = setup(chain);
+    const status = (await bonds.status(12n)) as { bonds: { board: string; state: string }[] };
+    expect(status.bonds[0]).toMatchObject({ board: RETIRED, state: "open" });
+    expect(chain.task).toHaveBeenCalledWith(12n, RETIRED);
+    expect(chain.proofOf).toHaveBeenCalledWith(12n, RETIRED);
+  });
+
   it("says where each bond stands and what comes next", async () => {
     const deadline = NOW + 86_400n;
     const { bonds } = setup(fakeChain({ bonds: [view({ deadline }), view({ deed: 3n, deadline, checkMetAt: NOW - 600n }), view({ deed: 2n, deadline: NOW - 1n })], proof: 101n }));
     const status = (await bonds.status(12n)) as { proofIndexed: boolean; bonds: Record<string, unknown>[] };
     expect(status.proofIndexed).toBe(true);
     expect(status.bonds).toEqual([
-      { bond: "4", amount: "5 USDG", deadline: "2027-01-16T08:00:00.000Z", state: "open", next: "The Proof is in the index; BrainChain marks the check shortly." },
-      { bond: "3", amount: "5 USDG", deadline: "2027-01-16T08:00:00.000Z", state: "marked", markedAt: "2027-01-15T07:50:00.000Z", next: "BrainChain confirms the check after 2027-01-15T08:50:00.000Z, and the bond settles as delivered." },
+      { bond: "4", board: BOARD, amount: "5 USDG", deadline: "2027-01-16T08:00:00.000Z", state: "open", next: "The Proof is in the index; BrainChain marks the check shortly." },
+      { bond: "3", board: BOARD, amount: "5 USDG", deadline: "2027-01-16T08:00:00.000Z", state: "marked", markedAt: "2027-01-15T07:50:00.000Z", next: "BrainChain confirms the check after 2027-01-15T08:50:00.000Z, and the bond settles as delivered." },
       {
         bond: "2",
+        board: BOARD,
         amount: "5 USDG",
         deadline: "2027-01-15T07:59:59.000Z",
         state: "lapsed",
@@ -346,7 +365,7 @@ describe("bond status", () => {
     const collected = fakeChain({ bonds: [delivered], owed: 0n });
     const status = (await setup(collected).bonds.status(12n)) as { bonds: Record<string, unknown>[] };
     expect(status.bonds).toEqual([
-      { bond: "4", amount: "5 USDG", deadline: "2027-01-18T08:00:00.000Z", state: "delivered", settledAt: "2027-01-15T08:00:00.000Z", back: "4.95 USDG", next: "The bond less Shipped's 1% fee was collected: the registry owes this wallet nothing." },
+      { bond: "4", board: BOARD, amount: "5 USDG", deadline: "2027-01-19T08:00:00.000Z", state: "delivered", settledAt: "2027-01-15T08:00:00.000Z", back: "4.95 USDG", next: "The bond less Shipped's 1% fee was collected: the registry owes this wallet nothing." },
     ]);
     expect(collected.owed).toHaveBeenCalledOnce();
   });
@@ -391,7 +410,7 @@ describe("bond status", () => {
 
   it("words an open bond by where its task stands: refunded, paid, or still to be paid", async () => {
     const next = async (status: number) => ((await setup(fakeChain({ task: task({ status }), bonds: [view()] })).bonds.status(12n)) as { bonds: { state: string; next: string }[] }).bonds[0];
-    expect(await next(TaskStatus.Refunded)).toEqual(expect.objectContaining({ state: "open", next: `The task was refunded, so no Proof will be recorded. The bond settles after 2027-01-19T09:00:00.000Z to ${MISSED_TO}: ${POSTER}.` }));
+    expect(await next(TaskStatus.Refunded)).toEqual(expect.objectContaining({ state: "open", next: `The task was refunded, so no Proof will be recorded. The bond settles after 2027-01-20T09:00:00.000Z to ${MISSED_TO}: ${POSTER}.` }));
     expect(await next(TaskStatus.Paid)).toEqual(expect.objectContaining({ state: "open", next: "The task is paid; waiting for its Proof to be minted and recorded." }));
     expect(await next(TaskStatus.Hired)).toEqual(expect.objectContaining({ state: "open", next: "Waiting for the task to be paid and its Proof recorded." }));
     expect(TaskStatus).toEqual({ Open: 1, Hired: 2, Paid: 6, Refunded: 7 });
