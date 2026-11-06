@@ -31,7 +31,7 @@ export const INSTRUCTIONS =
 
 const KEY_HELP =
   `Add BRAINCHAIN_PAYER_KEY to this server's env in your MCP client config (in Claude Code, \`claude mcp add … -e BRAINCHAIN_PAYER_KEY=…\`), or BRAINCHAIN_PAYER_KEY_FILE with the path of a file holding it, then restart the server. ` +
-  `${GET_TASK_NAME}, ${PREMIUMS_NAME} and ${BOND_STATUS_NAME} work without a key. An agent reading this: stop and tell your operator. Do not look for the key.`;
+  `${GET_TASK_NAME} and ${PREMIUMS_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 

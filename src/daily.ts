@@ -1,8 +1,8 @@
 // The daily limit is kept on disk, so restarting the server, or a second server
 // paying from the same wallet, does not reset what the wallet may spend today.
-import { accessSync, constants, mkdirSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync } from "node:fs";
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 
 const LOCK_STALE_MS = 10_000;
 const LOCK_WAIT_MS = 5_000;
@@ -42,8 +42,14 @@ function stateDirMessage(dir: string, error: unknown): string {
 
 /** Why the daily limit's record cannot be kept in `dir`, creating the folder if it is missing; undefined when it can. */
 export function stateDirProblem(dir: string): string | undefined {
+  const full = resolve(dir);
+  // kernel folders accept odd writes or block on them; no record belongs there
+  if (/^\/(proc|sys|dev)(\/|$)/.test(full)) return `BRAINCHAIN_STATE_DIR is ${dir}, which is a system folder, so the daily limit's record cannot be kept there. Set it to a folder this account can write, then restart the server.`;
+  let existing = full;
+  while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
   try {
-    mkdirSync(dir, { recursive: true });
+    accessSync(existing, constants.W_OK);
+    mkdirSync(full, { recursive: true });
     accessSync(dir, constants.W_OK);
     return undefined;
   } catch (error) {
