@@ -1,7 +1,7 @@
 // Shipped's registry on Robinhood Chain and the terms of a BrainChain delivery
 // bond on it: a deed with no judge, decided by Shipped's on-chain check reading
-// BrainChain's ProofIndex, proofOf(task) >= 1, with the task's poster as the
-// refund side.
+// BrainChain's ProofIndex, proofOf(task) >= 1, with the agent that paid for the
+// task as the refund side.
 import { decodeAbiParameters, decodeFunctionData, encodeAbiParameters, encodeFunctionData, parseAbi, type Address, type Hex } from "viem";
 
 export const proofIndexAbi = parseAbi(["function proofOf(address board, uint256 taskId) view returns (uint256)"]);
@@ -28,7 +28,7 @@ export const taskBoardAbi = parseAbi([
 export const DeedStatus = { None: 0, Open: 1, Ruled: 2, Appealed: 3, Settled: 4 } as const;
 export const Ruling = { None: 0, Accepted: 1, Rejected: 2, Partial: 3, Invalid: 4, Conceded: 5, Default: 6, CheckMet: 7 } as const;
 /** TaskBoard.Status. */
-export const TaskStatus = { Open: 1, Hired: 2 } as const;
+export const TaskStatus = { Open: 1, Hired: 2, Paid: 6, Refunded: 7 } as const;
 export const BPS = 10_000n;
 export const FEE_BPS = 100n;
 /** The bond's deadline is the task's plus this. */
@@ -37,6 +37,8 @@ export const CHECK_HOLD_SEC = 3_600n;
 export const CHECK_CONFIRM_SEC = 86_400n;
 /** Under this the fee and the gas take too much of the bond. */
 export const MIN_BOND = 2_000_000n;
+/** Who a missed bond pays, in the same words wherever a tool says it. A bond names the address, not which of the two it is. */
+export const MISSED_TO = "the agent that paid BrainChain's desk for the task, or to the poster for a task posted on the board directly";
 const ZERO: Address = "0x0000000000000000000000000000000000000000";
 
 export interface BondTerms {
