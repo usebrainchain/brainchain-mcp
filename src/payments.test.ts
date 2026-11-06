@@ -45,11 +45,14 @@ function challenge(terms: ChallengeOverrides = {}): string {
   return Buffer.from(JSON.stringify(required)).toString("base64");
 }
 
-/** A desk that challenges unpaid requests and hands paid ones to `paid`. */
-function fakeDesk(paid: (payment: { payload: unknown }) => Response | Promise<Response>, terms?: ChallengeOverrides) {
+const noOrder = () => new Response(JSON.stringify({ error: "No order with that id." }), { status: 404 });
+
+/** A desk that challenges unpaid requests, hands paid ones to `paid`, and reads an order as `view` says: by default it has none. */
+function fakeDesk(paid: (payment: { payload: unknown }) => Response | Promise<Response>, terms?: ChallengeOverrides, view: (order: string) => Response | Promise<Response> = noOrder) {
   const seen: { payload: unknown }[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
+    if (request.method === "GET") return view(request.url.slice(request.url.lastIndexOf("/") + 1));
     const header = request.headers.get("payment-signature");
     if (!header) return new Response("{}", { status: 402, headers: { "payment-required": challenge(terms) } });
     const payment = JSON.parse(Buffer.from(header, "base64").toString("utf8")) as { payload: unknown };
@@ -122,6 +125,64 @@ describe("posting", () => {
       const reply = (await d.post(task)) as { order: string; possiblyCharged: boolean };
       expect(reply).toMatchObject({ possiblyCharged: true, order: orderIdOf(seen[0]!) });
       expect(d.spent()).toBe(1_000_000n);
+    }
+  });
+
+  it("reads the order before believing a 402, and keeps the payment counted while the desk still holds it", async () => {
+    const pending = () => new Response(JSON.stringify({ error: "settlement_pending" }), { status: 402 });
+    for (const state of ["unconfirmed", "paying", "paid", "posted"]) {
+      const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+      const { fetchImpl, seen } = fakeDesk(pending, undefined, (order) => new Response(JSON.stringify({ order, state })));
+      const d = desk(fetchImpl, { daily: 5_000_000n, stateDir });
+      const order = () => orderIdOf(seen[0]!);
+      const reply = await d.post(task);
+      expect(reply).toEqual({
+        order: order(),
+        price: "1 test USDG",
+        statusUrl: `${endpoint}/${order()}`,
+        possiblyCharged: true,
+        error: `The desk answered 402 (settlement_pending), and it holds the order as ${state}. The payment may have gone through. Read this order with brainchain_get_task; do not post the task again.`,
+      });
+      expect(d.spent()).toBe(1_000_000n);
+      expect(JSON.parse(await readFile(join(stateDir, `spend-testnet-${signer.address.toLowerCase()}.json`), "utf8"))).toMatchObject({ units: "1000000" });
+      // The same task again signs nothing.
+      expect(await d.post(task)).toEqual({ ...(reply as object), duplicate: true });
+      expect(seen).toHaveLength(1);
+    }
+  });
+
+  it("treats a 402 as possibly charged when the order cannot be read", async () => {
+    const pending = () => new Response(JSON.stringify({ error: "The payment could not be settled." }), { status: 402 });
+    const unreadable: (() => Response)[] = [
+      () => new Response("{}", { status: 503 }),
+      () => new Response("<html>maintenance</html>", { status: 200 }),
+      () => new Response(JSON.stringify({ order: "0x01" }), { status: 200 }),
+      () => {
+        throw new TypeError("fetch failed");
+      },
+    ];
+    for (const view of unreadable) {
+      const { fetchImpl, seen } = fakeDesk(pending, undefined, view);
+      const d = desk(fetchImpl);
+      expect(await d.post(task)).toMatchObject({
+        possiblyCharged: true,
+        order: orderIdOf(seen[0]!),
+        error: "The desk answered 402 (The payment could not be settled), and the order could not be read. The payment may have gone through. Read this order with brainchain_get_task; do not post the task again.",
+      });
+      expect(d.spent()).toBe(1_000_000n);
+    }
+  });
+
+  it("says nothing was charged after a 402 only when the desk has no order or gave the payment up", async () => {
+    const refused = () => new Response(JSON.stringify({ error: "invalid_exact_evm_payload_signature" }), { status: 402 });
+    for (const view of [noOrder, (order: string) => new Response(JSON.stringify({ order, state: "failed" }))]) {
+      const { fetchImpl, seen } = fakeDesk(refused, undefined, view);
+      const d = desk(fetchImpl);
+      await expect(d.post(task)).rejects.toThrow("The desk refused the payment: invalid_exact_evm_payload_signature. Nothing was charged.");
+      expect(d.spent()).toBe(0n);
+      // Nothing is remembered of it, so the task can be posted again.
+      await expect(d.post(task)).rejects.toThrow("Nothing was charged.");
+      expect(seen).toHaveLength(2);
     }
   });
 
@@ -310,6 +371,54 @@ describe("posting the same task again", () => {
     expect(seen).toHaveLength(1);
   });
 
+  it("posts the task again at once, and counts nothing for it, after its order reads failed", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+    const ledger = async () => (JSON.parse(await readFile(join(stateDir, `spend-testnet-${signer.address.toLowerCase()}.json`), "utf8")) as { units: string }).units;
+    let state = "unconfirmed";
+    let down = true;
+    const { fetchImpl, seen } = fakeDesk(
+      (payment) => (down ? new Response(JSON.stringify({ error: "The payment could not be checked just now." }), { status: 502 }) : accepted(payment)),
+      undefined,
+      (order) => new Response(JSON.stringify({ order, state })),
+    );
+    const d = desk(fetchImpl, { budget: 1_000_000n, daily: 1_000_000n, stateDir });
+    const first = (await d.post(task)) as { order: string; possiblyCharged: boolean };
+    expect(first.possiblyCharged).toBe(true);
+
+    // While the desk checks the payment, the advice is to wait, and a repost signs nothing.
+    expect(await d.get(first.order)).toMatchObject({ done: false, next: expect.stringContaining("Do not post the task again.") });
+    expect(await d.post(task)).toEqual({ ...first, duplicate: true });
+    expect([seen.length, d.spent(), await ledger()]).toEqual([1, 1_000_000n, "1000000"]);
+
+    state = "failed";
+    expect(await d.get(first.order)).toMatchObject({ done: true, next: "The payment did not settle: nothing was charged and no task was posted. You can post the task again." });
+    expect([d.spent(), await ledger()]).toEqual([0n, "0"]);
+    // Reading it twice gives the amount back once.
+    await d.get(first.order);
+    expect(d.spent()).toBe(0n);
+
+    down = false;
+    const again = (await d.post(task)) as { order: string };
+    expect(again).not.toHaveProperty("duplicate");
+    expect(again).not.toHaveProperty("possiblyCharged");
+    expect(again.order).not.toBe(first.order);
+    expect([seen.length, d.spent(), await ledger()]).toEqual([2, 1_000_000n, "1000000"]);
+  });
+
+  it("frees the budget for another task once an order reads failed", async () => {
+    const { fetchImpl, seen } = fakeDesk(
+      (payment) => (seen.length === 1 ? new Response("{}", { status: 502 }) : accepted(payment)),
+      undefined,
+      (order) => new Response(JSON.stringify({ order, state: "failed" })),
+    );
+    const d = desk(fetchImpl, { budget: 1_000_000n });
+    const first = (await d.post(task)) as { order: string };
+    await expect(d.post({ ...task, brief: "In one paragraph." })).rejects.toThrow(/BRAINCHAIN_BUDGET_UNITS/);
+    await d.get(first.order);
+    await expect(d.post({ ...task, brief: "In one paragraph." })).resolves.toMatchObject({ price: "1 test USDG" });
+    expect(seen).toHaveLength(2);
+  });
+
   it("signs anew for a different brief, or after a post that charged nothing", async () => {
     let refuse = true;
     const { fetchImpl, seen } = fakeDesk((payment) => (refuse ? new Response(JSON.stringify({ error: "busy" }), { status: 400 }) : accepted(payment)));
@@ -334,6 +443,7 @@ describe("paying on Base", () => {
     const seen: { payload: unknown; accepted?: { network?: string } }[] = [];
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init);
+      if (request.method === "GET") return noOrder();
       const signature = request.headers.get("payment-signature");
       if (!signature) return new Response(JSON.stringify({ error: "not enough USDC" }), { status: 402, headers: { "payment-required": header } });
       const payment = JSON.parse(Buffer.from(signature, "base64").toString("utf8")) as { payload: unknown; accepted?: { network?: string } };
@@ -441,6 +551,7 @@ describe("reading an order", () => {
     const settling = (await d.get(paid)) as { done: boolean; next: string; retryAfterSeconds: number };
     expect(settling).toMatchObject({ done: false, retryAfterSeconds: 60 });
     expect(settling.next).toMatch(/nothing was charged and you can post the task again/);
+    expect(d.spent()).toBe(1_000_000n);
 
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + REPOST_AFTER_MINUTES * 60_000);
     try {
@@ -448,6 +559,8 @@ describe("reading an order", () => {
     } finally {
       vi.restoreAllMocks();
     }
+    // It was never charged, so it no longer counts against the budget.
+    expect(d.spent()).toBe(0n);
   });
 
   it("guides the caller through an unavailable desk instead of failing", async () => {

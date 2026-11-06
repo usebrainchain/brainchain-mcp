@@ -59,7 +59,7 @@ export interface DeskOptions {
 }
 
 const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-const firstLine = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0] ?? "";
+export const firstLine = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0] ?? "";
 /** Text from the desk or a library, ended as a sentence so what this server adds after it reads apart. */
 const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
 /** Statuses that say "not now" rather than "no", alongside every 5xx. */
@@ -90,8 +90,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   const limits = options.limits ?? createLimits(config, account);
   const endpoint = `${config.desk}/x402/tasks`;
   const recent = new Map<string, { at: number; reply: Promise<unknown> }>();
-  /** When this process paid, or may have paid, for each order; the desk can take minutes to know one. */
-  const paidAt = new Map<string, number>();
+  /** When this process paid, or may have paid, for each order, and how to forget its post; the desk can take minutes to know one. */
+  const paid = new Map<string, { at: number; forget: () => void }>();
+  /** What each of those orders still holds against the budget and the daily limit. */
+  const held = new Map<string, Hold>();
 
   /** The desk's price, read from a fresh 402 challenge. */
   async function quotedPrice(signal = AbortSignal.timeout(15_000)): Promise<bigint | undefined> {
@@ -174,6 +176,32 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     };
   }
 
+  /**
+   * The desk answers 402 for a payment it refuses, and for a settlement it could not
+   * confirm, which it keeps as an order and checks against the chain. Says why such a
+   * payment may still be charged, or undefined when the desk has no order or gave it up.
+   */
+  async function stillOpen(order: string): Promise<string | undefined> {
+    let response: Response;
+    try {
+      response = await fetchImpl(`${endpoint}/${order}`, { signal: AbortSignal.timeout(10_000) });
+    } catch {
+      return "the order could not be read";
+    }
+    if (response.status === 404) return undefined;
+    const view = response.ok ? await jsonObject(response) : undefined;
+    if (typeof view?.state !== "string") return "the order could not be read";
+    return view.state === "failed" ? undefined : `it holds the order as ${view.state}`;
+  }
+
+  /** A payment the desk gave up was never charged, so its task can be posted again at once and its amount spent on another. */
+  async function release(order: string): Promise<void> {
+    paid.get(order)?.forget();
+    const hold = held.get(order);
+    held.delete(order);
+    if (hold) await limits.give(hold);
+  }
+
   /** An agent that retries a post it gave up waiting on gets the first order back instead of paying twice. */
   function post(task: TaskRequest): Promise<unknown> {
     const now = Date.now();
@@ -189,7 +217,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     };
     entry.reply.then((reply) => {
       const { order } = reply as { order?: unknown };
-      if (typeof order === "string") paidAt.set(order.toLowerCase(), now);
+      if (typeof order === "string") paid.set(order.toLowerCase(), { at: now, forget });
       else forget();
     }, forget);
     return entry.reply;
@@ -202,7 +230,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       if (hold) await limits.give(hold);
       hold = undefined;
     };
-    const receipt = (order: string) => ({ order, price: `${formatUnits(hold?.amount ?? 0n)} ${config.token}`, statusUrl: `${endpoint}/${order}` });
+    const receipt = (order: string) => {
+      if (hold) held.set(order.toLowerCase(), hold);
+      return { order, price: `${formatUnits(hold?.amount ?? 0n)} ${config.token}`, statusUrl: `${endpoint}/${order}` };
+    };
 
     const client = x402Client.fromConfig({
       schemes: [{ network: config.network, client: new ExactEvmScheme(account()) }],
@@ -262,10 +293,16 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       return { ...reply, ...receipt(typeof reply.order === "string" ? reply.order : orderIdOf(signed)) };
     }
     // The desk answers 400 (a brief it refuses, including one too large to post)
-    // and 402 (a payment it refuses) before settling. Any other answer to a
-    // signed payment may have charged it.
+    // before settling. Any other answer to a signed payment may have charged it,
+    // a 402 included unless the desk has no order for it or gave the payment up.
     if (signed && response.status !== 400 && response.status !== 402) {
       return possiblyCharged(receipt(typeof reply.order === "string" ? reply.order : orderIdOf(signed)), `The desk answered ${response.status}.`);
+    }
+    if (signed && response.status === 402) {
+      const order = orderIdOf(signed);
+      const open = await stillOpen(order);
+      const reason = typeof reply.error === "string" && reply.error.trim() ? ` (${reply.error.trim().replace(/[.!?]+$/, "")})` : "";
+      if (open) return possiblyCharged(receipt(order), `The desk answered 402${reason}, and ${open}.`);
     }
 
     await unreserve();
@@ -282,8 +319,9 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
     const view = await jsonObject(response);
     if (response.status === 404) {
-      const at = paidAt.get(order);
+      const at = paid.get(order)?.at;
       if (at === undefined || Date.now() - at >= REPOST_AFTER_MINUTES * 60_000) {
+        await release(order);
         return {
           order,
           error: "The desk has no order with this id.",
@@ -305,6 +343,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     if (!response.ok) throw new Error(typeof view?.error === "string" ? view.error : `The desk answered ${response.status}.`);
     // An unreadable 2xx comes from a proxy or a dropped connection; ask again.
     if (!view) return { order, error: "The desk's reply could not be read.", done: false, next: "Read the order again shortly.", retryAfterSeconds: 30 };
+    if (view.state === "failed") await release(order);
     // Results are served by the desk itself; anything else is left as a link.
     if (typeof view.result === "string" && view.result.startsWith(`${config.desk}/records/`)) {
       try {
