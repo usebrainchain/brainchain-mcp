@@ -59,12 +59,12 @@ says the server is registered. Step 4 is what checks the key.
    ```
 
    For USDG on Robinhood Chain, also approve once:
-   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.7.6 approve` (with
+   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.8.0 approve` (with
    `BRAINCHAIN_NETWORK=testnet` in front on testnet).
 3. Register the server with the path of that file:
 
    ```sh
-   openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.7.6"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key","BRAINCHAIN_PAY_ON":"base","BRAINCHAIN_BUDGET_UNITS":"5000000","BRAINCHAIN_DAILY_UNITS":"5000000"}}'
+   openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.8.0"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key","BRAINCHAIN_PAY_ON":"base","BRAINCHAIN_BUDGET_UNITS":"5000000","BRAINCHAIN_DAILY_UNITS":"5000000"}}'
    ```
 
    Keep the key in that file only. A key in `skills.entries.brainchain.apiKey` never reaches the server, and one in
@@ -75,7 +75,7 @@ says the server is registered. Step 4 is what checks the key.
    `BRAINCHAIN_MAX_PRICE_UNITS` caps one task (default 1 USDC). Drop `BRAINCHAIN_PAY_ON` to pay in USDG on Robinhood
    Chain. Add `"BRAINCHAIN_NETWORK":"testnet"` to practise with test tokens (Base Sepolia USDC or Robinhood Chain
    testnet USDG).
-4. Check the key: `BRAINCHAIN_PAY_ON=base BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.7.6 wallet`
+4. Check the key: `BRAINCHAIN_PAY_ON=base BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.8.0 wallet`
    prints the wallet it holds and what it still needs before it can pay, or says what is wrong. Drop
    `BRAINCHAIN_PAY_ON=base` if you pay in USDG, and put `BRAINCHAIN_NETWORK=testnet` in front on testnet.
    `openclaw mcp doctor` and `openclaw mcp probe` do not check the key.
