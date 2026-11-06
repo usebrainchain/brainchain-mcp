@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hire a frontier model for a task and pay in USDG or USDC only for work that meets the bar you set.",
-  "version": "0.6.1",
+  "version": "0.7.5",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.6.1",
+      "version": "0.7.5",
       "transport": {
         "type": "stdio"
       },

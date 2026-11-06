@@ -28,6 +28,7 @@ export const PREMIUMS_TOOL: Tool = {
     "What tokenized US stocks cost on Robinhood Chain against their Chainlink price right now: pool price, Chainlink price, " +
     "the premium in percent and the feed's age, for NVDA, SPY, AAPL, TSLA, GOOGL, META and MSFT. Read from the chain, free, no key " +
     "and no payment. Outside US market hours no new tokens are minted, so the premium shows where the market clears on its own. " +
+    "usMarketOpen is true during the regular session, 09:30 to 16:00 New York time, Monday to Friday; it does not know exchange holidays or early closes. " +
     "Prices are in USDG per token with each token's split multiplier applied. Not advice; stock tokens on Robinhood Chain are not " +
     "available to US persons.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -67,7 +68,11 @@ export function usMarketOpen(now: Date): boolean {
   return minutes >= 9 * 60 + 30 && minutes < 16 * 60;
 }
 
-const usd = (units: bigint): string => `${units / 1_000_000n}.${((units % 1_000_000n) / 10_000n).toString().padStart(2, "0")}`;
+/** USDG units (6 decimals) as dollars and cents, rounded half up. */
+const usd = (units: bigint): string => {
+  const cents = (units + 5_000n) / 10_000n;
+  return `${cents / 100n}.${(cents % 100n).toString().padStart(2, "0")}`;
+};
 
 /** USDG (6 decimals) for one whole stock token at the pool's current price. */
 function spotFromSlot0(sqrtPriceX96: bigint, token0: Address): bigint {

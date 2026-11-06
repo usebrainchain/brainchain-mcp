@@ -20,7 +20,8 @@ export const shippedAbi = parseAbi([
 ]);
 
 export const taskBoardAbi = parseAbi([
-  "function get(uint256 id) view returns ((address poster, uint128 bounty, uint64 deadline, uint8 status, bool accepted, bool disputed, bool disputedByModel, bytes32 model, bytes32 briefHash, bytes32 resultHash, string briefURI, string resultURI, uint64 submittedAt, uint64 gradedAt, uint64 disputedAt, uint16 gradeThresholdBps, uint16 ruleThresholdBps, uint16 feeBps))",
+  // TaskBoard.get as deployed in sets 3.4.0 and 3.5.0; the brief and result live off chain behind their hashes.
+  "function get(uint256 id) view returns ((address poster, uint128 bounty, uint64 deadline, uint8 status, bool accepted, bool disputed, bool disputedByModel, bytes32 model, bytes32 briefHash, bytes32 resultHash, uint64 submittedAt, uint64 gradedAt, uint64 disputedAt, uint64 postedAt, address payee, address feeRecipient, uint16 feeBps, uint16 hireThresholdBps, uint16 gradeThresholdBps, uint16 ruleThresholdBps, uint64 gradeWindow, uint64 disputeWindow, uint64 ruleWindow))",
 ]);
 
 /** ShippedDeeds.Status and Ruling, as the contract declares them. */
