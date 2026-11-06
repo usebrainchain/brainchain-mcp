@@ -62,6 +62,27 @@ const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase(
 export const firstLine = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0] ?? "";
 /** Text from the desk or a library, ended as a sentence so what this server adds after it reads apart. */
 const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+
+const CHAINS = new Map([
+  ["4663", "Robinhood Chain"],
+  ["8453", "Base"],
+  ["46630", "Robinhood Chain testnet"],
+  ["84532", "Base Sepolia"],
+]);
+const SOLANA = new Map([
+  ["5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "Solana"],
+  ["EtWTRABZaYq6iMfeYKouRu166VU2xqa1", "Solana devnet"],
+]);
+
+/**
+ * Where an order was paid, from its own network: the server reading it may pay on another chain.
+ * An order on `acp:<chain id>` was paid into an escrow there, which the desk never holds.
+ */
+export function paidOn(network: unknown): { chain: string; escrow: boolean } {
+  const [kind, id = ""] = typeof network === "string" ? network.split(":") : [];
+  const chain = kind === "solana" ? SOLANA.get(id) : kind === "eip155" || kind === "acp" ? CHAINS.get(id) : undefined;
+  return { chain: chain ?? "the chain it was paid on", escrow: kind === "acp" };
+}
 /** Statuses that say "not now" rather than "no", alongside every 5xx. */
 const RETRY_LATER = new Set([408, 425, 429]);
 
@@ -372,9 +393,13 @@ interface Guidance {
 }
 
 /** What the order means for the caller, and when to look again. Every state and status pair is in payments.test.ts. */
-export function guidance(view: Record<string, unknown>, config: Pick<Config, "chain" | "terms">, now = Date.now()): Guidance {
+export function guidance(view: Record<string, unknown>, config: Pick<Config, "terms">, now = Date.now()): Guidance {
   const task = (view.task ?? {}) as { status?: string; accepted?: boolean; due?: { by?: unknown } };
   const wait = (retryAfterSeconds: number, next: string): Guidance => ({ done: false, next, retryAfterSeconds });
+  const { chain, escrow } = paidOn(view.network);
+  // The desk sends no refund for an escrowed order: the escrow gives the money back, with no transaction of the desk's to wait for.
+  const escrowReturns = `escrow on ${chain} that holds the payment returns the full amount`;
+  const refunding = escrow ? `The ${escrowReturns}.` : `The refund is being sent on ${chain}.`;
   // Without a task the desk could not post the order, so no work ever existed.
   const why = typeof view.refundReason === "string" ? `${view.refundReason} ` : task.status === undefined ? "The task could not be posted. " : "";
   const due = typeof task.due?.by === "string" ? task.due.by : undefined;
@@ -393,11 +418,13 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     const closes = due === undefined ? NaN : Date.parse(due);
     const left = Number.isFinite(closes) ? Math.ceil((closes - now) / 1000) : undefined;
     // The desk sends the refund within a minute or two of the window closing.
-    if (left !== undefined && left <= 0) return wait(60, `${start} The dispute window has closed, so the full amount is refunded on ${config.chain} shortly.`);
+    if (left !== undefined && left <= 0) return wait(60, `${start} The dispute window has closed, so ${escrow ? `the ${escrowReturns}` : `the full amount is refunded on ${chain} shortly`}.`);
     const when = left === undefined ? `, ${config.terms.finalAfter} after grading` : ` at ${due}`;
     return wait(
       left === undefined ? 900 : left + 60,
-      `${start} The full amount is refunded on ${config.chain} when the dispute window closes${when}, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`,
+      escrow
+        ? `${start} The ${escrowReturns}, unless the model disputes the grade before the dispute window closes${when}${left === undefined ? "," : ""} and a ruling pays it. Report this now, then read the order again after that time.`
+        : `${start} The full amount is refunded on ${chain} when the dispute window closes${when}, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`,
     );
   };
 
@@ -405,7 +432,7 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     case "paid-out":
       return paid();
     case "refunded":
-      return { done: true, next: `${why}The full amount was refunded on ${config.chain}${typeof view.refundTx === "string" ? ` in ${view.refundTx}` : ""}.` };
+      return { done: true, next: escrow ? `${why}The ${escrowReturns}.` : `${why}The full amount was refunded on ${chain}${typeof view.refundTx === "string" ? ` in ${view.refundTx}` : ""}.` };
     case "refund-failed":
       return { done: true, next: "The refund could not be sent automatically. Write to hello@usebrainchain.com with this order id." };
     case "failed":
@@ -417,7 +444,7 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     case "unconfirmed":
       return wait(30, "The payment may have gone through; BrainChain is checking it against the chain. Do not post the task again.");
     case "refunding":
-      return wait(60, `${why}The refund is being sent on ${config.chain}.`);
+      return wait(60, `${why}${refunding}`);
   }
 
   switch (task.status) {
@@ -425,7 +452,7 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
       return paid();
     case "refunded":
       // The board has returned the money to the desk; the payer's refund transaction comes next.
-      return wait(60, `${why}The refund is being sent on ${config.chain}.`);
+      return wait(60, `${why}${refunding}`);
     // A dispute, a ruling under its appeal window and an appeal can each still change a grade, accepted or not.
     case "disputed":
       return wait(600, `The grade is disputed; Jev rules on it${by}. If no ruling comes, the grade stands.${result}`);

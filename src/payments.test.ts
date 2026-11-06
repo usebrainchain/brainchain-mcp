@@ -10,7 +10,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it, vi } from "vitest";
 
 import { REPOST_AFTER_MINUTES, resolveConfig } from "./config.js";
-import { canonicalStringify, createDesk, guidance, orderIdOf } from "./payments.js";
+import { canonicalStringify, createDesk, guidance, orderIdOf, paidOn } from "./payments.js";
 import { callTool, checkBrief, POST_TASK_NAME, type Desk } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
@@ -657,6 +657,90 @@ describe("reading an order", () => {
   });
 });
 
+describe("the chain brainchain_get_task names", () => {
+  // A server that pays on Base reads every order here, to show its own chain is never the one named.
+  const base = resolveConfig({ BRAINCHAIN_PAY_ON: "base" });
+  const NOW = Date.parse("2026-11-06T12:00:00.000Z");
+  const by = "2026-11-06T15:38:00.000Z";
+  const reject = "Jev did not accept the work, so the result is withheld.";
+  const refund = (network: unknown) => ({
+    refunded: guidance({ state: "refunded", network, refundTx: "0xfeed", refundReason: "Jev did not accept the work." }, base, NOW).next,
+    refunding: guidance({ state: "refunding", network, task: { status: "refunded" } }, base, NOW).next,
+    owed: guidance({ state: "posted", network, task: { status: "refunded" } }, base, NOW).next,
+    rejected: guidance({ state: "posted", network, task: { status: "graded", accepted: false, due: { by } } }, base, NOW).next,
+    closed: guidance({ state: "posted", network, task: { status: "graded", accepted: false, due: { by: "2026-11-06T11:00:00.000Z" } } }, base, NOW).next,
+  });
+
+  it.each([
+    ["eip155:4663", "Robinhood Chain"],
+    ["eip155:8453", "Base"],
+    ["eip155:46630", "Robinhood Chain testnet"],
+    ["eip155:84532", "Base Sepolia"],
+    ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "Solana"],
+    ["solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1", "Solana devnet"],
+    // An order that names no network, or one this release does not know, is not given this server's.
+    [undefined, "the chain it was paid on"],
+    ["eip155:1", "the chain it was paid on"],
+    ["solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z", "the chain it was paid on"],
+    ["constructor:toString", "the chain it was paid on"],
+    [4663, "the chain it was paid on"],
+  ])("is the order's own: %s reads %s", (network, chain) => {
+    expect(paidOn(network)).toEqual({ chain, escrow: false });
+    expect(refund(network)).toEqual({
+      refunded: `Jev did not accept the work. The full amount was refunded on ${chain} in 0xfeed.`,
+      refunding: `The refund is being sent on ${chain}.`,
+      owed: `The refund is being sent on ${chain}.`,
+      rejected: `${reject} The full amount is refunded on ${chain} when the dispute window closes at ${by}, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`,
+      closed: `${reject} The dispute window has closed, so the full amount is refunded on ${chain} shortly.`,
+    });
+  });
+
+  it.each([
+    ["acp:8453", "Base"],
+    ["acp:84532", "Base Sepolia"],
+    ["acp:1", "the chain it was paid on"],
+  ])("says the escrow returns the money for an order paid into one: %s", (network, chain) => {
+    expect(paidOn(network)).toEqual({ chain, escrow: true });
+    const returns = `escrow on ${chain} that holds the payment returns the full amount`;
+    expect(refund(network)).toEqual({
+      refunded: `Jev did not accept the work. The ${returns}.`,
+      refunding: `The ${returns}.`,
+      owed: `The ${returns}.`,
+      rejected: `${reject} The ${returns}, unless the model disputes the grade before the dispute window closes at ${by} and a ruling pays it. Report this now, then read the order again after that time.`,
+      closed: `${reject} The dispute window has closed, so the ${returns}.`,
+    });
+    expect(guidance({ state: "posted", network, task: { status: "graded", accepted: false } }, base, NOW).next).toBe(
+      `${reject} The ${returns}, unless the model disputes the grade before the dispute window closes, about six hours after grading, and a ruling pays it. Report this now, then read the order again after that time.`,
+    );
+  });
+
+  it("reads three orders as the desks serve them, from a server that pays on another chain", () => {
+    // The orders of mainnet task 1, of task 3 on the 3.3.0 board and of testnet task 75, read on 2026-11-06.
+    const onRobinhood = {
+      order: "0xa0f7643d0eda76e9a8560ec3ca4b9b2bd49875162aa79d781a9f719d40190ea6",
+      state: "refunded",
+      network: "eip155:4663",
+      refundTx: "0xb350daaf27b37ce91fbbb3967c3634f527986b7e90d1001e375a9df64be3aa42",
+      task: { status: "refunded", accepted: false, refund: "rejected" },
+      refundReason: "Jev did not accept the work.",
+    };
+    expect(guidance(onRobinhood, base).next).toBe("Jev did not accept the work. The full amount was refunded on Robinhood Chain in 0xb350daaf27b37ce91fbbb3967c3634f527986b7e90d1001e375a9df64be3aa42.");
+    const escrowed = { order: "0x0ad453eb153dcabf462d5ec7eee5d1a3d174d4ab3c753cf8225590bdf380dc80", state: "refunded", network: "acp:8453", task: { status: "refunded", accepted: false } };
+    expect(guidance(escrowed, resolveConfig({})).next).toBe("The escrow on Base that holds the payment returns the full amount.");
+    const onSolana = {
+      order: "0x4ef7aca0fc7aeefa4ecdece1c131f2db28f95d65cab71a05c751e1745fecf4e5",
+      state: "refunded",
+      network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+      refundTx: "2vuSDTGoDf9656LThbJMSAgobaBzX5FjyQsvqoRpFbBXntbtEjuN3fCZsxYZDy9NcXEsLVkax5emTvXSLYJuru9e",
+      task: { status: "refunded", accepted: false, refund: "rejected" },
+      refundReason: "Jev did not accept the work.",
+    };
+    expect(guidance(onSolana, config).next).toBe(
+      "Jev did not accept the work. The full amount was refunded on Solana devnet in 2vuSDTGoDf9656LThbJMSAgobaBzX5FjyQsvqoRpFbBXntbtEjuN3fCZsxYZDy9NcXEsLVkax5emTvXSLYJuru9e.",
+    );
+  });
+});
+
 describe("what brainchain_get_task says, for every order state and task status", () => {
   const chain = config.chain;
   const NOW = Date.parse("2026-11-04T12:00:00.000Z");
@@ -665,7 +749,7 @@ describe("what brainchain_get_task says, for every order state and task status",
   const STATES = ["paying", "unconfirmed", "failed", "paid", "posted", "paid-out", "refunding", "refunded", "refund-failed"];
   const STATUSES = [undefined, "none", "open", "hired", "delivered", "graded", "disputed", "paid", "refunded", "ruled", "appealed"];
   const read = (state: string, status?: string, accepted?: boolean, extra: Record<string, unknown> = {}) =>
-    guidance({ state, ...(status ? { task: { status, ...(accepted === undefined ? {} : { accepted }), ...(extra.due ? { due: { by: extra.due } } : {}) } } : {}), ...extra }, config, NOW);
+    guidance({ state, network: config.network, ...(status ? { task: { status, ...(accepted === undefined ? {} : { accepted }), ...(extra.due ? { due: { by: extra.due } } : {}) } } : {}), ...extra }, config, NOW);
   const waits = (retryAfterSeconds: number, next: string) => ({ done: false, next, retryAfterSeconds });
   const finished = (next: string) => ({ done: true, next });
 
