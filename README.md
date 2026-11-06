@@ -36,7 +36,7 @@ unset BRAINCHAIN_PAYER_KEY
 
 ### Cursor
 
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuNy42Il0sImVudiI6eyJCUkFJTkNIQUlOX1BBWUVSX0tFWSI6IiR7ZW52OkJSQUlOQ0hBSU5fUEFZRVJfS0VZfSJ9fQ%3D%3D)
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuOC4wIl0sImVudiI6eyJCUkFJTkNIQUlOX1BBWUVSX0tFWSI6IiR7ZW52OkJSQUlOQ0hBSU5fUEFZRVJfS0VZfSJ9fQ%3D%3D)
 
 Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for every project):
 

@@ -31,8 +31,8 @@ export const Ruling = { None: 0, Accepted: 1, Rejected: 2, Partial: 3, Invalid: 
 export const TaskStatus = { Open: 1, Hired: 2, Paid: 6, Refunded: 7 } as const;
 export const BPS = 10_000n;
 export const FEE_BPS = 100n;
-/** The bond's deadline is the task's plus this. */
-export const BOND_LEAD_SEC = 48n * 3_600n;
+/** The bond's deadline is the task's plus this: 48 hours for a grade, a dispute and an appealed ruling on set 3.5.0, then the worker's day to mint. */
+export const BOND_LEAD_SEC = 72n * 3_600n;
 export const CHECK_HOLD_SEC = 3_600n;
 export const CHECK_CONFIRM_SEC = 86_400n;
 /** Under this the fee and the gas take too much of the bond. */
