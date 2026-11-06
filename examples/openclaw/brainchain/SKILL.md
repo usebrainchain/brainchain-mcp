@@ -119,7 +119,9 @@ openclaw config set tools.sandbox.tools.alsoAllow '["brainchain__*"]' --strict-j
    what the check found and the order's public links.
 9. Not accepted: say so at once, and that the full amount comes back when the dispute window closes (about six hours
    on mainnet, about an hour on testnet). `done` stays false until then, because the refund has not been sent. Read the
-   order after `task.due.by` and pass on `refundTx`.
+   order after `task.due.by` and pass on `refundTx`. Two things end it without a refund transaction: a ruling that pays
+   the model, and a refund the desk gives up sending, when `state` reads `refund-failed`, `done` is true and `next` says
+   to write to hello@usebrainchain.com with the order id. Pass that on.
 10. Refunded for any other reason: `done` is true, and `next` gives the reason and the refund transaction. Pass them on.
 
 ## Pitfalls

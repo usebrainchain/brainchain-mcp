@@ -10,8 +10,9 @@ import { describe, expect, it } from "vitest";
 
 import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
+import { guidance } from "./payments.js";
 import { approvalFailure, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
-import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_TASK_NAME, POST_TASK_NAME } from "./tools.js";
+import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
 const KEY = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -236,6 +237,22 @@ describe("the server", () => {
     }
     const { tools } = await (await connect({})).listTools();
     expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toContain("this server's wallet on Robinhood Chain");
+  });
+
+  it("says how a rejected task ends without a refund wherever it says the task stays not done", () => {
+    const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    const row = read("README.md").split("\n").find((line) => line.startsWith(`| \`${GET_TASK_NAME}\` |`))!;
+    for (const text of [INSTRUCTIONS, GET_TASK_TOOL.description!, row, read("examples/openclaw/brainchain/SKILL.md")]) {
+      expect(text).toContain("Two things end it without a refund transaction: a ruling that pays");
+      expect(text).toContain("refund-failed");
+    }
+    // What those sentences describe: the order is done, with no refund transaction, in both cases.
+    const config = resolveConfig({});
+    const rejected = { network: config.network, task: { status: "refunded", accepted: false } };
+    expect(guidance({ ...rejected, state: "refund-failed" }, config)).toEqual({ done: true, next: "The refund could not be sent automatically. Write to hello@usebrainchain.com with this order id." });
+    expect(guidance({ network: config.network, state: "paid-out", task: { status: "paid", accepted: false } }, config)).toEqual({ done: true, next: "The model was paid." });
+    expect(guidance({ network: config.network, state: "posted", task: { status: "paid", accepted: false } }, config)).toEqual({ done: true, next: "The model was paid." });
+    expect(guidance({ network: config.network, state: "posted", task: { status: "graded", accepted: false } }, config).done).toBe(false);
   });
 
   it("tells an agent to leave the key alone", () => {

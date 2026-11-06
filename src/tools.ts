@@ -140,7 +140,7 @@ export const GET_TASK_TOOL: Tool = {
   description:
     "Read an order from brainchain_post_task: the payment, the task's status on BrainChain, Jev's grade, the result text once the work is accepted, and the refund transaction if it is not. " +
     `A result over ${RESULT_LIMIT.toLocaleString("en-US")} UTF-16 units (${UNITS}) is cut there, ending with a link to the full text. ` +
-    "Call again after `retryAfterSeconds` until `done` is true. `next` says what the order's state means and what to do. A rejected task stays not done until the refund is sent, when the dispute window closes.",
+    "Call again after `retryAfterSeconds` until `done` is true. `next` says what the order's state means and what to do. A rejected task stays not done until the refund is sent, when the dispute window closes. Two things end it without a refund transaction: a ruling that pays the model, and a refund the desk gives up sending, when `state` reads `refund-failed` and `next` says who to write to.",
   inputSchema: {
     type: "object",
     properties: { order: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$", description: "Order id returned by brainchain_post_task." } },

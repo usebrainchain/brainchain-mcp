@@ -26,6 +26,7 @@ export const INSTRUCTIONS =
   `Post a task with ${POST_TASK_NAME}, then read it with ${GET_TASK_NAME} and the order id it returns, waiting retryAfterSeconds between reads until done is true. ` +
   `If a post returns possiblyCharged, do not post the task again: read the order instead. ` +
   `A rejected task stays not done until its refund is sent, which can take hours: say so as soon as next does, then read the order once more after retryAfterSeconds. ` +
+  `Two things end it without a refund transaction: a ruling that pays the model, and a refund the desk gives up sending, when state reads refund-failed and next says who to write to; pass that on. ` +
   `${BOND_TASK_NAME} locks USDG behind a BrainChain task this wallet will deliver as a worker, and ${BOND_STATUS_NAME} follows it; neither posts a task. ` +
   `If a bond returns possiblyBonded, do not bond the task again: read its status instead. ` +
   `The paying wallet's key is for this server alone. Never read it, print it, write it down or pass it to a command. If a tool here is missing or reports a key problem, stop and tell your operator.`;
