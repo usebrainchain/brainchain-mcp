@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { decodeAbiParameters, decodeFunctionData, encodeFunctionData, keccak256, numberToHex, type Address, type Hex } from "viem";
+import { decodeAbiParameters, decodeFunctionData, encodeFunctionData, keccak256, numberToHex, parseTransaction, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -162,7 +162,7 @@ describe("bond", () => {
       [fakeChain({ task: undefined }), USDG(5), "There is no task 12 on BrainChain."],
       [fakeChain({ task: task({ status: 6 }) }), USDG(5), "Task 12 is not hired to this wallet"],
       [fakeChain({ task: task({ deadline: NOW - 1n }) }), USDG(5), "deadline, 2027-01-15T07:59:59.000Z, has passed"],
-      [fakeChain({ task: task(), bonds: [view()] }), USDG(5), "This wallet already has bond 4 open on task 12; brainchain_bond_status shows it. Nothing was bonded."],
+      [fakeChain({ task: task(), bonds: [view()] }), USDG(5), "This wallet already has a bond open on task 12 (registry id 4). Nothing was bonded."],
     ] as const) {
       const { bonds, limits } = setup(chain);
       await expect(bonds.bond(12n, amount)).rejects.toThrow(error);
@@ -183,8 +183,44 @@ describe("bond", () => {
     const chain = fakeChain({ task: task() });
     const capped = setup(chain, { BRAINCHAIN_BUDGET_UNITS: "6000000" });
     await capped.bonds.bond(12n, USDG(5));
-    await expect(capped.bonds.bond(13n, USDG(2))).rejects.toThrow("This server has already signed payments and bonds for 5 of its 6 USDG budget.");
+    await expect(capped.bonds.bond(13n, USDG(2))).rejects.toThrow(
+      "A bond of 2 USDG is more than the 1 USDG left in this server's budget. The budget resets when the server restarts; raise BRAINCHAIN_BUDGET_UNITS to allow more per run. Nothing was bonded.",
+    );
     expect(chain.create).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a bond over a limit with what was asked and what is left, in USDG whatever chain this server pays tasks on", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+    const onBase = { BRAINCHAIN_PAY_ON: "base", BRAINCHAIN_BUDGET_UNITS: "3000000" };
+    const byBudget = setup(fakeChain({ task: task() }), onBase);
+    expect(byBudget.config.token).toBe("USDC");
+    expect(await byBudget.bonds.bond(12n, USDG(5)).catch((e: Error) => e.message)).toBe(
+      "A bond of 5 USDG is more than the 3 USDG left in this server's budget. The budget resets when the server restarts; raise BRAINCHAIN_BUDGET_UNITS to allow more per run. Nothing was bonded.",
+    );
+    const byDay = setup(fakeChain({ task: task() }), { BRAINCHAIN_PAY_ON: "base", BRAINCHAIN_DAILY_UNITS: "3000000", BRAINCHAIN_STATE_DIR: stateDir });
+    await expect(byDay.bonds.bond(12n, USDG(5))).rejects.toThrow(
+      "A bond of 5 USDG is more than the 3 USDG left in this wallet's daily limit, which counts USDG and USDC together. The limit resets at 00:00 UTC; raise BRAINCHAIN_DAILY_UNITS to allow more. Nothing was bonded.",
+    );
+    expect([byBudget.limits.spent(), byDay.limits.spent()]).toEqual([0n, 0n]);
+  });
+
+  it("names an open bond by Shipped's number when it is known, and by its registry id either way", async () => {
+    const page = answering({ deed: { number: "3", url: "https://app.shipped.bond/bonds/3" } });
+    await expect(setup(fakeChain({ task: task(), bonds: [view()] }), {}, page).bonds.bond(12n, USDG(5))).rejects.toThrow(
+      "This wallet already has bond No. 3 open on task 12 (registry id 4, https://app.shipped.bond/bonds/3). Nothing was bonded.",
+    );
+  });
+
+  it("answers a failed read or send with one line that ends by saying nothing was bonded", async () => {
+    const dump = new Error('HTTP request failed.\n\nStatus: 429\nURL: https://rpc.example/\nRequest body: {"method":"eth_call"}\n\nVersion: viem@2.57.11');
+    for (const broken of ["task", "now", "bondsOn", "usdgBalance", "approve", "create"] as const) {
+      const chain = fakeChain({ task: task() });
+      chain[broken].mockRejectedValue(dump);
+      const { bonds, limits } = setup(chain);
+      const error = await bonds.bond(12n, USDG(5)).catch((e: Error) => e.message);
+      expect(error).toBe("HTTP request failed. Nothing was bonded.");
+      expect(limits.spent()).toBe(0n);
+    }
   });
 
   it("keeps the daily limit across bonds and posts from the same wallet", async () => {
@@ -193,12 +229,12 @@ describe("bond", () => {
     const first = setup(chain, { BRAINCHAIN_DAILY_UNITS: "6000000", BRAINCHAIN_STATE_DIR: stateDir });
     await first.bonds.bond(12n, USDG(5));
     const second = setup(chain, { BRAINCHAIN_DAILY_UNITS: "6000000", BRAINCHAIN_STATE_DIR: stateDir });
-    await expect(second.bonds.bond(13n, USDG(2))).rejects.toThrow(/already signed payments and bonds for 5 of its daily limit of 6, counting USDG and USDC together/);
+    await expect(second.bonds.bond(13n, USDG(2))).rejects.toThrow("A bond of 2 USDG is more than the 1 USDG left in this wallet's daily limit, which counts USDG and USDC together.");
     expect(second.limits.spent()).toBe(0n);
   });
 
   it("keeps a bond that was sent but not confirmed counted against the budget and the daily limit, and says it may be placed", async () => {
-    const unconfirmed = `Timed out while waiting for transaction with hash "${TX}" to be confirmed`;
+    const unconfirmed = `Timed out while waiting for transaction with hash "${TX}" to be confirmed.`;
     const chain = fakeChain({ task: task() });
     chain.create.mockResolvedValue({ tx: TX, unconfirmed });
     const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
@@ -208,11 +244,12 @@ describe("bond", () => {
       tx: TX,
       task: "12",
       amount: "10 USDG",
-      error: `The bond was sent in ${TX} but could not be confirmed (${unconfirmed}). It may have been placed. Read task 12 with brainchain_bond_status; do not bond it again.`,
+      deadline: "2027-01-18T08:00:00.000Z",
+      error: `The bond's transaction ${TX} could not be confirmed: ${unconfirmed} The bond may have been placed. Read task 12 with brainchain_bond_status; do not bond it again.`,
     });
     expect(limits.spent()).toBe(USDG(10));
     expect(await limits.spentToday()).toBe(USDG(10));
-    await expect(bonds.bond(12n, USDG(10))).rejects.toThrow("This server has already signed payments and bonds for 10 of its 10 USDG budget.");
+    await expect(bonds.bond(12n, USDG(10))).rejects.toThrow("A bond of 10 USDG is more than the 0 USDG left in this server's budget.");
     expect(chain.create).toHaveBeenCalledOnce();
 
     // A bond that reverted, or was never sent, gives its amount back.
@@ -293,7 +330,13 @@ describe("bond status", () => {
     expect(status.bonds).toEqual([
       { bond: "4", amount: "5 USDG", deadline: "2027-01-16T08:00:00.000Z", state: "open", next: "The Proof is in the index; BrainChain marks the check shortly." },
       { bond: "3", amount: "5 USDG", deadline: "2027-01-16T08:00:00.000Z", state: "marked", markedAt: "2027-01-15T07:50:00.000Z", next: "BrainChain confirms the check after 2027-01-15T08:50:00.000Z, and the bond settles as delivered." },
-      { bond: "2", amount: "5 USDG", deadline: "2027-01-15T07:59:59.000Z", state: "lapsed", next: `No Proof was recorded by the bond's deadline. The bond settles after 2027-01-16T08:59:59.000Z to ${MISSED_TO}: ${POSTER}.` },
+      {
+        bond: "2",
+        amount: "5 USDG",
+        deadline: "2027-01-15T07:59:59.000Z",
+        state: "lapsed",
+        next: `The Proof is in the index, but the bond's check holds no mark and Shipped sets none after the deadline. The bond settles after 2027-01-16T08:59:59.000Z to ${MISSED_TO}: ${POSTER}.`,
+      },
     ]);
     expect(await setup(fakeChain()).bonds.status(12n)).toEqual({ task: "12", wallet: account.address, bonds: [] });
   });
@@ -326,7 +369,24 @@ describe("bond status", () => {
 
   it("says a missed bond went to the address it names, and who that is", async () => {
     const status = (await setup(fakeChain({ bonds: [view({ status: DeedStatus.Settled, remainderBps: 0, settledAt: NOW })] })).bonds.status(12n)) as { bonds: Record<string, unknown>[] };
-    expect(status.bonds[0]).toMatchObject({ state: "missed", paidTo: POSTER, next: `No Proof was recorded by the bond's deadline, so the bond went to ${MISSED_TO}: ${POSTER}.` });
+    expect(status.bonds[0]).toMatchObject({ state: "missed", paidTo: POSTER, next: `No Proof was recorded, so the bond went to ${MISSED_TO}: ${POSTER}.` });
+  });
+
+  it("never says no Proof was recorded beside a Proof that is in the index", async () => {
+    const late = [view({ deadline: NOW - 1n }), view({ deed: 3n, status: DeedStatus.Settled, remainderBps: 0, settledAt: NOW })];
+    const read = async (proof: bigint) => (await setup(fakeChain({ bonds: late, proof })).bonds.status(12n)) as { proofIndexed: boolean; bonds: { state: string; next: string }[] };
+    const indexed = await read(1n);
+    expect(indexed.proofIndexed).toBe(true);
+    expect(indexed.bonds.map((b) => [b.state, b.next])).toEqual([
+      ["lapsed", `The Proof is in the index, but the bond's check holds no mark and Shipped sets none after the deadline. The bond settles after 2027-01-16T08:59:59.000Z to ${MISSED_TO}: ${POSTER}.`],
+      ["missed", `The Proof is in the index, but the bond settled without it, so the bond went to ${MISSED_TO}: ${POSTER}.`],
+    ]);
+    const none = await read(0n);
+    expect(none.proofIndexed).toBe(false);
+    expect(none.bonds.map((b) => b.next)).toEqual([
+      `No Proof was recorded by the bond's deadline. The bond settles after 2027-01-16T08:59:59.000Z to ${MISSED_TO}: ${POSTER}.`,
+      `No Proof was recorded, so the bond went to ${MISSED_TO}: ${POSTER}.`,
+    ]);
   });
 
   it("words an open bond by where its task stands: refunded, paid, or still to be paid", async () => {
@@ -338,23 +398,29 @@ describe("bond status", () => {
   });
 });
 
-/** A JSON-RPC node on this machine that takes any transaction and answers the rest as `answers` says. */
+/** A reply that is an HTTP status and nothing else, as a node behind a busy proxy gives. */
+const http = (status: number) => ({ http: status });
+
+/**
+ * A JSON-RPC node on this machine. It answers as `answers` says: a thrown error is the node's own
+ * refusal, and `http(status)` is no answer at all. A raw transaction is accepted unless they say otherwise.
+ */
 async function fakeNode(answers: Record<string, (params: unknown[]) => unknown>) {
-  const sent: Hex[] = [];
+  const received: Hex[] = [];
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(chunk as Buffer);
     const { id, method, params } = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { id: number; method: string; params: unknown[] };
     const reply = (body: object) => response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id, ...body }));
-    if (method === "eth_sendRawTransaction") {
-      sent.push(params[0] as Hex);
-      return reply({ result: keccak256(params[0] as Hex) });
-    }
+    if (method === "eth_sendRawTransaction") received.push(params[0] as Hex);
     try {
-      if (!answers[method]) throw new Error(`no ${method} here`);
-      reply({ result: answers[method](params) });
+      const answer = answers[method] ?? (method === "eth_sendRawTransaction" ? ([raw]: unknown[]) => keccak256(raw as Hex) : undefined);
+      if (!answer) throw new Error(`no ${method} here`);
+      const result = answer(params);
+      if (typeof result === "object" && result !== null && "http" in result) return void response.writeHead(result.http as number).end();
+      reply({ result });
     } catch (error) {
-      reply({ error: { code: -32000, message: (error as Error).message } });
+      reply({ error: { code: (error as { code?: number }).code ?? -32000, message: (error as Error).message } });
     }
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -362,44 +428,99 @@ async function fakeNode(answers: Record<string, (params: unknown[]) => unknown>)
     server.closeAllConnections();
     server.close();
   };
-  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, sent, close };
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, received, close };
 }
 
 describe("the chain behind a bond", () => {
-  it("hands back the hash of a transaction it sent when the receipt cannot be read, and reads what the registry owes the wallet", async () => {
-    const live = resolveConfig({ BRAINCHAIN_NETWORK: "mainnet" }).bonds!;
-    const calls: { to: string; data: string }[] = [];
-    const node = await fakeNode({
-      eth_chainId: () => numberToHex(4663),
-      eth_getTransactionCount: () => "0x0",
-      eth_getBlockByNumber: () => ({ number: "0x1", timestamp: "0x1", baseFeePerGas: "0x1" }),
-      eth_maxPriorityFeePerGas: () => "0x1",
-      eth_estimateGas: () => "0x186a0",
-      eth_blockNumber: () => "0x2",
-      // Sent and still pending, on a node that cannot say more.
-      eth_getTransactionByHash: ([hash]) => ({ hash, from: account.address, nonce: "0x0", blockNumber: null }),
-      eth_getTransactionReceipt: () => {
-        throw new Error("the node has no receipts");
-      },
-      eth_call: ([call]) => {
-        calls.push(call as { to: string; data: string });
-        return numberToHex(USDG(1.98), { size: 32 });
-      },
-    });
+  const live = resolveConfig({ BRAINCHAIN_NETWORK: "mainnet" }).bonds!;
+  const terms = bondTerms({ check: live.check, proofIndex: INDEX, usdg: live.usdg }, { id: 12n, refundTo: POSTER, paidThroughDesk: false, deadline: NOW }, { address: live.brainchain.board, chainId: live.brainchain.chainId });
+  // What a wallet's transaction needs from a node before it is sent, and a transaction the node then knows as pending.
+  const ready = {
+    eth_chainId: () => numberToHex(4663),
+    eth_getTransactionCount: () => "0x0",
+    eth_getBlockByNumber: () => ({ number: "0x1", timestamp: "0x1", baseFeePerGas: "0x1" }),
+    eth_maxPriorityFeePerGas: () => "0x1",
+    eth_estimateGas: () => "0x186a0",
+    eth_blockNumber: () => "0x2",
+    eth_getTransactionByHash: ([hash]: unknown[]) => ({ hash, from: account.address, nonce: "0x0", blockNumber: null }),
+  };
+  async function against(answers: Record<string, (params: unknown[]) => unknown>, work: (chain: BondChain, node: Awaited<ReturnType<typeof fakeNode>>) => Promise<void>) {
+    const node = await fakeNode({ ...ready, ...answers });
     try {
-      const chain = createBondChain({ ...live, rpc: node.url }, account, "https://desk.example", offline);
-      const terms = bondTerms({ check: live.check, proofIndex: INDEX, usdg: live.usdg }, { id: 12n, refundTo: POSTER, paidThroughDesk: false, deadline: NOW }, { address: live.brainchain.board, chainId: live.brainchain.chainId });
-      const made = await chain.create(terms, USDG(5));
-      expect(node.sent).toHaveLength(1);
-      expect(made).toEqual({ tx: keccak256(node.sent[0]!), unconfirmed: expect.stringMatching(/\S/) });
-      await expect(chain.approve(USDG(5))).rejects.toThrow(/^The approval 0x[0-9a-f]{64} was sent but could not be confirmed \(.+\), so the bond was not sent\. Nothing was bonded\.$/);
-      expect(node.sent).toHaveLength(2);
-
-      expect(await chain.owed()).toBe(USDG(1.98));
-      expect(calls.map(({ to, data }) => [to.toLowerCase(), data])).toEqual([[live.registry.toLowerCase(), encodeFunctionData({ abi: shippedAbi, functionName: "owed", args: [account.address, live.usdg] })]]);
+      await work(createBondChain({ ...live, rpc: node.url, brainchain: { ...live.brainchain, rpc: node.url } }, account, "https://desk.example", offline), node);
     } finally {
       node.close();
     }
+  }
+  const refusal = (message: string) => () => {
+    throw new Error(message);
+  };
+
+  it("hands back the hash of a transaction that was sent when its receipt cannot be read", async () => {
+    await against({ eth_getTransactionReceipt: refusal("the node has no receipts") }, async (chain, node) => {
+      expect(await chain.create(terms, USDG(5))).toEqual({ tx: keccak256(node.received[0]!), unconfirmed: "the node has no receipts." });
+      // The transaction is the registry's create with the terms and the amount, on Robinhood Chain, with the gas the node estimated.
+      expect(parseTransaction(node.received[0]!)).toMatchObject({
+        chainId: 4663,
+        to: live.registry.toLowerCase(),
+        data: encodeFunctionData({ abi: shippedAbi, functionName: "create", args: [terms, USDG(5)] }),
+        nonce: 0,
+        gas: 100_000n,
+      });
+      await expect(chain.approve(USDG(5))).rejects.toThrow(/^The approval 0x[0-9a-f]{64} could not be confirmed, so the bond was not sent: the node has no receipts\. Nothing was bonded\.$/);
+      expect(node.received).toHaveLength(2);
+    });
+  });
+
+  it("hands back the hash when the node gives no answer to the send, since the transaction may have arrived", async () => {
+    await against({ eth_sendRawTransaction: () => http(503) }, async (chain, node) => {
+      expect(await chain.create(terms, USDG(5))).toEqual({ tx: keccak256(node.received[0]!), unconfirmed: "no answer when it was sent, HTTP 503." });
+      // The send is tried once: a second copy could be refused as known and read as never sent.
+      expect(node.received).toHaveLength(1);
+    });
+  });
+
+  it("hands back the hash when the node answers the send with an internal error, which is no refusal", async () => {
+    const internal = () => {
+      throw Object.assign(new Error("internal error"), { code: -32603 });
+    };
+    await against({ eth_sendRawTransaction: internal }, async (chain, node) => {
+      const made = await chain.create(terms, USDG(5));
+      expect(made).toMatchObject({ tx: keccak256(node.received[0]!), unconfirmed: expect.stringMatching(/^no answer when it was sent, /) });
+      expect(node.received).toHaveLength(1);
+    });
+  });
+
+  it("says nothing was bonded when the node refuses the transaction, or it cannot be prepared", async () => {
+    await against({ eth_sendRawTransaction: refusal("insufficient funds for gas * price + value") }, async (chain) => {
+      await expect(chain.create(terms, USDG(5))).rejects.toThrow(/^The bond could not be sent: insufficient funds for gas \* price \+ value\. Nothing was bonded\.$/);
+      await expect(chain.approve(USDG(5))).rejects.toThrow(/^The approval could not be sent: insufficient funds for gas \* price \+ value\. Nothing was bonded\.$/);
+    });
+    await against({ eth_estimateGas: refusal("insufficient funds for transfer") }, async (chain, node) => {
+      const error = await chain.create(terms, USDG(5)).catch((e: Error) => e.message);
+      expect(error).toMatch(/^The bond could not be sent: [^\n]+ Nothing was bonded\.$/);
+      expect(node.received).toHaveLength(0);
+    });
+  });
+
+  it("names the chain that did not answer a read, in one line", async () => {
+    await against({ eth_call: () => http(429), eth_getBalance: () => http(429) }, async (chain) => {
+      await expect(chain.usdgBalance()).rejects.toThrow(/^Robinhood Chain could not be read just now: HTTP 429\.$/);
+      await expect(chain.ethBalance()).rejects.toThrow(/^Robinhood Chain could not be read just now: HTTP 429\.$/);
+      await expect(chain.task(12n)).rejects.toThrow(/^BrainChain could not be read just now: HTTP 429\.$/);
+    });
+  });
+
+  it("reads what the registry owes the wallet", async () => {
+    const calls: { to: string; data: string }[] = [];
+    const eth_call = ([call]: unknown[]) => {
+      calls.push(call as { to: string; data: string });
+      return numberToHex(USDG(1.98), { size: 32 });
+    };
+    await against({ eth_call }, async (chain) => {
+      expect(await chain.owed()).toBe(USDG(1.98));
+      expect(calls.map(({ to, data }) => [to.toLowerCase(), data])).toEqual([[live.registry.toLowerCase(), encodeFunctionData({ abi: shippedAbi, functionName: "owed", args: [account.address, live.usdg] })]]);
+    });
   });
 });
 

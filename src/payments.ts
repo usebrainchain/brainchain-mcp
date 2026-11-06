@@ -1,7 +1,7 @@
 import type { ClientEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
-import { keccak256, toBytes } from "viem";
+import { keccak256, RpcRequestError, toBytes } from "viem";
 
 import { formatUnits, MAX_TIMEOUT_SECONDS, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { createLimits, type Hold, type Limits } from "./limits.js";
@@ -11,14 +11,14 @@ const BUDGET_REASON = "budget";
 const DAILY_REASON = "daily limit";
 const RESULT_LIMIT = 20_000;
 
-/** What a refused budget or daily limit tells a person, for a post and for a bond alike. */
-export async function limitReached(config: Config, limits: Limits, which: "budget" | "daily limit", verb = "signed payments for"): Promise<string> {
+/** What a refused budget or daily limit tells a person who posts. */
+async function limitReached(config: Config, limits: Limits, which: "budget" | "daily limit"): Promise<string> {
   if (which === "budget") {
-    return `This server has already ${verb} ${formatUnits(limits.spent())} of its ${formatUnits(config.budget)} ${config.token} budget. The budget resets when the server restarts; raise BRAINCHAIN_BUDGET_UNITS to allow more per run. Nothing was charged.`;
+    return `This server has already signed payments for ${formatUnits(limits.spent())} of its ${formatUnits(config.budget)} ${config.token} budget. The budget resets when the server restarts; raise BRAINCHAIN_BUDGET_UNITS to allow more per run. Nothing was charged.`;
   }
   const today = await limits.spentToday();
   // One limit covers both chains, so it is named without a token.
-  return `This wallet has already ${verb} ${today === undefined ? "most" : formatUnits(today)} of its daily limit of ${formatUnits(config.daily!)}, counting USDG and USDC together. The limit resets at 00:00 UTC; raise BRAINCHAIN_DAILY_UNITS to allow more. Nothing was charged.`;
+  return `This wallet has already signed payments for ${today === undefined ? "most" : formatUnits(today)} of its daily limit of ${formatUnits(config.daily!)}, counting USDG and USDC together. The limit resets at 00:00 UTC; raise BRAINCHAIN_DAILY_UNITS to allow more. Nothing was charged.`;
 }
 
 /** Same serialization the desk hashes into an order id: sorted keys, no whitespace. */
@@ -61,7 +61,17 @@ export interface DeskOptions {
 const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 export const firstLine = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0] ?? "";
 /** Text from the desk or a library, ended as a sentence so what this server adds after it reads apart. */
-const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+export const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+
+/** A library's error in a few words: the HTTP status or the node's own refusal when there is one, else the error's first line. */
+export function brief(error: unknown): string {
+  for (let cause = error; cause instanceof Error; cause = cause.cause) {
+    const { status } = cause as { status?: unknown };
+    if (typeof status === "number") return `HTTP ${status}.`;
+    if (cause instanceof RpcRequestError && cause.details) return sentence(cause.details.split("\n")[0]!);
+  }
+  return sentence(firstLine(error));
+}
 
 const CHAINS = new Map([
   ["4663", "Robinhood Chain"],
