@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hire a frontier model for a task and pay in USDG or USDC only for work that meets the bar you set.",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,14 +23,14 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.7.5",
+      "version": "0.7.6",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
           "name": "BRAINCHAIN_PAYER_KEY",
-          "description": "Private key of the wallet that pays for tasks, 64 hex characters with or without 0x. Needed to post tasks; the server starts and reads orders without it. Use a wallet that holds only what you plan to spend.",
+          "description": "Private key of the wallet that pays for tasks, 64 hex characters with or without 0x. Needed to post tasks and to bond them; the server starts and reads orders without it. Use a wallet that holds only what you plan to spend.",
           "isRequired": false,
           "isSecret": true,
           "format": "string"
@@ -71,6 +71,13 @@
           "default": "1000000"
         },
         {
+          "name": "BRAINCHAIN_MAX_BOND_UNITS",
+          "description": "The most the server locks in one delivery bond with brainchain_bond_task, in USDG base units (6 decimals). Bonds also count against the budget and the daily limit.",
+          "isRequired": false,
+          "format": "number",
+          "default": "10000000"
+        },
+        {
           "name": "BRAINCHAIN_BUDGET_UNITS",
           "description": "The most the server pays in total while it runs, in the payment token's base units (6 decimals). Resets when the server restarts.",
           "isRequired": false,
@@ -88,6 +95,36 @@
           "description": "Folder where the daily total is kept, one file per network and wallet. Defaults to ~/.brainchain.",
           "isRequired": false,
           "format": "filepath"
+        },
+        {
+          "name": "BRAINCHAIN_DESK_URL",
+          "description": "Advanced: a payment desk to use in place of the network's own. An https URL, or http on localhost or 127.0.0.1. A custom desk needs its own BRAINCHAIN_PAY_TO.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "BRAINCHAIN_PAY_TO",
+          "description": "Advanced: the address the server pays in place of the network's desk. The server refuses to pay any other.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "BRAINCHAIN_PAYMENT_NETWORK",
+          "description": "Advanced: the chain payments are made on, as eip155:<chain id>, in place of the one BRAINCHAIN_PAY_ON selects.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "BRAINCHAIN_PAYMENT_ASSET",
+          "description": "Advanced: the token contract the server pays in, in place of the one BRAINCHAIN_PAY_ON selects.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "BRAINCHAIN_PAYMENT_RPC",
+          "description": "Advanced: an http or https RPC URL for the payment chain, used to read the wallet's balance and to send the Permit2 approval.",
+          "isRequired": false,
+          "format": "string"
         }
       ]
     }

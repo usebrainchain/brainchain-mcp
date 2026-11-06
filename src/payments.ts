@@ -1,7 +1,7 @@
 import type { ClientEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
-import { keccak256, toBytes } from "viem";
+import { keccak256, RpcRequestError, toBytes } from "viem";
 
 import { formatUnits, MAX_TIMEOUT_SECONDS, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { createLimits, type Hold, type Limits } from "./limits.js";
@@ -9,16 +9,17 @@ import type { TaskRequest, Desk } from "./tools.js";
 
 const BUDGET_REASON = "budget";
 const DAILY_REASON = "daily limit";
-const RESULT_LIMIT = 20_000;
+/** A result longer than this is cut, with a link to the rest. */
+export const RESULT_LIMIT = 20_000;
 
-/** What a refused budget or daily limit tells a person, for a post and for a bond alike. */
-export async function limitReached(config: Config, limits: Limits, which: "budget" | "daily limit", verb = "signed payments for"): Promise<string> {
+/** What a refused budget or daily limit tells a person who posts. */
+async function limitReached(config: Config, limits: Limits, which: "budget" | "daily limit"): Promise<string> {
   if (which === "budget") {
-    return `This server has already ${verb} ${formatUnits(limits.spent())} of its ${formatUnits(config.budget)} ${config.token} budget. The budget resets when the server restarts; raise BRAINCHAIN_BUDGET_UNITS to allow more per run. Nothing was charged.`;
+    return `This server has already signed payments for ${formatUnits(limits.spent())} of its ${formatUnits(config.budget)} ${config.token} budget. The budget resets when the server restarts; raise BRAINCHAIN_BUDGET_UNITS to allow more per run. Nothing was charged.`;
   }
   const today = await limits.spentToday();
   // One limit covers both chains, so it is named without a token.
-  return `This wallet has already ${verb} ${today === undefined ? "most" : formatUnits(today)} of its daily limit of ${formatUnits(config.daily!)}, counting USDG and USDC together. The limit resets at 00:00 UTC; raise BRAINCHAIN_DAILY_UNITS to allow more. Nothing was charged.`;
+  return `This wallet has already signed payments for ${today === undefined ? "most" : formatUnits(today)} of its daily limit of ${formatUnits(config.daily!)}, counting USDG and USDC together. The limit resets at 00:00 UTC; raise BRAINCHAIN_DAILY_UNITS to allow more. Nothing was charged.`;
 }
 
 /** Same serialization the desk hashes into an order id: sorted keys, no whitespace. */
@@ -59,9 +60,40 @@ export interface DeskOptions {
 }
 
 const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-const firstLine = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0] ?? "";
+export const firstLine = (error: unknown) => (error instanceof Error ? error.message : String(error)).split("\n")[0] ?? "";
 /** Text from the desk or a library, ended as a sentence so what this server adds after it reads apart. */
-const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+export const sentence = (text: string) => (/[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+
+/** A library's error in a few words: the HTTP status or the node's own refusal when there is one, else the error's first line. */
+export function brief(error: unknown): string {
+  for (let cause = error; cause instanceof Error; cause = cause.cause) {
+    const { status } = cause as { status?: unknown };
+    if (typeof status === "number") return `HTTP ${status}.`;
+    if (cause instanceof RpcRequestError && cause.details) return sentence(cause.details.split("\n")[0]!);
+  }
+  return sentence(firstLine(error));
+}
+
+const CHAINS = new Map([
+  ["4663", "Robinhood Chain"],
+  ["8453", "Base"],
+  ["46630", "Robinhood Chain testnet"],
+  ["84532", "Base Sepolia"],
+]);
+const SOLANA = new Map([
+  ["5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "Solana"],
+  ["EtWTRABZaYq6iMfeYKouRu166VU2xqa1", "Solana devnet"],
+]);
+
+/**
+ * Where an order was paid, from its own network: the server reading it may pay on another chain.
+ * An order on `acp:<chain id>` was paid into an escrow there, which the desk never holds.
+ */
+export function paidOn(network: unknown): { chain: string; escrow: boolean } {
+  const [kind, id = ""] = typeof network === "string" ? network.split(":") : [];
+  const chain = kind === "solana" ? SOLANA.get(id) : kind === "eip155" || kind === "acp" ? CHAINS.get(id) : undefined;
+  return { chain: chain ?? "the chain it was paid on", escrow: kind === "acp" };
+}
 /** Statuses that say "not now" rather than "no", alongside every 5xx. */
 const RETRY_LATER = new Set([408, 425, 429]);
 
@@ -90,8 +122,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   const limits = options.limits ?? createLimits(config, account);
   const endpoint = `${config.desk}/x402/tasks`;
   const recent = new Map<string, { at: number; reply: Promise<unknown> }>();
-  /** When this process paid, or may have paid, for each order; the desk can take minutes to know one. */
-  const paidAt = new Map<string, number>();
+  /** When this process paid, or may have paid, for each order, and how to forget its post; the desk can take minutes to know one. */
+  const paid = new Map<string, { at: number; forget: () => void }>();
+  /** What each of those orders still holds against the budget and the daily limit. */
+  const held = new Map<string, Hold>();
 
   /** The desk's price, read from a fresh 402 challenge. */
   async function quotedPrice(signal = AbortSignal.timeout(15_000)): Promise<bigint | undefined> {
@@ -174,6 +208,32 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     };
   }
 
+  /**
+   * The desk answers 402 for a payment it refuses, and for a settlement it could not
+   * confirm, which it keeps as an order and checks against the chain. Says why such a
+   * payment may still be charged, or undefined when the desk has no order or gave it up.
+   */
+  async function stillOpen(order: string): Promise<string | undefined> {
+    let response: Response;
+    try {
+      response = await fetchImpl(`${endpoint}/${order}`, { signal: AbortSignal.timeout(10_000) });
+    } catch {
+      return "the order could not be read";
+    }
+    if (response.status === 404) return undefined;
+    const view = response.ok ? await jsonObject(response) : undefined;
+    if (typeof view?.state !== "string") return "the order could not be read";
+    return view.state === "failed" ? undefined : `it holds the order as ${view.state}`;
+  }
+
+  /** A payment the desk gave up was never charged, so its task can be posted again at once and its amount spent on another. */
+  async function release(order: string): Promise<void> {
+    paid.get(order)?.forget();
+    const hold = held.get(order);
+    held.delete(order);
+    if (hold) await limits.give(hold);
+  }
+
   /** An agent that retries a post it gave up waiting on gets the first order back instead of paying twice. */
   function post(task: TaskRequest): Promise<unknown> {
     const now = Date.now();
@@ -189,7 +249,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     };
     entry.reply.then((reply) => {
       const { order } = reply as { order?: unknown };
-      if (typeof order === "string") paidAt.set(order.toLowerCase(), now);
+      if (typeof order === "string") paid.set(order.toLowerCase(), { at: now, forget });
       else forget();
     }, forget);
     return entry.reply;
@@ -202,7 +262,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       if (hold) await limits.give(hold);
       hold = undefined;
     };
-    const receipt = (order: string) => ({ order, price: `${formatUnits(hold?.amount ?? 0n)} ${config.token}`, statusUrl: `${endpoint}/${order}` });
+    const receipt = (order: string) => {
+      if (hold) held.set(order.toLowerCase(), hold);
+      return { order, price: `${formatUnits(hold?.amount ?? 0n)} ${config.token}`, statusUrl: `${endpoint}/${order}` };
+    };
 
     const client = x402Client.fromConfig({
       schemes: [{ network: config.network, client: new ExactEvmScheme(account()) }],
@@ -262,10 +325,16 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       return { ...reply, ...receipt(typeof reply.order === "string" ? reply.order : orderIdOf(signed)) };
     }
     // The desk answers 400 (a brief it refuses, including one too large to post)
-    // and 402 (a payment it refuses) before settling. Any other answer to a
-    // signed payment may have charged it.
+    // before settling. Any other answer to a signed payment may have charged it,
+    // a 402 included unless the desk has no order for it or gave the payment up.
     if (signed && response.status !== 400 && response.status !== 402) {
       return possiblyCharged(receipt(typeof reply.order === "string" ? reply.order : orderIdOf(signed)), `The desk answered ${response.status}.`);
+    }
+    if (signed && response.status === 402) {
+      const order = orderIdOf(signed);
+      const open = await stillOpen(order);
+      const reason = typeof reply.error === "string" && reply.error.trim() ? ` (${reply.error.trim().replace(/[.!?]+$/, "")})` : "";
+      if (open) return possiblyCharged(receipt(order), `The desk answered 402${reason}, and ${open}.`);
     }
 
     await unreserve();
@@ -282,8 +351,9 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
     const view = await jsonObject(response);
     if (response.status === 404) {
-      const at = paidAt.get(order);
+      const at = paid.get(order)?.at;
       if (at === undefined || Date.now() - at >= REPOST_AFTER_MINUTES * 60_000) {
+        await release(order);
         return {
           order,
           error: "The desk has no order with this id.",
@@ -305,6 +375,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     if (!response.ok) throw new Error(typeof view?.error === "string" ? view.error : `The desk answered ${response.status}.`);
     // An unreadable 2xx comes from a proxy or a dropped connection; ask again.
     if (!view) return { order, error: "The desk's reply could not be read.", done: false, next: "Read the order again shortly.", retryAfterSeconds: 30 };
+    if (view.state === "failed") await release(order);
     // Results are served by the desk itself; anything else is left as a link.
     if (typeof view.result === "string" && view.result.startsWith(`${config.desk}/records/`)) {
       try {
@@ -314,7 +385,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
           view.resultText =
             full.length <= RESULT_LIMIT
               ? full
-              : `${full.slice(0, RESULT_LIMIT)}\n\n[Cut at ${RESULT_LIMIT.toLocaleString("en-US")} of ${full.length.toLocaleString("en-US")} characters. The full result is at ${view.result}.]`;
+              : `${full.slice(0, RESULT_LIMIT)}\n\n[Cut at ${RESULT_LIMIT.toLocaleString("en-US")} of ${full.length.toLocaleString("en-US")} UTF-16 units. The full result is at ${view.result}.]`;
         } else view.resultError = `The result could not be fetched (HTTP ${text.status}); it is at ${view.result}.`;
       } catch (error) {
         view.resultError = `The result could not be fetched (${firstLine(error)}); it is at ${view.result}.`;
@@ -333,9 +404,13 @@ interface Guidance {
 }
 
 /** What the order means for the caller, and when to look again. Every state and status pair is in payments.test.ts. */
-export function guidance(view: Record<string, unknown>, config: Pick<Config, "chain" | "terms">, now = Date.now()): Guidance {
+export function guidance(view: Record<string, unknown>, config: Pick<Config, "terms">, now = Date.now()): Guidance {
   const task = (view.task ?? {}) as { status?: string; accepted?: boolean; due?: { by?: unknown } };
   const wait = (retryAfterSeconds: number, next: string): Guidance => ({ done: false, next, retryAfterSeconds });
+  const { chain, escrow } = paidOn(view.network);
+  // The desk sends no refund for an escrowed order: the escrow gives the money back, with no transaction of the desk's to wait for.
+  const escrowReturns = `escrow on ${chain} that holds the payment returns the full amount`;
+  const refunding = escrow ? `The ${escrowReturns}.` : `The refund is being sent on ${chain}.`;
   // Without a task the desk could not post the order, so no work ever existed.
   const why = typeof view.refundReason === "string" ? `${view.refundReason} ` : task.status === undefined ? "The task could not be posted. " : "";
   const due = typeof task.due?.by === "string" ? task.due.by : undefined;
@@ -354,11 +429,13 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     const closes = due === undefined ? NaN : Date.parse(due);
     const left = Number.isFinite(closes) ? Math.ceil((closes - now) / 1000) : undefined;
     // The desk sends the refund within a minute or two of the window closing.
-    if (left !== undefined && left <= 0) return wait(60, `${start} The dispute window has closed, so the full amount is refunded on ${config.chain} shortly.`);
+    if (left !== undefined && left <= 0) return wait(60, `${start} The dispute window has closed, so ${escrow ? `the ${escrowReturns}` : `the full amount is refunded on ${chain} shortly`}.`);
     const when = left === undefined ? `, ${config.terms.finalAfter} after grading` : ` at ${due}`;
     return wait(
       left === undefined ? 900 : left + 60,
-      `${start} The full amount is refunded on ${config.chain} when the dispute window closes${when}, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`,
+      escrow
+        ? `${start} The ${escrowReturns}, unless the model disputes the grade before the dispute window closes${when}${left === undefined ? "," : ""} and a ruling pays it. Report this now, then read the order again after that time.`
+        : `${start} The full amount is refunded on ${chain} when the dispute window closes${when}, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`,
     );
   };
 
@@ -366,7 +443,7 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     case "paid-out":
       return paid();
     case "refunded":
-      return { done: true, next: `${why}The full amount was refunded on ${config.chain}${typeof view.refundTx === "string" ? ` in ${view.refundTx}` : ""}.` };
+      return { done: true, next: escrow ? `${why}The ${escrowReturns}.` : `${why}The full amount was refunded on ${chain}${typeof view.refundTx === "string" ? ` in ${view.refundTx}` : ""}.` };
     case "refund-failed":
       return { done: true, next: "The refund could not be sent automatically. Write to hello@usebrainchain.com with this order id." };
     case "failed":
@@ -378,7 +455,7 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
     case "unconfirmed":
       return wait(30, "The payment may have gone through; BrainChain is checking it against the chain. Do not post the task again.");
     case "refunding":
-      return wait(60, `${why}The refund is being sent on ${config.chain}.`);
+      return wait(60, `${why}${refunding}`);
   }
 
   switch (task.status) {
@@ -386,7 +463,7 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "ch
       return paid();
     case "refunded":
       // The board has returned the money to the desk; the payer's refund transaction comes next.
-      return wait(60, `${why}The refund is being sent on ${config.chain}.`);
+      return wait(60, `${why}${refunding}`);
     // A dispute, a ruling under its appeal window and an appeal can each still change a grade, accepted or not.
     case "disputed":
       return wait(600, `The grade is disputed; Jev rules on it${by}. If no ruling comes, the grade stands.${result}`);

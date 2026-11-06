@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,8 +10,9 @@ import { describe, expect, it } from "vitest";
 
 import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
+import { guidance } from "./payments.js";
 import { approvalFailure, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
-import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_TASK_NAME, POST_TASK_NAME } from "./tools.js";
+import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
 const KEY = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -82,7 +83,10 @@ describe("the server", () => {
       const description = tools.find((tool) => tool.name === POST_TASK_NAME)!.description!;
       expect(description.startsWith(`Invalid setting: ${problem}`)).toBe(true);
       expect(description).not.toMatch(/USDG|USDC/);
-      expect(tools.find((tool) => tool.name === BOND_TASK_NAME)!.description!.startsWith(`Invalid setting: ${problem}`)).toBe(true);
+      // No setting was read, so neither bond tool can run, and the cap is named by its variable rather than as 0.
+      for (const name of [BOND_TASK_NAME, BOND_STATUS_NAME]) expect(tools.find((tool) => tool.name === name)!.description!.startsWith(`Invalid setting: ${problem}`)).toBe(true);
+      expect(tools.find((tool) => tool.name === BOND_TASK_NAME)!.description).toContain("at most BRAINCHAIN_MAX_BOND_UNITS per task");
+      expect(tools.map((tool) => tool.description).join(" ")).not.toContain("0 USDG");
 
       for (const call of [
         { name: POST_TASK_NAME, arguments: task },
@@ -93,6 +97,8 @@ describe("the server", () => {
         const result = await client.callTool(call);
         expect(result.isError).toBe(true);
         expect(text(result)).toContain(problem);
+        // The setting comes first: a call that is wrong as well hears of the setting alone.
+        expect(JSON.parse(text(await client.callTool({ name: call.name, arguments: {} })))).toEqual(JSON.parse(text(result)));
       }
       expect(logged).toHaveLength(1);
     }
@@ -121,12 +127,24 @@ describe("the server", () => {
       expect(logged).toHaveLength(1);
       expect(logged[0]).toContain(problem);
       const { tools } = await client.listTools();
-      expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toMatch(/^Invalid setting: /);
-      expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toContain(problem);
-      const post = await client.callTool({ name: POST_TASK_NAME, arguments: task });
-      expect(post.isError).toBe(true);
-      expect(text(post)).toContain(problem);
-      expect(text(post)).toContain("stop and tell your operator");
+      // Reading a bond needs the key too, so all three tools lead with the problem.
+      for (const name of [POST_TASK_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]) {
+        expect(tools.find((tool) => tool.name === name)!.description).toMatch(/^Invalid setting: /);
+        expect(tools.find((tool) => tool.name === name)!.description).toContain(problem);
+      }
+      // The tools that need the key answer with the problem, on a network where bonds are closed too.
+      for (const call of [
+        { name: POST_TASK_NAME, arguments: task },
+        { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } },
+        { name: BOND_STATUS_NAME, arguments: { task: "12" } },
+      ]) {
+        for (const network of ["mainnet", "testnet"]) {
+          const result = await (await connect({ ...env, BRAINCHAIN_NETWORK: network }, { fetch: fetchImpl })).callTool(call);
+          expect(result.isError).toBe(true);
+          expect(text(result)).toContain(problem);
+          expect(text(result)).toContain("stop and tell your operator");
+        }
+      }
       expect((await client.callTool({ name: GET_TASK_NAME, arguments: { order } })).isError).toBe(false);
     }
   });
@@ -144,6 +162,71 @@ describe("the server", () => {
     expect(logged).toHaveLength(1);
   });
 
+  it("only returns the setting error from the tools that pay when the state folder was refused at start, and asks the desk for nothing", async () => {
+    for (const stateDir of ["/proc/brainchain", "/dev/shm/brainchain", "/sys/brainchain"]) {
+      const problem = `BRAINCHAIN_STATE_DIR is ${stateDir}, which is a system folder, so the daily limit's record cannot be kept there. Set it to a folder this account can write, then restart the server.`;
+      for (const network of ["mainnet", "testnet"]) {
+        const asked: string[] = [];
+        const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = new Request(input, init);
+          asked.push(`${request.method} ${request.url}`);
+          return new Response(JSON.stringify({ order, state: "posted", task: { status: "hired" } }));
+        }) as typeof fetch;
+        const logged: string[] = [];
+        const client = await connect(
+          { BRAINCHAIN_NETWORK: network, BRAINCHAIN_PAYER_KEY: KEY, BRAINCHAIN_DAILY_UNITS: "1000000", BRAINCHAIN_STATE_DIR: stateDir },
+          { fetch: fetchImpl, log: (message) => logged.push(message) },
+        );
+        expect(logged).toEqual([`brainchain-mcp has an invalid setting: ${problem}`]);
+
+        const { tools } = await client.listTools();
+        for (const name of [POST_TASK_NAME, BOND_TASK_NAME]) {
+          expect(tools.find((tool) => tool.name === name)!.description).toMatch(new RegExp(`^Invalid setting: ${problem.replace(/[.]/g, "\\.")} Until .* this tool only returns that error\\. `));
+          // A call that is wrong in itself gets the same answer: the tool returns that error and nothing else.
+          for (const sent of [name === POST_TASK_NAME ? task : { task: "12", amount: "5" }, {}, { task: "0", extra: true }]) {
+            const result = await client.callTool({ name, arguments: sent });
+            expect(result.isError).toBe(true);
+            expect(JSON.parse(text(result))).toEqual({ error: problem });
+          }
+        }
+        expect(asked).toEqual([]);
+
+        // Reading an order pays nothing and needs no record.
+        expect((await client.callTool({ name: GET_TASK_NAME, arguments: { order } })).isError).toBe(false);
+        expect(asked).toHaveLength(1);
+
+        // Nor does reading a bond: its description names no problem, and on testnet it answers as it always does there.
+        const status = tools.find((tool) => tool.name === BOND_STATUS_NAME)!.description!;
+        expect(status).not.toContain("Invalid setting");
+        expect(status).toMatch(network === "mainnet" ? /^Where this server's wallet 0x[0-9a-fA-F]{40}'s bonds on a task stand: / : /^Delivery bonds run on Robinhood Chain /);
+        if (network === "testnet") {
+          const read = await client.callTool({ name: BOND_STATUS_NAME, arguments: { task: "12" } });
+          expect(JSON.parse(text(read))).toEqual({ error: expect.stringMatching(/^Delivery bonds run on Robinhood Chain /) });
+        }
+      }
+    }
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    expect(readme).toContain("stops the two tools that pay, `brainchain_post_task` and `brainchain_bond_task`; `brainchain_bond_status` and `brainchain_get_task` read nothing that needs the folder and keep working.");
+    expect(readme).not.toContain("the task and bond tools return the error");
+  });
+
+  it("stops the bond status for a key it cannot use, and names that problem alone", async () => {
+    const stateDir = "/proc/brainchain";
+    const logged: string[] = [];
+    const client = await connect({ BRAINCHAIN_PAYER_KEY: "abc", BRAINCHAIN_DAILY_UNITS: "1000000", BRAINCHAIN_STATE_DIR: stateDir }, { log: (message) => logged.push(message) });
+    expect(logged[0]).toContain("BRAINCHAIN_PAYER_KEY must be 64 hex characters");
+    expect(logged[0]).toContain("BRAINCHAIN_STATE_DIR is /proc/brainchain, which is a system folder");
+    const { tools } = await client.listTools();
+    const status = tools.find((tool) => tool.name === BOND_STATUS_NAME)!.description!;
+    expect(status).toMatch(/^Invalid setting: BRAINCHAIN_PAYER_KEY must be 64 hex characters, with or without 0x\. Until then this tool only returns that error\. Where /);
+    expect(status).not.toContain("BRAINCHAIN_STATE_DIR");
+    const read = text(await client.callTool({ name: BOND_STATUS_NAME, arguments: { task: "12" } }));
+    expect(read).toContain("BRAINCHAIN_PAYER_KEY must be 64 hex characters");
+    expect(read).not.toContain("BRAINCHAIN_STATE_DIR");
+    // The two tools that pay name both.
+    expect(text(await client.callTool({ name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } }))).toContain("BRAINCHAIN_STATE_DIR is /proc/brainchain");
+  });
+
   it("names the wallet that pays in the post tool, so an agent never needs the key to find it", async () => {
     const { address } = privateKeyToAccount(`0x${KEY}`);
     for (const env of [{ BRAINCHAIN_PAYER_KEY: KEY }, { BRAINCHAIN_PAYER_KEY_FILE: keyFile(`${KEY}\n`) }]) {
@@ -154,6 +237,22 @@ describe("the server", () => {
     }
     const { tools } = await (await connect({})).listTools();
     expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toContain("this server's wallet on Robinhood Chain");
+  });
+
+  it("says how a rejected task ends without a refund wherever it says the task stays not done", () => {
+    const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    const row = read("README.md").split("\n").find((line) => line.startsWith(`| \`${GET_TASK_NAME}\` |`))!;
+    for (const text of [INSTRUCTIONS, GET_TASK_TOOL.description!, row, read("examples/openclaw/brainchain/SKILL.md")]) {
+      expect(text).toContain("Two things end it without a refund transaction: a ruling that pays");
+      expect(text).toContain("refund-failed");
+    }
+    // What those sentences describe: the order is done, with no refund transaction, in both cases.
+    const config = resolveConfig({});
+    const rejected = { network: config.network, task: { status: "refunded", accepted: false } };
+    expect(guidance({ ...rejected, state: "refund-failed" }, config)).toEqual({ done: true, next: "The refund could not be sent automatically. Write to hello@usebrainchain.com with this order id." });
+    expect(guidance({ network: config.network, state: "paid-out", task: { status: "paid", accepted: false } }, config)).toEqual({ done: true, next: "The model was paid." });
+    expect(guidance({ network: config.network, state: "posted", task: { status: "paid", accepted: false } }, config)).toEqual({ done: true, next: "The model was paid." });
+    expect(guidance({ network: config.network, state: "posted", task: { status: "graded", accepted: false } }, config).done).toBe(false);
   });
 
   it("tells an agent to leave the key alone", () => {
@@ -240,6 +339,20 @@ describe("wallet", () => {
     );
     expect(walletReport(testnet, address, { balance: 1_000_000n, allowance: 100_000_000n, eth: 0n }, approve)).toContain("It holds 1 test USDG.\nPermit2 may spend up to 100 of its test USDG.");
     expect(walletReport(testnet, address, { balance: 1_000_000n, allowance: 2n ** 256n - 1n, eth: 0n }, approve)).toContain("Permit2 may spend any amount of its test USDG.");
+  });
+
+  it("treats a raised price limit as a ceiling: the wallet may hold enough to post while it holds less than that", () => {
+    const raised = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_MAX_PRICE_UNITS: "5000000" });
+    expect(walletReport(raised, address, { balance: 2_000_000n, allowance: 2_000_000n, eth: 0n }, approve)).toBe(
+      [
+        `${address} pays for tasks in test USDG on Robinhood Chain testnet.`,
+        "It holds 2 test USDG. A task costs at most 5 test USDG; send at least 3 test USDG to it on Robinhood Chain testnet to cover that.",
+        `Permit2 is not approved to spend enough of its test USDG for a task that costs 5 (only 2). Run \`${approve}\` once; it needs a little ETH on Robinhood Chain testnet, and the wallet holds 0 ETH there.`,
+      ].join("\n"),
+    );
+    expect(walletReport(raised, address, { balance: 5_000_000n, allowance: 5_000_000n, eth: 0n }, approve)).toBe(
+      `${address} pays for tasks in test USDG on Robinhood Chain testnet.\nIt holds 5 test USDG.\nPermit2 may spend up to 5 of its test USDG.`,
+    );
   });
 
   it("names no approval for USDC, which pays by signature, and says when the chain could not be read", () => {

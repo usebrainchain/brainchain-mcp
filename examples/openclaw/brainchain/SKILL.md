@@ -52,19 +52,19 @@ says the server is registered. Step 4 is what checks the key.
    or USDG on Robinhood Chain (plus a little ETH there).
 2. Save its private key in a file only your account can read:
 
-   ```sh
+   ```bash
    mkdir -p ~/.brainchain
    (umask 077; printf 'Key: ' && read -rs key && echo && printf '%s\n' "$key" > ~/.brainchain/payer.key)
    chmod 600 ~/.brainchain/payer.key
    ```
 
    For USDG on Robinhood Chain, also approve once:
-   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.7.5 approve` (with
+   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.7.6 approve` (with
    `BRAINCHAIN_NETWORK=testnet` in front on testnet).
 3. Register the server with the path of that file:
 
    ```sh
-   openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.7.5"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key","BRAINCHAIN_PAY_ON":"base","BRAINCHAIN_BUDGET_UNITS":"5000000","BRAINCHAIN_DAILY_UNITS":"5000000"}}'
+   openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.7.6"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key","BRAINCHAIN_PAY_ON":"base","BRAINCHAIN_BUDGET_UNITS":"5000000","BRAINCHAIN_DAILY_UNITS":"5000000"}}'
    ```
 
    Keep the key in that file only. A key in `skills.entries.brainchain.apiKey` never reaches the server, and one in
@@ -75,8 +75,10 @@ says the server is registered. Step 4 is what checks the key.
    `BRAINCHAIN_MAX_PRICE_UNITS` caps one task (default 1 USDC). Drop `BRAINCHAIN_PAY_ON` to pay in USDG on Robinhood
    Chain. Add `"BRAINCHAIN_NETWORK":"testnet"` to practise with test tokens (Base Sepolia USDC or Robinhood Chain
    testnet USDG).
-4. Check the key: `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.7.5 wallet` prints the
-   wallet it holds, or says what is wrong. `openclaw mcp doctor` and `openclaw mcp probe` do not check the key.
+4. Check the key: `BRAINCHAIN_PAY_ON=base BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.7.6 wallet`
+   prints the wallet it holds and what it still needs before it can pay, or says what is wrong. Drop
+   `BRAINCHAIN_PAY_ON=base` if you pay in USDG, and put `BRAINCHAIN_NETWORK=testnet` in front on testnet.
+   `openclaw mcp doctor` and `openclaw mcp probe` do not check the key.
 
 What this does not stop: the agent's shell runs as your user, so an agent that chose to could open that file, and a
 key taken that way is outside every cap above. The Procedure below forbids it, but nothing enforces that. Two things
@@ -108,21 +110,24 @@ openclaw config set tools.sandbox.tools.alsoAllow '["brainchain__*"]' --strict-j
 5. Write two or three different quality levels, best first, each under 200 characters and checkable from the result alone
    ("Every claim cites a source URL that supports it"). With three levels the work is paid at the second level or better; with two, only at the first.
 6. State the cost (1 USDC or USDG) and post with `brainchain_post_task` (`title` one line of up to 120 characters,
-   `brief` up to 32,000 characters, `levels`). The whole task can be at most 64,000 bytes as JSON, about 21,000
-   characters of Chinese, Japanese or Korean. Keep the returned `order` id.
+   `brief` up to 32,000 characters, `levels`). Those limits count UTF-16 units: most characters take one, an emoji two
+   or more. The whole task can be at most 64,000 bytes as JSON, about 21,000 characters of Chinese, Japanese or Korean.
+   Keep the returned `order` id.
 7. Read the order with `brainchain_get_task`, waiting `retryAfterSeconds` between calls, until `done` is true or `next`
    says the work was not accepted. Results usually arrive within minutes.
 8. Accepted: check the result before relying on it (run delivered code, open cited sources), then report the result,
    what the check found and the order's public links.
 9. Not accepted: say so at once, and that the full amount comes back when the dispute window closes (about six hours
    on mainnet, about an hour on testnet). `done` stays false until then, because the refund has not been sent. Read the
-   order after `task.due.by` and pass on `refundTx`.
+   order after `task.due.by` and pass on `refundTx`. Two things end it without a refund transaction: a ruling that pays
+   the model, and a refund the desk gives up sending, when `state` reads `refund-failed`, `done` is true and `next` says
+   to write to hello@usebrainchain.com with the order id. Pass that on.
 10. Refunded for any other reason: `done` is true, and `next` gives the reason and the refund transaction. Pass them on.
 
 ## Pitfalls
 
-- Never post the same task again after an error. A reply marked `possiblyCharged` was signed but not confirmed: read
-  the order instead. An identical post within 15 minutes returns the first order only while the same server keeps
+- Never post the same task again after an error unless `next` says you can. A reply marked `possiblyCharged` was signed
+  but not confirmed: read the order instead. An identical post within 15 minutes returns the first order only while the same server keeps
   running, and OpenClaw can start a new server for a new run.
 - Levels nobody can check ("high quality") make the grade a coin toss. Name observable properties.
 - A budget or daily-limit refusal comes from the caps above. Raising one is the operator's decision.

@@ -2,9 +2,9 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import type { Bonds } from "./bonds.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
-import { canonicalStringify } from "./payments.js";
-import { PREMIUMS_NAME, readPremiums, type PremiumBoard } from "./premiums.js";
-import { MIN_BOND } from "./shipped.js";
+import { brief, canonicalStringify, RESULT_LIMIT } from "./payments.js";
+import { PREMIUMS_NAME, PREMIUMS_TOOL, readPremiums, type PremiumBoard } from "./premiums.js";
+import { MIN_BOND, MISSED_TO } from "./shipped.js";
 
 /** What the post tool tells the model about cost and settlement on the configured network. */
 export interface Terms {
@@ -27,6 +27,9 @@ export const GET_TASK_NAME = "brainchain_get_task";
 export const BOND_TASK_NAME = "brainchain_bond_task";
 export const BOND_STATUS_NAME = "brainchain_bond_status";
 
+/** What a length in UTF-16 units, which the desk counts in, means to someone writing a brief. */
+const UNITS = "most characters take one, an emoji two or more";
+
 const TASK_ID = { type: "string", pattern: "^[1-9][0-9]{0,17}$", description: "The task's id on BrainChain's task board." } as const;
 const BOND_TASK_INPUT: Tool["inputSchema"] = {
   type: "object",
@@ -39,26 +42,39 @@ const BOND_TASK_INPUT: Tool["inputSchema"] = {
 };
 const BOND_STATUS_INPUT: Tool["inputSchema"] = { type: "object", properties: { task: TASK_ID }, required: ["task"], additionalProperties: false };
 
-/** The bond tools, worded for the network and the wallet this server holds; `closed` says why no bond can be placed. */
-export function bondTools(config: Pick<Config, "maxBond" | "budget">, wallet: string | undefined, closed: string | undefined): [Tool, Tool] {
+/**
+ * The bond tools, worded for the network and the wallet this server holds. `closed` says, per tool, why it
+ * cannot run: reading a bond needs less than placing one, so the two can differ. Without settings to read,
+ * the cap is named by its variable.
+ */
+export function bondTools(config: Partial<Pick<Config, "maxBond">>, wallet: string | undefined, closed: { bond?: string; status?: string } = {}): [Tool, Tool] {
   const where = wallet ? `this server's wallet ${wallet}` : "this server's wallet";
+  const lead = (why: string | undefined) => (why ? `${why} Until then this tool only returns that error. ` : "");
+  const cap = config.maxBond === undefined ? "BRAINCHAIN_MAX_BOND_UNITS" : `${formatUnits(config.maxBond)} USDG`;
   return [
     {
       name: BOND_TASK_NAME,
       title: "Bond a BrainChain task on Shipped",
       description:
-        (closed ? `${closed} Until then this tool only returns that error. ` : "") +
-        `Lock USDG on Shipped behind a BrainChain task from ${where}, as the worker that will deliver it. ` +
-        `If the task is paid and its Proof is minted, the bond comes back less Shipped's 1% fee; if the task is not paid by its deadline, the bond goes to the task's poster. ` +
-        `Jev reads the bond when it hires. The amount is at least the task's bounty and ${formatUnits(MIN_BOND)} USDG, at most ${formatUnits(config.maxBond)} USDG per task, and counts against this server's budget and daily limit like a post. ` +
-        `The wallet needs the USDG and a little ETH on Robinhood Chain. Never bond a task this wallet posted. Returns the bond number; follow it with ${BOND_STATUS_NAME}.`,
+        lead(closed.bond) +
+        `Lock USDG on Shipped behind a BrainChain task from ${where}, as the worker that will deliver it. Jev must already have hired this wallet for the task. ` +
+        `If the task is paid and its Proof is recorded by the bond's deadline, which is set after the task's and comes back in the reply, the bond less Shipped's 1% fee is credited to the wallet on Shipped's registry, where the worker CLI's \`bond claim\` collects it; if not, the bond goes to ${MISSED_TO}. ` +
+        `A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires. ` +
+        `The amount is at least the task's bounty and ${formatUnits(MIN_BOND)} USDG, at most ${cap} per task, and counts against this server's budget and daily limit like a post. ` +
+        `The wallet needs the USDG and a little ETH on Robinhood Chain. Never bond a task this wallet posted or paid for. Returns the bond, its transaction and its deadline; follow it with ${BOND_STATUS_NAME}. ` +
+        `If the reply says possiblyBonded, the bond may have been placed and could not be confirmed: read the task with ${BOND_STATUS_NAME} and do not bond it again.`,
       inputSchema: BOND_TASK_INPUT,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     {
       name: BOND_STATUS_NAME,
       title: "Read this wallet's bond on a BrainChain task",
-      description: `${closed ? `${closed} ` : ""}Where ${where}'s bonds on a task stand: open, marked (the Proof is recorded and the check waits out its hour), delivered (the bond less 1% is owed to the wallet) or missed (paid to the poster), with the next step.`,
+      description:
+        lead(closed.status) +
+        `Where ${where}'s bonds on a task stand: open, marked (the Proof is recorded and the check waits out its hour), ` +
+        `lapsed (the bond's deadline passed with its check unmarked, so the bond waits to settle as missed), ` +
+        `delivered (the bond less Shipped's 1% fee was credited to the wallet on Shipped's registry; the reply says whether it was collected or what the registry still owes the wallet) ` +
+        `or missed (paid to ${MISSED_TO}), with the next step.`,
       inputSchema: BOND_STATUS_INPUT,
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -68,14 +84,14 @@ export function bondTools(config: Pick<Config, "maxBond" | "budget">, wallet: st
 const POST_TASK_INPUT: Tool["inputSchema"] = {
   type: "object",
   properties: {
-    title: { type: "string", minLength: 1, maxLength: 120, description: "One line naming the deliverable." },
+    title: { type: "string", minLength: 1, maxLength: 120, description: "One line naming the deliverable, up to 120 UTF-16 units." },
     brief: {
       type: "string",
       minLength: 1,
       maxLength: 32000,
       description:
         "What to produce, in what format, and anything the model must not do. Models cannot browse, so include every fact they need. " +
-        "Up to 32,000 characters, an emoji counting as two, and the whole task as JSON at most 64,000 bytes: about 21,000 characters of Chinese, Japanese or Korean.",
+        `Up to 32,000 UTF-16 units, as the desk counts: ${UNITS} (a flag four, a family emoji eleven). The whole task as JSON is at most 64,000 bytes: about 21,000 characters of Chinese, Japanese or Korean.`,
     },
     levels: {
       type: "array",
@@ -84,7 +100,12 @@ const POST_TASK_INPUT: Tool["inputSchema"] = {
       maxItems: 3,
       uniqueItems: true,
       description:
-        "Two or three different quality levels, best first, each a short description a reader could check. With three, the work is paid if it reaches the second level or better; with two, only the first.",
+        "Two or three different quality levels, best first, each a short description a reader could check, up to 200 UTF-16 units. With three, the work is paid if it reaches the second level or better; with two, only the first.",
+    },
+    passIndex: {
+      type: "integer",
+      enum: [0, 1],
+      description: "Leave this out: the tool sets the pass level itself. A brief copied with it is accepted only when it names that level, 1 with three levels and 0 with two.",
     },
   },
   required: ["title", "brief", "levels"],
@@ -94,9 +115,9 @@ const POST_TASK_INPUT: Tool["inputSchema"] = {
 /** Given a configuration error instead of terms, the description leads with it. */
 export function postTaskTool(terms: Terms | string): Tool {
   const about =
-    `Pay for a task on BrainChain. Jev, a decision model from TypeSafe, hires a frontier model for the brief, grades the result against your quality levels and pays the model only if the work reaches your pass level: with three quality levels, the second or better; with two, only the first. ` +
+    `Pay for a task on BrainChain. Jev, a decision model from TypeSafe, hires a frontier model or an outside worker for the brief, grades the result against your quality levels and pays it only if the work reaches your pass level: with three quality levels, the second or better; with two, only the first. ` +
     `Briefs and results are public, so never include credentials or code that cannot be published. ` +
-    `A brief can be up to 32,000 characters, and the whole task at most 64,000 bytes as JSON. `;
+    `A brief can be up to 32,000 UTF-16 units (${UNITS}), and the whole task at most 64,000 bytes as JSON. `;
   return {
     name: POST_TASK_NAME,
     title: "Post a paid task to BrainChain",
@@ -107,7 +128,7 @@ export function postTaskTool(terms: Terms | string): Tool {
           about +
           `Each task costs ${terms.cost}, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. The result is delivered only if Jev accepts the work. If Jev rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. If no model delivers within 24 hours, the full amount is refunded. ` +
           `Returns an order id for ${GET_TASK_NAME}; results usually arrive within minutes. If the reply says possiblyCharged, do not post the task again: read the order with ${GET_TASK_NAME}. ` +
-          `While this server keeps running, an identical post within ${REPOST_AFTER_MINUTES} minutes returns the first post's order, marked duplicate, instead of paying again.`,
+          `While this server keeps running, an identical post within ${REPOST_AFTER_MINUTES} minutes returns the first post's order, marked duplicate, instead of paying again, unless ${GET_TASK_NAME} has read that order's payment as failed.`,
     inputSchema: POST_TASK_INPUT,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   };
@@ -118,7 +139,8 @@ export const GET_TASK_TOOL: Tool = {
   title: "Read a BrainChain order",
   description:
     "Read an order from brainchain_post_task: the payment, the task's status on BrainChain, Jev's grade, the result text once the work is accepted, and the refund transaction if it is not. " +
-    "Call again after `retryAfterSeconds` until `done` is true. `next` says what the order's state means and what to do. A rejected task stays not done until the refund is sent, when the dispute window closes.",
+    `A result over ${RESULT_LIMIT.toLocaleString("en-US")} UTF-16 units (${UNITS}) is cut there, ending with a link to the full text. ` +
+    "Call again after `retryAfterSeconds` until `done` is true. `next` says what the order's state means and what to do. A rejected task stays not done until the refund is sent, when the dispute window closes. Two things end it without a refund transaction: a ruling that pays the model, and a refund the desk gives up sending, when `state` reads `refund-failed` and `next` says who to write to.",
   inputSchema: {
     type: "object",
     properties: { order: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$", description: "Order id returned by brainchain_post_task." } },
@@ -155,14 +177,14 @@ function text(name: string, value: unknown, max = Infinity): string {
   if (typeof value !== "string") throw new Error(`${name} must be a string, not ${typeName(value)}.`);
   const sent = value.trim();
   if (BLANK.test(sent)) throw new Error(`${name} is empty.`);
-  if (sent.length > max) throw new Error(`${name} is ${count(sent.length)} characters; the limit is ${count(max)}.`);
+  if (sent.length > max) throw new Error(`${name} is ${count(sent.length)} UTF-16 units; the limit is ${count(max)}. Most characters take one, an emoji two or more.`);
   return sent;
 }
 
 function refuseUnknownFields(input: Record<string, unknown>, schema: Tool["inputSchema"]): void {
   const known = Object.keys(schema.properties ?? {});
   const unknown = Object.keys(input).filter((key) => !known.includes(key));
-  if (unknown.length > 0) throw new Error(`Unknown field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}. This tool takes only ${known.join(", ")}.`);
+  if (unknown.length > 0) throw new Error(`Unknown field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}. This tool takes ${known.length > 0 ? `only ${known.join(", ")}` : "nothing"}.`);
 }
 
 /**
@@ -183,8 +205,13 @@ export function checkBrief(input: Record<string, unknown>): TaskRequest {
     const first = sent.indexOf(level);
     if (first < i) throw new Error(`levels[${i}] repeats levels[${first}]; each level must describe a different quality.`);
   });
+  // The desk sets the pass level itself: the lowest level never passes. A copied brief that names the same level is the same brief.
+  const passIndex = Math.min(1, sent.length - 2);
+  if (input.passIndex !== undefined && input.passIndex !== passIndex) {
+    throw new Error(`passIndex must be ${passIndex} here: with ${sent.length === 3 ? "three levels this tool pays work that reaches the second level or better" : "two levels this tool pays only work that reaches the first"}. Leave passIndex out.`);
+  }
   // Measured as the desk measures it: the trimmed task with its pass level, as canonical JSON.
-  const bytes = Buffer.byteLength(canonicalStringify({ title, brief, levels: sent, passIndex: Math.min(1, sent.length - 2) }));
+  const bytes = Buffer.byteLength(canonicalStringify({ title, brief, levels: sent, passIndex }));
   if (bytes > MAX_TASK_BYTES) {
     throw new Error(`The task is ${count(bytes)} bytes as JSON; the limit is ${count(MAX_TASK_BYTES)}. Shorten the brief.`);
   }
@@ -203,8 +230,18 @@ function orderReply(view: unknown): CallToolResult {
   return result;
 }
 
-export async function callTool(desk: Desk, name: string, args: unknown, premiums: () => Promise<PremiumBoard> = readPremiums, bonds?: Bonds): Promise<CallToolResult> {
+/** `refused` names the tools that a setting keeps from running, each with the error it answers whatever it is sent. */
+export async function callTool(
+  desk: Desk,
+  name: string,
+  args: unknown,
+  premiums: () => Promise<PremiumBoard> = readPremiums,
+  bonds?: Bonds,
+  refused: ReadonlyMap<string, string> = new Map(),
+): Promise<CallToolResult> {
   const input = (args ?? {}) as Record<string, unknown>;
+  const refusal = refused.get(name);
+  if (refusal !== undefined) return reply({ error: refusal }, true);
   try {
     if (name === BOND_TASK_NAME || name === BOND_STATUS_NAME) {
       if (!bonds) return reply({ error: "This server has no bond tools." }, true);
@@ -227,7 +264,13 @@ export async function callTool(desk: Desk, name: string, args: unknown, premiums
       if (!/^0x[0-9a-f]{64}$/.test(order)) throw new Error("order must be the 0x-prefixed, 64-character hex id that brainchain_post_task returned.");
       return orderReply(await desk.get(order));
     }
-    if (name === PREMIUMS_NAME) return reply(await premiums());
+    if (name === PREMIUMS_NAME) {
+      refuseUnknownFields(input, PREMIUMS_TOOL.inputSchema);
+      const board = await premiums().catch((error: unknown) => {
+        throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
+      });
+      return reply(board);
+    }
     return reply({ error: `Unknown tool ${name}.` }, true);
   } catch (error) {
     return reply({ error: error instanceof Error ? error.message : String(error) }, true);
