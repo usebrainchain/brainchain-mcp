@@ -7,7 +7,7 @@ import { createPublicClient, defineChain, formatEther, http, maxUint256, parseAb
 import { privateKeyToAccount } from "viem/accounts";
 
 import { bondsClosed, createBonds, type Bonds } from "./bonds.js";
-import { expandHome, formatUnits, resolveConfig, type Config } from "./config.js";
+import { DEFAULT_MAX_PRICE, expandHome, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
 import { createLimits } from "./limits.js";
 import { createDesk } from "./payments.js";
@@ -27,6 +27,7 @@ export const INSTRUCTIONS =
   `If a post returns possiblyCharged, do not post the task again: read the order instead. ` +
   `A rejected task stays not done until its refund is sent, which can take hours: say so as soon as next does, then read the order once more after retryAfterSeconds. ` +
   `${BOND_TASK_NAME} locks USDG behind a BrainChain task this wallet will deliver as a worker, and ${BOND_STATUS_NAME} follows it; neither posts a task. ` +
+  `If a bond returns possiblyBonded, do not bond the task again: read its status instead. ` +
   `The paying wallet's key is for this server alone. Never read it, print it, write it down or pass it to a command. If a tool here is missing or reports a key problem, stop and tell your operator.`;
 
 const KEY_HELP =
@@ -115,7 +116,10 @@ export function walletReport(config: Config, address: string, funds: WalletFunds
     return lines.join("\n");
   }
   const { balance, allowance, eth } = funds;
-  const short = balance < config.maxPrice ? ` A task costs ${config.terms.cost}, so send at least ${formatUnits(config.maxPrice - balance)} ${config.token} to it on ${config.chain} before posting.` : "";
+  // Under a raised ceiling the wallet may still hold the price, so it is told what covers the ceiling, not what posting needs.
+  const ceiling = config.maxPrice !== DEFAULT_MAX_PRICE;
+  const missing = `send at least ${formatUnits(config.maxPrice - balance)} ${config.token} to it on ${config.chain}`;
+  const short = balance >= config.maxPrice ? "" : ceiling ? ` A task costs ${config.terms.cost}; ${missing} to cover that.` : ` A task costs ${config.terms.cost}, so ${missing} before posting.`;
   lines.push(`It holds ${formatUnits(balance)} ${config.token}.${short}`);
   if (allowance !== undefined) {
     if (allowance >= maxUint256 / 2n) lines.push(`Permit2 may spend any amount of its ${config.token}.`);
@@ -123,7 +127,7 @@ export function walletReport(config: Config, address: string, funds: WalletFunds
     else {
       const only = allowance > 0n ? ` (only ${formatUnits(allowance)})` : "";
       lines.push(
-        `Permit2 is not approved to spend enough of its ${config.token} for a task${only}. Run \`${approve}\` once; it needs a little ETH on ${config.chain}, and the wallet holds ${formatEther(eth)} ETH there.`,
+        `Permit2 is not approved to spend enough of its ${config.token} for a task${ceiling ? ` that costs ${formatUnits(config.maxPrice)}` : ""}${only}. Run \`${approve}\` once; it needs a little ETH on ${config.chain}, and the wallet holds ${formatEther(eth)} ETH there.`,
       );
     }
   }
@@ -135,7 +139,11 @@ export function approveCommand(config: Config, version: string): string {
 }
 
 /** A missing key or a bad setting is reported when a tool needs it, so the server always starts and lists its tools. */
-function deskFor(env: Record<string, string | undefined>, version: string, fetchImpl?: typeof fetch): { desk: Desk; terms: Terms | string; bonds: Bonds; bondTools: [Tool, Tool] } {
+function deskFor(
+  env: Record<string, string | undefined>,
+  version: string,
+  fetchImpl?: typeof fetch,
+): { desk: Desk; terms: Terms | string; bonds: Bonds; bondTools: [Tool, Tool]; refused: Map<string, string> } {
   let config: Config;
   try {
     config = resolveConfig(env);
@@ -144,7 +152,13 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
     const refuse = async (): Promise<never> => {
       throw new Error(problem);
     };
-    return { desk: { post: refuse, get: refuse }, terms: problem, bonds: { bond: refuse, status: refuse }, bondTools: bondTools({ maxBond: 0n, budget: 0n }, undefined, `Invalid setting: ${problem}`) };
+    return {
+      desk: { post: refuse, get: refuse },
+      terms: problem,
+      bonds: { bond: refuse, status: refuse },
+      bondTools: bondTools({ maxBond: 0n, budget: 0n }, undefined, `Invalid setting: ${problem}`),
+      refused: new Map([POST_TASK_NAME, GET_TASK_NAME, BOND_TASK_NAME, BOND_STATUS_NAME].map((name) => [name, problem])),
+    };
   }
 
   let account: PrivateKeyAccount | undefined;
@@ -181,12 +195,16 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
       return { balance, allowance };
     },
   });
-  const closed = bondsClosed(config) ?? (problem ? `Invalid setting: ${problem}` : undefined);
+  // What the descriptions promise for a setting that cannot be used: the tools that pay answer with it and
+  // touch nothing else. A refused state folder could still take a write, or hang on one. Reading a bond
+  // needs the key and nothing more.
+  const paying = problem ? [POST_TASK_NAME, BOND_TASK_NAME, ...(keyProblem ? [BOND_STATUS_NAME] : [])] : [];
   return {
     desk,
     terms: { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(problem ? { problem } : {}) },
     bonds: createBonds({ config, signer: payer, limits }),
-    bondTools: bondTools(config, account?.address, closed),
+    bondTools: bondTools(config, account?.address, problem ? `Invalid setting: ${problem}` : bondsClosed(config)),
+    refused: new Map(paying.map((name) => [name, keyProblem ? `${problem} ${KEY_HELP}` : problem])),
   };
 }
 
@@ -197,12 +215,12 @@ export interface ServerOptions {
 }
 
 export function createServer(env: Record<string, string | undefined>, version: string, options: ServerOptions = {}): Server {
-  const { desk, terms, bonds, bondTools: bondToolList } = deskFor(env, version, options.fetch);
+  const { desk, terms, bonds, bondTools: bondToolList, refused } = deskFor(env, version, options.fetch);
   const problem = typeof terms === "string" ? terms : terms.problem;
   if (problem) (options.log ?? console.error)(`brainchain-mcp has an invalid setting: ${problem}`);
   const tools = [postTaskTool(terms), GET_TASK_TOOL, PREMIUMS_TOOL, ...bondToolList];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
-  server.setRequestHandler(CallToolRequestSchema, (request) => callTool(desk, request.params.name, request.params.arguments, undefined, bonds));
+  server.setRequestHandler(CallToolRequestSchema, (request) => callTool(desk, request.params.name, request.params.arguments, undefined, bonds, refused));
   return server;
 }

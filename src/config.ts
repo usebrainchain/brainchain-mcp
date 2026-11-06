@@ -87,7 +87,8 @@ export const MAX_TIMEOUT_SECONDS = 600;
  * recorded any order it charged.
  */
 export const REPOST_AFTER_MINUTES = 15;
-const DEFAULT_MAX_PRICE = 1_000_000n;
+/** The desk's price for a task. A higher BRAINCHAIN_MAX_PRICE_UNITS is a ceiling, not what a task costs. */
+export const DEFAULT_MAX_PRICE = 1_000_000n;
 const DEFAULT_BUDGET = 10_000_000n;
 const DEFAULT_MAX_BOND = 10_000_000n;
 

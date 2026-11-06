@@ -203,8 +203,18 @@ function orderReply(view: unknown): CallToolResult {
   return result;
 }
 
-export async function callTool(desk: Desk, name: string, args: unknown, premiums: () => Promise<PremiumBoard> = readPremiums, bonds?: Bonds): Promise<CallToolResult> {
+/** `refused` names the tools that a setting keeps from running, each with the error it answers whatever it is sent. */
+export async function callTool(
+  desk: Desk,
+  name: string,
+  args: unknown,
+  premiums: () => Promise<PremiumBoard> = readPremiums,
+  bonds?: Bonds,
+  refused: ReadonlyMap<string, string> = new Map(),
+): Promise<CallToolResult> {
   const input = (args ?? {}) as Record<string, unknown>;
+  const refusal = refused.get(name);
+  if (refusal !== undefined) return reply({ error: refusal }, true);
   try {
     if (name === BOND_TASK_NAME || name === BOND_STATUS_NAME) {
       if (!bonds) return reply({ error: "This server has no bond tools." }, true);

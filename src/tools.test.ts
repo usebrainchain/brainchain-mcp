@@ -90,6 +90,21 @@ describe("callTool", () => {
     expect(calls).toBe(0);
   });
 
+  it("answers a tool that a setting keeps from running with that setting's error, whatever it is sent", async () => {
+    let calls = 0;
+    const counting: Desk = { post: async () => ({ calls: ++calls }), get: async (order) => ({ order, calls: ++calls }) };
+    const refused = new Map([[POST_TASK_NAME, "BRAINCHAIN_STATE_DIR cannot be used."]]);
+    for (const input of [{ title: "t", brief: "b", levels: ["good", "ok"] }, {}, { title: 5, extra: true }, undefined]) {
+      const result = await callTool(counting, POST_TASK_NAME, input, undefined, undefined, refused);
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: "BRAINCHAIN_STATE_DIR cannot be used." });
+    }
+    expect(calls).toBe(0);
+    // The other tools are untouched, and a name that is no tool's stays unknown.
+    expect((await callTool(counting, GET_TASK_NAME, { order: `0x${"a".repeat(64)}` }, undefined, undefined, refused)).isError).toBe(false);
+    expect(body(await callTool(counting, "constructor", {}, undefined, undefined, refused))).toEqual({ error: "Unknown tool constructor." });
+  });
+
   it("says what is wrong with a post, field by field", async () => {
     const task = { title: "t", brief: "b", levels: ["good", "ok"] };
     const { title: _title, ...noTitle } = task;

@@ -93,6 +93,8 @@ describe("the server", () => {
         const result = await client.callTool(call);
         expect(result.isError).toBe(true);
         expect(text(result)).toContain(problem);
+        // The setting comes first: a call that is wrong as well hears of the setting alone.
+        expect(JSON.parse(text(await client.callTool({ name: call.name, arguments: {} })))).toEqual(JSON.parse(text(result)));
       }
       expect(logged).toHaveLength(1);
     }
@@ -123,10 +125,19 @@ describe("the server", () => {
       const { tools } = await client.listTools();
       expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toMatch(/^Invalid setting: /);
       expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toContain(problem);
-      const post = await client.callTool({ name: POST_TASK_NAME, arguments: task });
-      expect(post.isError).toBe(true);
-      expect(text(post)).toContain(problem);
-      expect(text(post)).toContain("stop and tell your operator");
+      // The tools that need the key answer with the problem, on a network where bonds are closed too.
+      for (const call of [
+        { name: POST_TASK_NAME, arguments: task },
+        { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } },
+        { name: BOND_STATUS_NAME, arguments: { task: "12" } },
+      ]) {
+        for (const network of ["mainnet", "testnet"]) {
+          const result = await (await connect({ ...env, BRAINCHAIN_NETWORK: network }, { fetch: fetchImpl })).callTool(call);
+          expect(result.isError).toBe(true);
+          expect(text(result)).toContain(problem);
+          expect(text(result)).toContain("stop and tell your operator");
+        }
+      }
       expect((await client.callTool({ name: GET_TASK_NAME, arguments: { order } })).isError).toBe(false);
     }
   });
@@ -142,6 +153,42 @@ describe("the server", () => {
     expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toMatch(/^Invalid setting: BRAINCHAIN_STATE_DIR is /);
     await connect(env, { log: (message) => logged.push(message) });
     expect(logged).toHaveLength(1);
+  });
+
+  it("only returns the setting error from the tools that pay when the state folder was refused at start, and asks the desk for nothing", async () => {
+    for (const stateDir of ["/proc/brainchain", "/dev/shm/brainchain", "/sys/brainchain"]) {
+      const problem = `BRAINCHAIN_STATE_DIR is ${stateDir}, which is a system folder, so the daily limit's record cannot be kept there. Set it to a folder this account can write, then restart the server.`;
+      for (const network of ["mainnet", "testnet"]) {
+        const asked: string[] = [];
+        const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = new Request(input, init);
+          asked.push(`${request.method} ${request.url}`);
+          return new Response(JSON.stringify({ order, state: "posted", task: { status: "hired" } }));
+        }) as typeof fetch;
+        const logged: string[] = [];
+        const client = await connect(
+          { BRAINCHAIN_NETWORK: network, BRAINCHAIN_PAYER_KEY: KEY, BRAINCHAIN_DAILY_UNITS: "1000000", BRAINCHAIN_STATE_DIR: stateDir },
+          { fetch: fetchImpl, log: (message) => logged.push(message) },
+        );
+        expect(logged).toEqual([`brainchain-mcp has an invalid setting: ${problem}`]);
+
+        const { tools } = await client.listTools();
+        for (const name of [POST_TASK_NAME, BOND_TASK_NAME]) {
+          expect(tools.find((tool) => tool.name === name)!.description).toMatch(new RegExp(`^Invalid setting: ${problem.replace(/[.]/g, "\\.")} Until .* this tool only returns that error\\. `));
+          // A call that is wrong in itself gets the same answer: the tool returns that error and nothing else.
+          for (const sent of [name === POST_TASK_NAME ? task : { task: "12", amount: "5" }, {}, { task: "0", extra: true }]) {
+            const result = await client.callTool({ name, arguments: sent });
+            expect(result.isError).toBe(true);
+            expect(JSON.parse(text(result))).toEqual({ error: problem });
+          }
+        }
+        expect(asked).toEqual([]);
+
+        // Reading an order pays nothing and needs no record.
+        expect((await client.callTool({ name: GET_TASK_NAME, arguments: { order } })).isError).toBe(false);
+        expect(asked).toHaveLength(1);
+      }
+    }
   });
 
   it("names the wallet that pays in the post tool, so an agent never needs the key to find it", async () => {
@@ -240,6 +287,20 @@ describe("wallet", () => {
     );
     expect(walletReport(testnet, address, { balance: 1_000_000n, allowance: 100_000_000n, eth: 0n }, approve)).toContain("It holds 1 test USDG.\nPermit2 may spend up to 100 of its test USDG.");
     expect(walletReport(testnet, address, { balance: 1_000_000n, allowance: 2n ** 256n - 1n, eth: 0n }, approve)).toContain("Permit2 may spend any amount of its test USDG.");
+  });
+
+  it("treats a raised price limit as a ceiling: the wallet may hold enough to post while it holds less than that", () => {
+    const raised = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_MAX_PRICE_UNITS: "5000000" });
+    expect(walletReport(raised, address, { balance: 2_000_000n, allowance: 2_000_000n, eth: 0n }, approve)).toBe(
+      [
+        `${address} pays for tasks in test USDG on Robinhood Chain testnet.`,
+        "It holds 2 test USDG. A task costs at most 5 test USDG; send at least 3 test USDG to it on Robinhood Chain testnet to cover that.",
+        `Permit2 is not approved to spend enough of its test USDG for a task that costs 5 (only 2). Run \`${approve}\` once; it needs a little ETH on Robinhood Chain testnet, and the wallet holds 0 ETH there.`,
+      ].join("\n"),
+    );
+    expect(walletReport(raised, address, { balance: 5_000_000n, allowance: 5_000_000n, eth: 0n }, approve)).toBe(
+      `${address} pays for tasks in test USDG on Robinhood Chain testnet.\nIt holds 5 test USDG.\nPermit2 may spend up to 5 of its test USDG.`,
+    );
   });
 
   it("names no approval for USDC, which pays by signature, and says when the chain could not be read", () => {
