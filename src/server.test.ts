@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -82,7 +82,10 @@ describe("the server", () => {
       const description = tools.find((tool) => tool.name === POST_TASK_NAME)!.description!;
       expect(description.startsWith(`Invalid setting: ${problem}`)).toBe(true);
       expect(description).not.toMatch(/USDG|USDC/);
-      expect(tools.find((tool) => tool.name === BOND_TASK_NAME)!.description!.startsWith(`Invalid setting: ${problem}`)).toBe(true);
+      // No setting was read, so neither bond tool can run, and the cap is named by its variable rather than as 0.
+      for (const name of [BOND_TASK_NAME, BOND_STATUS_NAME]) expect(tools.find((tool) => tool.name === name)!.description!.startsWith(`Invalid setting: ${problem}`)).toBe(true);
+      expect(tools.find((tool) => tool.name === BOND_TASK_NAME)!.description).toContain("at most BRAINCHAIN_MAX_BOND_UNITS per task");
+      expect(tools.map((tool) => tool.description).join(" ")).not.toContain("0 USDG");
 
       for (const call of [
         { name: POST_TASK_NAME, arguments: task },
@@ -123,8 +126,11 @@ describe("the server", () => {
       expect(logged).toHaveLength(1);
       expect(logged[0]).toContain(problem);
       const { tools } = await client.listTools();
-      expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toMatch(/^Invalid setting: /);
-      expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toContain(problem);
+      // Reading a bond needs the key too, so all three tools lead with the problem.
+      for (const name of [POST_TASK_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]) {
+        expect(tools.find((tool) => tool.name === name)!.description).toMatch(/^Invalid setting: /);
+        expect(tools.find((tool) => tool.name === name)!.description).toContain(problem);
+      }
       // The tools that need the key answer with the problem, on a network where bonds are closed too.
       for (const call of [
         { name: POST_TASK_NAME, arguments: task },
@@ -187,8 +193,37 @@ describe("the server", () => {
         // Reading an order pays nothing and needs no record.
         expect((await client.callTool({ name: GET_TASK_NAME, arguments: { order } })).isError).toBe(false);
         expect(asked).toHaveLength(1);
+
+        // Nor does reading a bond: its description names no problem, and on testnet it answers as it always does there.
+        const status = tools.find((tool) => tool.name === BOND_STATUS_NAME)!.description!;
+        expect(status).not.toContain("Invalid setting");
+        expect(status).toMatch(network === "mainnet" ? /^Where this server's wallet 0x[0-9a-fA-F]{40}'s bonds on a task stand: / : /^Delivery bonds run on Robinhood Chain /);
+        if (network === "testnet") {
+          const read = await client.callTool({ name: BOND_STATUS_NAME, arguments: { task: "12" } });
+          expect(JSON.parse(text(read))).toEqual({ error: expect.stringMatching(/^Delivery bonds run on Robinhood Chain /) });
+        }
       }
     }
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    expect(readme).toContain("stops the two tools that pay, `brainchain_post_task` and `brainchain_bond_task`; `brainchain_bond_status` and `brainchain_get_task` read nothing that needs the folder and keep working.");
+    expect(readme).not.toContain("the task and bond tools return the error");
+  });
+
+  it("stops the bond status for a key it cannot use, and names that problem alone", async () => {
+    const stateDir = "/proc/brainchain";
+    const logged: string[] = [];
+    const client = await connect({ BRAINCHAIN_PAYER_KEY: "abc", BRAINCHAIN_DAILY_UNITS: "1000000", BRAINCHAIN_STATE_DIR: stateDir }, { log: (message) => logged.push(message) });
+    expect(logged[0]).toContain("BRAINCHAIN_PAYER_KEY must be 64 hex characters");
+    expect(logged[0]).toContain("BRAINCHAIN_STATE_DIR is /proc/brainchain, which is a system folder");
+    const { tools } = await client.listTools();
+    const status = tools.find((tool) => tool.name === BOND_STATUS_NAME)!.description!;
+    expect(status).toMatch(/^Invalid setting: BRAINCHAIN_PAYER_KEY must be 64 hex characters, with or without 0x\. Until then this tool only returns that error\. Where /);
+    expect(status).not.toContain("BRAINCHAIN_STATE_DIR");
+    const read = text(await client.callTool({ name: BOND_STATUS_NAME, arguments: { task: "12" } }));
+    expect(read).toContain("BRAINCHAIN_PAYER_KEY must be 64 hex characters");
+    expect(read).not.toContain("BRAINCHAIN_STATE_DIR");
+    // The two tools that pay name both.
+    expect(text(await client.callTool({ name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } }))).toContain("BRAINCHAIN_STATE_DIR is /proc/brainchain");
   });
 
   it("names the wallet that pays in the post tool, so an agent never needs the key to find it", async () => {

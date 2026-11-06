@@ -52,7 +52,7 @@ says the server is registered. Step 4 is what checks the key.
    or USDG on Robinhood Chain (plus a little ETH there).
 2. Save its private key in a file only your account can read:
 
-   ```sh
+   ```bash
    mkdir -p ~/.brainchain
    (umask 077; printf 'Key: ' && read -rs key && echo && printf '%s\n' "$key" > ~/.brainchain/payer.key)
    chmod 600 ~/.brainchain/payer.key
@@ -123,8 +123,8 @@ openclaw config set tools.sandbox.tools.alsoAllow '["brainchain__*"]' --strict-j
 
 ## Pitfalls
 
-- Never post the same task again after an error. A reply marked `possiblyCharged` was signed but not confirmed: read
-  the order instead. An identical post within 15 minutes returns the first order only while the same server keeps
+- Never post the same task again after an error unless `next` says you can. A reply marked `possiblyCharged` was signed
+  but not confirmed: read the order instead. An identical post within 15 minutes returns the first order only while the same server keeps
   running, and OpenClaw can start a new server for a new run.
 - Levels nobody can check ("high quality") make the grade a coin toss. Name observable properties.
 - A budget or daily-limit refusal comes from the caps above. Raising one is the operator's decision.

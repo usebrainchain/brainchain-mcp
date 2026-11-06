@@ -9,7 +9,8 @@ import type { TaskRequest, Desk } from "./tools.js";
 
 const BUDGET_REASON = "budget";
 const DAILY_REASON = "daily limit";
-const RESULT_LIMIT = 20_000;
+/** A result longer than this is cut, with a link to the rest. */
+export const RESULT_LIMIT = 20_000;
 
 /** What a refused budget or daily limit tells a person who posts. */
 async function limitReached(config: Config, limits: Limits, which: "budget" | "daily limit"): Promise<string> {

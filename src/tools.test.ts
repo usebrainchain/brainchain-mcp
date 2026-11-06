@@ -53,19 +53,31 @@ describe("bond tools", () => {
   });
 
   it("words the tools for the wallet and says why bonds are closed", () => {
-    const [bond, status] = bondTools({ maxBond: 10_000_000n, budget: 10_000_000n }, "0xabc", undefined);
+    const [bond, status] = bondTools({ maxBond: 10_000_000n }, "0xabc");
     expect(bond.name).toBe(BOND_TASK_NAME);
     expect(bond.description).toContain("from this server's wallet 0xabc, as the worker that will deliver it");
     expect(bond.description).toContain("at least the task's bounty and 2 USDG, at most 10 USDG per task");
     expect(bond.description).not.toContain("Until then");
     expect(status.name).toBe(BOND_STATUS_NAME);
-    const [closed] = bondTools({ maxBond: 10_000_000n, budget: 10_000_000n }, undefined, "Delivery bonds are not open yet.");
-    expect(closed.description.startsWith("Delivery bonds are not open yet. Until then this tool only returns that error. ")).toBe(true);
+    expect(status.description).toMatch(/^Where this server's wallet 0xabc's bonds on a task stand: /);
+    const [closed, closedStatus] = bondTools({ maxBond: 10_000_000n }, undefined, { bond: "Delivery bonds are not open yet.", status: "Delivery bonds are not open yet." });
+    expect(closed.description!.startsWith("Delivery bonds are not open yet. Until then this tool only returns that error. ")).toBe(true);
     expect(closed.description).toContain("from this server's wallet, as the worker");
+    expect(closedStatus.description).toMatch(/^Delivery bonds are not open yet\. Until then this tool only returns that error\. Where this server's wallet's bonds/);
+  });
+
+  it("leads each tool only with what stops that tool, and names the cap by its variable when no setting could be read", () => {
+    // A state folder that cannot be used stops a bond from being placed, not from being read.
+    const [bond, status] = bondTools({ maxBond: 10_000_000n }, "0xabc", { bond: "Invalid setting: BRAINCHAIN_STATE_DIR is unusable." });
+    expect(bond.description).toMatch(/^Invalid setting: BRAINCHAIN_STATE_DIR is unusable\. Until then this tool only returns that error\. Lock USDG/);
+    expect(status.description).toMatch(/^Where this server's wallet 0xabc's bonds on a task stand: /);
+    const [unread] = bondTools({}, undefined, { bond: "Invalid setting: BRAINCHAIN_NETWORK must be mainnet or testnet." });
+    expect(unread.description).toContain("at least the task's bounty and 2 USDG, at most BRAINCHAIN_MAX_BOND_UNITS per task");
+    expect(unread.description).not.toContain("0 USDG");
   });
 
   it("says the same of a bond in both tools and the README: when it is placed, what Jev reads, every state, and who a missed one pays", () => {
-    const [bond, status] = bondTools({ maxBond: 10_000_000n, budget: 10_000_000n }, "0xabc", undefined);
+    const [bond, status] = bondTools({ maxBond: 10_000_000n }, "0xabc");
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
     const row = (name: string) => readme.split("\n").find((line) => line.startsWith(`| \`${name}\` |`))!;
     const missedTo = "the agent that paid BrainChain's desk for the task, or to the poster for a task posted on the board directly";
@@ -93,6 +105,34 @@ describe("callTool", () => {
     expect(body(result)).toMatchObject({ order: "0x01" });
   });
 
+  it("takes a brief copied with the pass level the tool sets itself, and refuses any other", async () => {
+    const posted: unknown[] = [];
+    const recording: Desk = { ...desk, post: async (task) => (posted.push(task), { order: "0x01" }) };
+    const three = { title: "t", brief: "b", levels: ["best", "good", "poor"] };
+    const two = { title: "t", brief: "b", levels: ["good", "poor"] };
+    for (const input of [three, { ...three, passIndex: 1 }, two, { ...two, passIndex: 0 }]) expect((await callTool(recording, POST_TASK_NAME, input)).isError).toBe(false);
+    // The desk sets the level itself, so the field is never sent on.
+    expect(posted).toEqual([three, three, two, two]);
+
+    const second = "passIndex must be 1 here: with three levels this tool pays work that reaches the second level or better. Leave passIndex out.";
+    const first = "passIndex must be 0 here: with two levels this tool pays only work that reaches the first. Leave passIndex out.";
+    for (const [input, error] of [
+      [{ ...three, passIndex: 0 }, second],
+      [{ ...three, passIndex: 2 }, second],
+      [{ ...three, passIndex: "1" }, second],
+      [{ ...three, passIndex: null }, second],
+      [{ ...two, passIndex: 1 }, first],
+    ] as const) {
+      const result = await callTool(recording, POST_TASK_NAME, input);
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error });
+    }
+    expect(posted).toHaveLength(4);
+    const schema = postTaskTool(resolveConfig({}).terms).inputSchema as { properties: Record<string, unknown>; required: string[] };
+    expect(Object.keys(schema.properties)).toEqual(["title", "brief", "levels", "passIndex"]);
+    expect(schema.required).toEqual(["title", "brief", "levels"]);
+  });
+
   it("rejects a post without levels", async () => {
     const result = await callTool(desk, POST_TASK_NAME, { title: "t", brief: "b" });
     expect(result.isError).toBe(true);
@@ -106,7 +146,7 @@ describe("callTool", () => {
     };
     const post = await callTool(counting, POST_TASK_NAME, { title: "t", brief: "b", levels: ["good", "ok"], extra: "field" });
     expect(post.isError).toBe(true);
-    expect(body(post)).toEqual({ error: "Unknown field: extra. This tool takes only title, brief, levels." });
+    expect(body(post)).toEqual({ error: "Unknown field: extra. This tool takes only title, brief, levels, passIndex." });
     const get = await callTool(counting, GET_TASK_NAME, { order: `0x${"a".repeat(64)}`, one: 1, two: 2 });
     expect(get.isError).toBe(true);
     expect(body(get)).toEqual({ error: "Unknown fields: one, two. This tool takes only order." });
@@ -210,6 +250,16 @@ describe("callTool", () => {
   });
 });
 
+describe("get tool", () => {
+  it("says a long result is cut, as the README does", () => {
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    const row = readme.split("\n").find((line) => line.startsWith(`| \`${GET_TASK_NAME}\` |`))!;
+    const said = "A result over 20,000 characters is cut there, ending with a link to the full text.";
+    expect(GET_TASK_TOOL.description).toContain(said);
+    expect(row).toContain(said);
+  });
+});
+
 describe("post tool and config", () => {
   it("defaults to mainnet: the USDG desk on Robinhood Chain", () => {
     const config = resolveConfig({});
@@ -269,6 +319,20 @@ describe("stock premiums", () => {
     expect(result.isError).toBe(false);
     expect(body(result)).toEqual(board);
     expect(body(await callTool(desk, "brainchain_stock_premiums", undefined, async () => board))).toEqual(board);
+  });
+
+  it("answers a failed read in one line, never with the library's report", async () => {
+    const dump = Object.assign(new Error('HTTP request failed.\n\nStatus: 429\nURL: https://rpc.mainnet.chain.robinhood.com/\nRequest body: {"method":"eth_call"}'), { status: 429 });
+    const wrapped = new Error("The contract function \"tokenCount\" reverted.\n\nDetails: ...", { cause: dump });
+    for (const [error, said] of [
+      [dump, "Robinhood Chain could not be read just now: HTTP 429. Try again in a minute."],
+      [wrapped, "Robinhood Chain could not be read just now: HTTP 429. Try again in a minute."],
+      [new Error("The request took too long to respond.\n\nURL: https://rpc.example"), "Robinhood Chain could not be read just now: The request took too long to respond. Try again in a minute."],
+    ] as const) {
+      const result = await callTool(desk, "brainchain_stock_premiums", {}, async () => Promise.reject(error));
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: said });
+    }
   });
 
   it("refuses fields, as its schema says it takes none", async () => {

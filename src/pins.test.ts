@@ -46,3 +46,17 @@ describe("the release each file names", () => {
     expect(links.map(pinsIn)).toEqual(links.map(() => [version]));
   });
 });
+
+describe("the settings each file lists", () => {
+  it("are the same in the README's table, in server.json and in --help", () => {
+    const table = read("README.md").split("\n## Configuration\n")[1]!.split("\n## ")[0]!;
+    const documented = table.split("\n").flatMap((row) => (row.startsWith("| `BRAINCHAIN_") ? (row.split(" | ")[0]!.match(/BRAINCHAIN_[A-Z_]+/g) ?? []) : []));
+    const server = json("server.json") as { packages: { environmentVariables: { name: string }[] }[] };
+    const listed = server.packages[0]!.environmentVariables.map((variable) => variable.name);
+    const usage = read("src/index.ts").split("\nEnvironment:\n")[1]!.split("`;")[0]!;
+    const helped = usage.split("\n").flatMap((line) => (/^ {2}BRAINCHAIN_/.test(line) ? (line.match(/BRAINCHAIN_[A-Z_]+/g) ?? []) : []));
+    expect(documented).toHaveLength(14);
+    expect([...listed].sort()).toEqual([...documented].sort());
+    expect([...helped].sort()).toEqual([...documented].sort());
+  });
+});

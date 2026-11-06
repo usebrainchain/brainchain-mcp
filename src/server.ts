@@ -156,7 +156,7 @@ function deskFor(
       desk: { post: refuse, get: refuse },
       terms: problem,
       bonds: { bond: refuse, status: refuse },
-      bondTools: bondTools({ maxBond: 0n, budget: 0n }, undefined, `Invalid setting: ${problem}`),
+      bondTools: bondTools({}, undefined, { bond: `Invalid setting: ${problem}`, status: `Invalid setting: ${problem}` }),
       refused: new Map([POST_TASK_NAME, GET_TASK_NAME, BOND_TASK_NAME, BOND_STATUS_NAME].map((name) => [name, problem])),
     };
   }
@@ -195,16 +195,19 @@ function deskFor(
       return { balance, allowance };
     },
   });
-  // What the descriptions promise for a setting that cannot be used: the tools that pay answer with it and
-  // touch nothing else. A refused state folder could still take a write, or hang on one. Reading a bond
-  // needs the key and nothing more.
-  const paying = problem ? [POST_TASK_NAME, BOND_TASK_NAME, ...(keyProblem ? [BOND_STATUS_NAME] : [])] : [];
+  // What the descriptions promise for a setting that cannot be used: a tool the setting stops answers with it
+  // and touches nothing else. A refused state folder could still take a write, or hang on one, so it stops
+  // the two tools that pay. Reading a bond needs the key and no record, so only a key problem stops that.
+  const closed = bondsClosed(config);
+  const refused = new Map<string, string>();
+  if (problem) for (const name of [POST_TASK_NAME, BOND_TASK_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);
+  if (keyProblem) refused.set(BOND_STATUS_NAME, `${keyProblem} ${KEY_HELP}`);
   return {
     desk,
     terms: { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(problem ? { problem } : {}) },
     bonds: createBonds({ config, signer: payer, limits }),
-    bondTools: bondTools(config, account?.address, problem ? `Invalid setting: ${problem}` : bondsClosed(config)),
-    refused: new Map(paying.map((name) => [name, keyProblem ? `${problem} ${KEY_HELP}` : problem])),
+    bondTools: bondTools(config, account?.address, { bond: problem ? `Invalid setting: ${problem}` : closed, status: keyProblem ? `Invalid setting: ${keyProblem}` : closed }),
+    refused,
   };
 }
 

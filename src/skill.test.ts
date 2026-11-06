@@ -45,6 +45,14 @@ describe("the OpenClaw skill", () => {
     expect(body).toContain(`BRAINCHAIN_PAY_ON=${payOn} BRAINCHAIN_PAYER_KEY_FILE=${keyFile} npx -y brainchain-mcp@${version} wallet`);
   });
 
+  it("fences as bash every block that reads a key without echo, which plain sh cannot do", () => {
+    for (const text of [skill, readme]) {
+      const blocks = [...text.matchAll(/```(\w*)\n([\s\S]*?)```/g)].filter(([, , code]) => code!.includes("read -rs"));
+      expect(blocks.length).toBeGreaterThan(0);
+      expect(blocks.map(([, fence]) => fence)).toEqual(blocks.map(() => "bash"));
+    }
+  });
+
   it("tells the agent to stop when its tools are missing, and to leave the key alone", () => {
     expect(body).toContain("is not among your tools");
     expect(body).toContain("Never open the key file");
