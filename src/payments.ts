@@ -385,7 +385,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
           view.resultText =
             full.length <= RESULT_LIMIT
               ? full
-              : `${full.slice(0, RESULT_LIMIT)}\n\n[Cut at ${RESULT_LIMIT.toLocaleString("en-US")} of ${full.length.toLocaleString("en-US")} characters. The full result is at ${view.result}.]`;
+              : `${full.slice(0, RESULT_LIMIT)}\n\n[Cut at ${RESULT_LIMIT.toLocaleString("en-US")} of ${full.length.toLocaleString("en-US")} UTF-16 units. The full result is at ${view.result}.]`;
         } else view.resultError = `The result could not be fetched (HTTP ${text.status}); it is at ${view.result}.`;
       } catch (error) {
         view.resultError = `The result could not be fetched (${firstLine(error)}); it is at ${view.result}.`;

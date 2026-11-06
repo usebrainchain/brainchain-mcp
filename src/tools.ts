@@ -27,6 +27,9 @@ export const GET_TASK_NAME = "brainchain_get_task";
 export const BOND_TASK_NAME = "brainchain_bond_task";
 export const BOND_STATUS_NAME = "brainchain_bond_status";
 
+/** What a length in UTF-16 units, which the desk counts in, means to someone writing a brief. */
+const UNITS = "most characters take one, an emoji two or more";
+
 const TASK_ID = { type: "string", pattern: "^[1-9][0-9]{0,17}$", description: "The task's id on BrainChain's task board." } as const;
 const BOND_TASK_INPUT: Tool["inputSchema"] = {
   type: "object",
@@ -81,14 +84,14 @@ export function bondTools(config: Partial<Pick<Config, "maxBond">>, wallet: stri
 const POST_TASK_INPUT: Tool["inputSchema"] = {
   type: "object",
   properties: {
-    title: { type: "string", minLength: 1, maxLength: 120, description: "One line naming the deliverable." },
+    title: { type: "string", minLength: 1, maxLength: 120, description: "One line naming the deliverable, up to 120 UTF-16 units." },
     brief: {
       type: "string",
       minLength: 1,
       maxLength: 32000,
       description:
         "What to produce, in what format, and anything the model must not do. Models cannot browse, so include every fact they need. " +
-        "Up to 32,000 characters, an emoji counting as two, and the whole task as JSON at most 64,000 bytes: about 21,000 characters of Chinese, Japanese or Korean.",
+        `Up to 32,000 UTF-16 units, as the desk counts: ${UNITS} (a flag four, a family emoji eleven). The whole task as JSON is at most 64,000 bytes: about 21,000 characters of Chinese, Japanese or Korean.`,
     },
     levels: {
       type: "array",
@@ -97,7 +100,7 @@ const POST_TASK_INPUT: Tool["inputSchema"] = {
       maxItems: 3,
       uniqueItems: true,
       description:
-        "Two or three different quality levels, best first, each a short description a reader could check. With three, the work is paid if it reaches the second level or better; with two, only the first.",
+        "Two or three different quality levels, best first, each a short description a reader could check, up to 200 UTF-16 units. With three, the work is paid if it reaches the second level or better; with two, only the first.",
     },
     passIndex: {
       type: "integer",
@@ -114,7 +117,7 @@ export function postTaskTool(terms: Terms | string): Tool {
   const about =
     `Pay for a task on BrainChain. Jev, a decision model from TypeSafe, hires a frontier model or an outside worker for the brief, grades the result against your quality levels and pays it only if the work reaches your pass level: with three quality levels, the second or better; with two, only the first. ` +
     `Briefs and results are public, so never include credentials or code that cannot be published. ` +
-    `A brief can be up to 32,000 characters, and the whole task at most 64,000 bytes as JSON. `;
+    `A brief can be up to 32,000 UTF-16 units (${UNITS}), and the whole task at most 64,000 bytes as JSON. `;
   return {
     name: POST_TASK_NAME,
     title: "Post a paid task to BrainChain",
@@ -136,7 +139,7 @@ export const GET_TASK_TOOL: Tool = {
   title: "Read a BrainChain order",
   description:
     "Read an order from brainchain_post_task: the payment, the task's status on BrainChain, Jev's grade, the result text once the work is accepted, and the refund transaction if it is not. " +
-    `A result over ${RESULT_LIMIT.toLocaleString("en-US")} characters is cut there, ending with a link to the full text. ` +
+    `A result over ${RESULT_LIMIT.toLocaleString("en-US")} UTF-16 units (${UNITS}) is cut there, ending with a link to the full text. ` +
     "Call again after `retryAfterSeconds` until `done` is true. `next` says what the order's state means and what to do. A rejected task stays not done until the refund is sent, when the dispute window closes.",
   inputSchema: {
     type: "object",
@@ -174,7 +177,7 @@ function text(name: string, value: unknown, max = Infinity): string {
   if (typeof value !== "string") throw new Error(`${name} must be a string, not ${typeName(value)}.`);
   const sent = value.trim();
   if (BLANK.test(sent)) throw new Error(`${name} is empty.`);
-  if (sent.length > max) throw new Error(`${name} is ${count(sent.length)} characters; the limit is ${count(max)}.`);
+  if (sent.length > max) throw new Error(`${name} is ${count(sent.length)} UTF-16 units; the limit is ${count(max)}. Most characters take one, an emoji two or more.`);
   return sent;
 }
 

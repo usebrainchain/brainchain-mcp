@@ -597,7 +597,7 @@ describe("reading an order", () => {
     expect(view.done).toBe(true);
     expect(view.resultText.startsWith("y".repeat(20_000))).toBe(true);
     expect(view.resultText).not.toContain("y".repeat(20_001));
-    expect(view.resultText).toContain(`Cut at 20,000 of 25,000 characters. The full result is at ${result}.`);
+    expect(view.resultText).toContain(`Cut at 20,000 of 25,000 UTF-16 units. The full result is at ${result}.`);
   });
 
   it("keeps the order when the result cannot be fetched", async () => {

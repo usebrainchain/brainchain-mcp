@@ -168,6 +168,32 @@ describe("callTool", () => {
     expect(body(await callTool(counting, "constructor", {}, undefined, undefined, refused))).toEqual({ error: "Unknown tool constructor." });
   });
 
+  it("measures a post in UTF-16 units, and says so wherever a length is given", async () => {
+    const flag = "\u{1F1FA}\u{1F1F8}";
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+    expect([flag.length, family.length]).toEqual([4, 11]);
+    const task = { title: "t", brief: "b", levels: ["good", "ok"] };
+    const units = "Most characters take one, an emoji two or more.";
+    expect((await callTool(desk, POST_TASK_NAME, { ...task, title: flag.repeat(30) })).isError).toBe(false);
+    for (const [input, error] of [
+      [{ ...task, title: flag.repeat(31) }, `title is 124 UTF-16 units; the limit is 120. ${units}`],
+      [{ ...task, levels: [family.repeat(19), "ok"] }, `levels[0] is 209 UTF-16 units; the limit is 200. ${units}`],
+      [{ ...task, brief: family.repeat(2_910) }, `brief is 32,010 UTF-16 units; the limit is 32,000. ${units}`],
+    ] as const) {
+      expect(body(await callTool(desk, POST_TASK_NAME, input))).toEqual({ error });
+    }
+
+    const { description, inputSchema } = postTaskTool(resolveConfig({}).terms);
+    const fields = inputSchema.properties as Record<string, { description: string }>;
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    const row = readme.split("\n").find((line) => line.startsWith(`| \`${POST_TASK_NAME}\` |`))!;
+    for (const text of [fields.brief!.description, row]) expect(text).toContain("most characters take one, an emoji two or more (a flag four, a family emoji eleven)");
+    expect(description).toContain("up to 32,000 UTF-16 units (most characters take one, an emoji two or more)");
+    expect(fields.title!.description).toContain("up to 120 UTF-16 units");
+    expect(fields.levels!.description).toContain("up to 200 UTF-16 units");
+    for (const text of [description, fields.brief!.description, readme]) expect(text).not.toMatch(/emoji (counts|counting) as two/);
+  });
+
   it("says what is wrong with a post, field by field", async () => {
     const task = { title: "t", brief: "b", levels: ["good", "ok"] };
     const { title: _title, ...noTitle } = task;
@@ -182,16 +208,16 @@ describe("callTool", () => {
       [{ ...task, title: null }, "title must be a string, not null."],
       [{ ...task, title: true }, "title must be a string, not a boolean."],
       [{ ...task, title: "   " }, "title is empty."],
-      [{ ...task, title: "x".repeat(121) }, "title is 121 characters; the limit is 120."],
+      [{ ...task, title: "x".repeat(121) }, "title is 121 UTF-16 units; the limit is 120. Most characters take one, an emoji two or more."],
       [{ ...task, brief: ["not", "a", "string"] }, "brief must be a string, not an array."],
       [{ ...task, brief: {} }, "brief must be a string, not an object."],
-      [{ ...task, brief: "x".repeat(32_001) }, "brief is 32,001 characters; the limit is 32,000."],
+      [{ ...task, brief: "x".repeat(32_001) }, "brief is 32,001 UTF-16 units; the limit is 32,000. Most characters take one, an emoji two or more."],
       [{ ...task, levels: "good" }, "levels must be an array of strings, not a string."],
       [{ ...task, levels: ["good"] }, "levels must list 2 or 3 quality levels, best first; this lists 1."],
       [{ ...task, levels: ["a", "b", "c", "d"] }, "levels must list 2 or 3 quality levels, best first; this lists 4."],
       [{ ...task, levels: ["good", 5] }, "levels[1] must be a string, not a number."],
       [{ ...task, levels: ["good", " "] }, "levels[1] is empty."],
-      [{ ...task, levels: ["x".repeat(201), "ok"] }, "levels[0] is 201 characters; the limit is 200."],
+      [{ ...task, levels: ["x".repeat(201), "ok"] }, "levels[0] is 201 UTF-16 units; the limit is 200. Most characters take one, an emoji two or more."],
       [{ ...task, title: "line one\nline two" }, "title must be one line."],
       [{ ...task, title: "line one\u2028line two" }, "title must be one line."],
       [{ ...task, brief: "\u200b" }, "brief is empty."],
@@ -254,7 +280,7 @@ describe("get tool", () => {
   it("says a long result is cut, as the README does", () => {
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
     const row = readme.split("\n").find((line) => line.startsWith(`| \`${GET_TASK_NAME}\` |`))!;
-    const said = "A result over 20,000 characters is cut there, ending with a link to the full text.";
+    const said = "A result over 20,000 UTF-16 units (most characters take one, an emoji two or more) is cut there, ending with a link to the full text.";
     expect(GET_TASK_TOOL.description).toContain(said);
     expect(row).toContain(said);
   });
