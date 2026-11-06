@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { formatUnits, resolveConfig } from "./config.js";
@@ -60,6 +62,27 @@ describe("bond tools", () => {
     const [closed] = bondTools({ maxBond: 10_000_000n, budget: 10_000_000n }, undefined, "Delivery bonds are not open yet.");
     expect(closed.description.startsWith("Delivery bonds are not open yet. Until then this tool only returns that error. ")).toBe(true);
     expect(closed.description).toContain("from this server's wallet, as the worker");
+  });
+
+  it("says the same of a bond in both tools and the README: when it is placed, what Jev reads, every state, and who a missed one pays", () => {
+    const [bond, status] = bondTools({ maxBond: 10_000_000n, budget: 10_000_000n }, "0xabc", undefined);
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    const row = (name: string) => readme.split("\n").find((line) => line.startsWith(`| \`${name}\` |`))!;
+    const missedTo = "the agent that paid BrainChain's desk for the task, or to the poster for a task posted on the board directly";
+    for (const text of [bond.description!, status.description!, row(BOND_TASK_NAME)]) expect(text).toContain(missedTo);
+    for (const text of [bond.description!, status.description!, readme]) {
+      expect(text).not.toMatch(/Jev reads the bond/);
+      expect(text).not.toMatch(/(goes|paid|settles) to the (task's )?poster/);
+      expect(text).not.toContain("is owed to th");
+    }
+    // A bond is placed only after the hire, so only settled bonds can be read at one.
+    for (const text of [bond.description!, row(BOND_TASK_NAME)]) {
+      expect(text).toMatch(/Jev must already have hired this wallet for/);
+      expect(text).toContain("A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires.");
+      expect(text).toContain("possiblyBonded");
+    }
+    expect(status.description).toMatch(/open, marked \(.*\), lapsed \(.*\), delivered \(.*\) or missed \(.*\), with the next step\.$/);
+    expect(row(BOND_STATUS_NAME)).toContain("open, marked, lapsed, delivered or missed");
   });
 });
 
@@ -203,7 +226,7 @@ describe("post tool and config", () => {
 
   it("says the memory of identical posts lasts while the server runs, and that briefs and results are public", () => {
     const { description } = postTaskTool(resolveConfig({}).terms);
-    expect(description).toContain("While this server keeps running, an identical post within 15 minutes");
+    expect(description).toContain("While this server keeps running, an identical post within 15 minutes returns the first post's order, marked duplicate, instead of paying again, unless brainchain_get_task has read that order's payment as failed.");
     expect(description).toContain("Briefs and results are public");
   });
 
@@ -239,10 +262,20 @@ describe("post tool and config", () => {
 });
 
 describe("stock premiums", () => {
+  const board = { chain: "Robinhood Chain" as const, readAt: "2026-11-04T14:40:00.000Z", usMarketOpen: true, stocks: [] };
+
   it("serves the board without a desk or a key", async () => {
-    const board = { chain: "Robinhood Chain" as const, readAt: "2026-11-04T14:40:00.000Z", usMarketOpen: true, stocks: [] };
     const result = await callTool(desk, "brainchain_stock_premiums", {}, async () => board);
     expect(result.isError).toBe(false);
     expect(body(result)).toEqual(board);
+    expect(body(await callTool(desk, "brainchain_stock_premiums", undefined, async () => board))).toEqual(board);
+  });
+
+  it("refuses fields, as its schema says it takes none", async () => {
+    let reads = 0;
+    const result = await callTool(desk, "brainchain_stock_premiums", { symbol: "NVDA" }, async () => (reads++, board));
+    expect(result.isError).toBe(true);
+    expect(body(result)).toEqual({ error: "Unknown field: symbol. This tool takes nothing." });
+    expect(reads).toBe(0);
   });
 });

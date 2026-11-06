@@ -71,6 +71,13 @@
           "default": "1000000"
         },
         {
+          "name": "BRAINCHAIN_MAX_BOND_UNITS",
+          "description": "The most the server locks in one delivery bond with brainchain_bond_task, in USDG base units (6 decimals). Bonds also count against the budget and the daily limit.",
+          "isRequired": false,
+          "format": "number",
+          "default": "10000000"
+        },
+        {
           "name": "BRAINCHAIN_BUDGET_UNITS",
           "description": "The most the server pays in total while it runs, in the payment token's base units (6 decimals). Resets when the server restarts.",
           "isRequired": false,

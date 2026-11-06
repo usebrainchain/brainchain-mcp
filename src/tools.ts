@@ -3,8 +3,8 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { Bonds } from "./bonds.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { canonicalStringify } from "./payments.js";
-import { PREMIUMS_NAME, readPremiums, type PremiumBoard } from "./premiums.js";
-import { MIN_BOND } from "./shipped.js";
+import { PREMIUMS_NAME, PREMIUMS_TOOL, readPremiums, type PremiumBoard } from "./premiums.js";
+import { MIN_BOND, MISSED_TO } from "./shipped.js";
 
 /** What the post tool tells the model about cost and settlement on the configured network. */
 export interface Terms {
@@ -48,17 +48,23 @@ export function bondTools(config: Pick<Config, "maxBond" | "budget">, wallet: st
       title: "Bond a BrainChain task on Shipped",
       description:
         (closed ? `${closed} Until then this tool only returns that error. ` : "") +
-        `Lock USDG on Shipped behind a BrainChain task from ${where}, as the worker that will deliver it. ` +
-        `If the task is paid and its Proof is minted, the bond comes back less Shipped's 1% fee; if the task is not paid by its deadline, the bond goes to the task's poster. ` +
-        `Jev reads the bond when it hires. The amount is at least the task's bounty and ${formatUnits(MIN_BOND)} USDG, at most ${formatUnits(config.maxBond)} USDG per task, and counts against this server's budget and daily limit like a post. ` +
-        `The wallet needs the USDG and a little ETH on Robinhood Chain. Never bond a task this wallet posted. Returns the bond number; follow it with ${BOND_STATUS_NAME}.`,
+        `Lock USDG on Shipped behind a BrainChain task from ${where}, as the worker that will deliver it. Jev must already have hired this wallet for the task. ` +
+        `If the task is paid and its Proof is recorded by the bond's deadline, which is set after the task's and comes back in the reply, the bond less Shipped's 1% fee is credited to the wallet on Shipped's registry, where the worker CLI's \`bond claim\` collects it; if not, the bond goes to ${MISSED_TO}. ` +
+        `A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires. ` +
+        `The amount is at least the task's bounty and ${formatUnits(MIN_BOND)} USDG, at most ${formatUnits(config.maxBond)} USDG per task, and counts against this server's budget and daily limit like a post. ` +
+        `The wallet needs the USDG and a little ETH on Robinhood Chain. Never bond a task this wallet posted or paid for. Returns the bond, its transaction and its deadline; follow it with ${BOND_STATUS_NAME}. ` +
+        `If the reply says possiblyBonded, the bond was sent but not confirmed: read the task with ${BOND_STATUS_NAME} and do not bond it again.`,
       inputSchema: BOND_TASK_INPUT,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     {
       name: BOND_STATUS_NAME,
       title: "Read this wallet's bond on a BrainChain task",
-      description: `${closed ? `${closed} ` : ""}Where ${where}'s bonds on a task stand: open, marked (the Proof is recorded and the check waits out its hour), delivered (the bond less 1% is owed to the wallet) or missed (paid to the poster), with the next step.`,
+      description:
+        `${closed ? `${closed} ` : ""}Where ${where}'s bonds on a task stand: open, marked (the Proof is recorded and the check waits out its hour), ` +
+        `lapsed (no Proof was recorded by the bond's deadline, so the bond waits to settle as missed), ` +
+        `delivered (the bond less Shipped's 1% fee was credited to the wallet on Shipped's registry; the reply says whether it was collected or what the registry still owes the wallet) ` +
+        `or missed (paid to ${MISSED_TO}), with the next step.`,
       inputSchema: BOND_STATUS_INPUT,
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -107,7 +113,7 @@ export function postTaskTool(terms: Terms | string): Tool {
           about +
           `Each task costs ${terms.cost}, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. The result is delivered only if Jev accepts the work. If Jev rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. If no model delivers within 24 hours, the full amount is refunded. ` +
           `Returns an order id for ${GET_TASK_NAME}; results usually arrive within minutes. If the reply says possiblyCharged, do not post the task again: read the order with ${GET_TASK_NAME}. ` +
-          `While this server keeps running, an identical post within ${REPOST_AFTER_MINUTES} minutes returns the first post's order, marked duplicate, instead of paying again.`,
+          `While this server keeps running, an identical post within ${REPOST_AFTER_MINUTES} minutes returns the first post's order, marked duplicate, instead of paying again, unless ${GET_TASK_NAME} has read that order's payment as failed.`,
     inputSchema: POST_TASK_INPUT,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   };
@@ -162,7 +168,7 @@ function text(name: string, value: unknown, max = Infinity): string {
 function refuseUnknownFields(input: Record<string, unknown>, schema: Tool["inputSchema"]): void {
   const known = Object.keys(schema.properties ?? {});
   const unknown = Object.keys(input).filter((key) => !known.includes(key));
-  if (unknown.length > 0) throw new Error(`Unknown field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}. This tool takes only ${known.join(", ")}.`);
+  if (unknown.length > 0) throw new Error(`Unknown field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}. This tool takes ${known.length > 0 ? `only ${known.join(", ")}` : "nothing"}.`);
 }
 
 /**
@@ -237,7 +243,10 @@ export async function callTool(
       if (!/^0x[0-9a-f]{64}$/.test(order)) throw new Error("order must be the 0x-prefixed, 64-character hex id that brainchain_post_task returned.");
       return orderReply(await desk.get(order));
     }
-    if (name === PREMIUMS_NAME) return reply(await premiums());
+    if (name === PREMIUMS_NAME) {
+      refuseUnknownFields(input, PREMIUMS_TOOL.inputSchema);
+      return reply(await premiums());
+    }
     return reply({ error: `Unknown tool ${name}.` }, true);
   } catch (error) {
     return reply({ error: error instanceof Error ? error.message : String(error) }, true);
