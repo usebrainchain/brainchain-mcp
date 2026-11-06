@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
-import { MANDATE, stockPremiums, usMarketOpen, type ChainReader } from "./premiums.js";
+import { MANDATE, PREMIUMS_NAME, PREMIUMS_TOOL, stockPremiums, usMarketOpen, type ChainReader } from "./premiums.js";
 
 const NVDA = "0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC";
 const POOL = "0xd4EB21209C4D6093f80B5b84f5C45cc093EA14a3";
@@ -26,6 +28,14 @@ const reader = {
     });
   },
 } as unknown as ChainReader;
+
+describe("the premium tool's words", () => {
+  it("say what happens over a weekend, and claim nothing about when tokens are minted", () => {
+    expect(PREMIUMS_TOOL.description).toContain("Over a weekend the feeds stand still and the pools keep trading.");
+    const row = readFileSync(new URL("../README.md", import.meta.url), "utf8").split("\n").find((line) => line.startsWith(`| \`${PREMIUMS_NAME}\` |`))!;
+    for (const text of [PREMIUMS_TOOL.description!, row]) expect(text).not.toMatch(/minted|clears on its own/);
+  });
+});
 
 describe("stockPremiums", () => {
   it("prices the live venues from the pool and the feed, per whole token", async () => {
