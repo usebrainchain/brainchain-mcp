@@ -36,6 +36,7 @@ await using var brainchain = await McpClient.CreateAsync(new StdioClientTranspor
     Command = OperatingSystem.IsWindows() ? "cmd.exe" : server[0],
     Arguments = OperatingSystem.IsWindows() ? ["/c", .. server] : server[1..],
     EnvironmentVariables = settings,
+    StandardErrorLines = line => Console.Error.WriteLine($"brainchain-mcp: {line}"),
 }));
 
 List<AITool> tools = [.. (await brainchain.ListToolsAsync()).Where(tool => tool.Name is "brainchain_post_task" or "brainchain_get_task")];
