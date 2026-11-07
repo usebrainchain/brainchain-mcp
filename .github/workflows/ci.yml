@@ -46,6 +46,11 @@ jobs:
         with:
           dotnet-version: "10.0.x"
       - run: pip install -r examples/agent-framework/python/requirements.txt
+      # Fetch the server once, so each sample's first start is not an npm download against its connect timeout.
+      - name: Fetch brainchain-mcp
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: echo | npx -y brainchain-mcp@0.8.0 > /dev/null
       # The samples start brainchain-mcp from npm and list its tools; no model or key is needed for that. They run
       # outside the checkout, where npx would otherwise resolve this repository's unbuilt package of the same name.
       - name: Python sample connects
