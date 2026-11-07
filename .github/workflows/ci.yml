@@ -25,3 +25,42 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+
+  agent-framework:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: "10.0.x"
+      - run: pip install -r examples/agent-framework/python/requirements.txt
+      # The samples start brainchain-mcp from npm and list its tools; no model or key is needed for that.
+      - name: Python sample connects
+        shell: bash
+        env:
+          BRAINCHAIN_NETWORK: testnet
+        run: |
+          out=$(python examples/agent-framework/python/brainchain_agent.py --list-tools | tr -d "\r")
+          echo "$out"
+          grep -qx brainchain_post_task <<<"$out" && grep -qx brainchain_get_task <<<"$out"
+      - name: .NET sample connects
+        shell: bash
+        env:
+          BRAINCHAIN_NETWORK: testnet
+        run: |
+          out=$(dotnet run --project examples/agent-framework/dotnet -- --list-tools | tr -d "\r")
+          echo "$out"
+          grep -q brainchain_post_task <<<"$out" && grep -q brainchain_get_task <<<"$out"
+
