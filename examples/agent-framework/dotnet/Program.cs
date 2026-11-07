@@ -28,11 +28,13 @@ var settings = Environment.GetEnvironmentVariables()
     .Where(entry => ((string)entry.Key).StartsWith("BRAINCHAIN_", StringComparison.Ordinal))
     .ToDictionary(entry => (string)entry.Key, entry => (string?)entry.Value);
 
+// npx is a .cmd script on Windows, which only cmd.exe starts.
+string[] server = ["npx", "-y", "brainchain-mcp@0.8.0"];
 await using var brainchain = await McpClient.CreateAsync(new StdioClientTransport(new()
 {
     Name = "brainchain",
-    Command = "npx",
-    Arguments = ["-y", "brainchain-mcp@0.8.0"],
+    Command = OperatingSystem.IsWindows() ? "cmd.exe" : server[0],
+    Arguments = OperatingSystem.IsWindows() ? ["/c", .. server] : server[1..],
     EnvironmentVariables = settings,
 }));
 
