@@ -50,7 +50,7 @@ jobs:
       - name: Fetch brainchain-mcp
         shell: bash
         working-directory: ${{ runner.temp }}
-        run: echo | npx -y brainchain-mcp@0.8.0 > /dev/null
+        run: echo | npx -y brainchain-mcp@0.9.0 > /dev/null
       # The samples start brainchain-mcp from npm and list its tools; no model or key is needed for that. They run
       # outside the checkout, where npx would otherwise resolve this repository's unbuilt package of the same name.
       - name: Python sample connects
