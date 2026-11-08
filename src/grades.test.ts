@@ -1,5 +1,5 @@
 import { privateKeyToAccount } from "viem/accounts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resolveConfig } from "./config.js";
 import { createDesk, orderIdOf } from "./payments.js";
@@ -134,5 +134,67 @@ describe("the grade tools", () => {
     expect((await callTool(noDesk, GET_GRADE_NAME, { grade: "0x12" })).isError).toBe(true);
     const read = await callTool(noDesk, GET_GRADE_NAME, { grade: `0x${"AB".repeat(32)}` });
     expect(read.content[0]).toMatchObject({ text: expect.stringContaining(`0x${"ab".repeat(32)}`) });
+  });
+});
+
+describe("a grade's money", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const later = () => {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(now + 16 * 60_000);
+  };
+  /** A desk whose reads all answer `read`; paid POSTs go to `paid`. */
+  function withReads(paid: (payment: { payload: unknown }) => Response, read: () => Response) {
+    const inner = fakeDesk(paid);
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => ((init?.method ?? (input instanceof Request ? input.method : "GET")) === "GET" ? read() : inner.fetchImpl(input, init))) as typeof fetch;
+    return { ...inner, fetchImpl };
+  }
+  const gone = () => new Response("{}", { status: 404 });
+
+  it("keeps a charged grade's hold when its id is read as a task's order", async () => {
+    const { fetchImpl } = withReads((p) => verdict(p), gone);
+    const d = desk(fetchImpl);
+    const { grade } = (await d.grade(request)) as { grade: string };
+    later();
+    await d.get(grade);
+    expect(d.spent()).toBe(250_000n);
+  });
+
+  it("releases a grade the desk never knew once the window has passed, and says it can be sent again", async () => {
+    const { fetchImpl } = withReads((p) => verdict(p), gone);
+    const d = desk(fetchImpl);
+    const { grade } = (await d.grade(request)) as { grade: string };
+    later();
+    const read = (await d.getGrade(grade)) as Record<string, unknown>;
+    expect(read).toMatchObject({ grade, done: true });
+    expect(read.next).toMatch(/never charged, so you can send it again/);
+    expect(d.spent()).toBe(0n);
+  });
+
+  it("finishes a failed grade and gives back what it held", async () => {
+    const { fetchImpl } = withReads((p) => verdict(p), () => new Response(JSON.stringify({ state: "failed" }), { status: 200 }));
+    const d = desk(fetchImpl);
+    const { grade } = (await d.grade(request)) as { grade: string };
+    const read = (await d.getGrade(grade)) as Record<string, unknown>;
+    expect(read).toMatchObject({ done: true });
+    expect(read.next).toMatch(/nothing was charged/);
+    expect(d.spent()).toBe(0n);
+  });
+
+  it("books nothing for a payment the desk cancelled to answer from an earlier grade", async () => {
+    const first = `0x${"cd".repeat(32)}`;
+    const { fetchImpl } = fakeDesk((p) => verdict(p, { grade: first }));
+    const d = desk(fetchImpl);
+    const reply = (await d.grade(request)) as Record<string, unknown>;
+    expect(reply).toMatchObject({ grade: first, duplicate: true, price: "0 test USDG" });
+    expect(d.spent()).toBe(0n);
+  });
+
+  it("quotes a grade's own price when the wallet cannot pay", async () => {
+    const { fetchImpl, urls } = withReads(() => new Response(JSON.stringify({ error: "insufficient funds" }), { status: 402 }), gone);
+    const d = createDesk({ config, signer, approveCommand: "x", fetch: fetchImpl, postTimeoutMs: 10_000, funds: async () => ({ balance: 100_000n, allowance: 10n ** 18n }) });
+    await expect(d.grade(request)).rejects.toThrow(/a grade costs 0\.25\. Nothing was charged\. Send at least 0\.15/);
+    expect(urls.every((url) => url === grades)).toBe(true);
   });
 });
