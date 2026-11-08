@@ -157,7 +157,7 @@ describe("a grade's money", () => {
     const d = desk(fetchImpl);
     const { grade } = (await d.grade(request)) as { grade: string };
     later();
-    await d.get(grade);
+    expect(await d.get(grade)).toMatchObject({ done: true, next: "Read it with brainchain_get_grade." });
     expect(d.spent()).toBe(250_000n);
   });
 

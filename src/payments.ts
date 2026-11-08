@@ -373,6 +373,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
     const view = await jsonObject(response);
     if (response.status === 404) {
+      if (paid.has(keyed("grade", order))) return { order, error: "This id is a grade, not a task's order.", done: true, next: "Read it with brainchain_get_grade." };
       const at = paid.get(keyed("task", order))?.at;
       if (at === undefined || Date.now() - at >= REPOST_AFTER_MINUTES * 60_000) {
         await release("task", order);
@@ -426,6 +427,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
     const view = await jsonObject(response);
     if (response.status === 404) {
+      if (paid.has(keyed("task", id))) return { grade: id, error: "This id is a task's order, not a grade.", done: true, next: "Read it with brainchain_get_task." };
       const at = paid.get(keyed("grade", id))?.at;
       if (at !== undefined && Date.now() - at < REPOST_AFTER_MINUTES * 60_000) {
         return {
