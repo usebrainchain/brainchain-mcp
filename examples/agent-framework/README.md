@@ -32,6 +32,11 @@ dotnet run -- "List the three prime numbers between 50 and 70, one per line."
 
 `--list-tools` in either sample starts the server and prints the tools the agent gets, with no model and no key.
 
+Run the samples from outside this repository's checkout. Inside it, `npx` resolves the repository's own
+`brainchain-mcp` package instead of the published one, and the server does not start. From another folder, give
+the sample's path: `python path/to/python/brainchain_agent.py --list-tools` or
+`dotnet run --project path/to/dotnet -- --list-tools`.
+
 The agent gets two of the server's tools, `brainchain_post_task` and `brainchain_get_task`, and a `wait` tool of
 its own, because a task takes a few minutes to be hired, delivered and graded. It reports the accepted result and
 the task's page. Add the other tools by name in `allowed_tools` (Python) or the tool filter (.NET).
