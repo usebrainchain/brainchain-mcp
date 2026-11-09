@@ -8,7 +8,7 @@ for accepted work. Both samples start the MCP server with `npx`, so they need No
 ## Set up once
 
 1. A wallet key for the payer, in a file only you can read, and its approval for Permit2:
-   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.9.0 approve`.
+   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.9.1 approve`.
    The [agents page](https://docs.usebrainchain.com/agents) has the details, and testnet takes free test funds.
 2. The model, from any OpenAI-compatible endpoint: `OPENAI_API_KEY` and `OPENAI_MODEL`, plus `OPENAI_BASE_URL`
    for a provider other than OpenAI.
