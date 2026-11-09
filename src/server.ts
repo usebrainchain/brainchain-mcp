@@ -136,8 +136,15 @@ export function walletReport(config: Config, address: string, funds: WalletFunds
   return lines.join("\n");
 }
 
-export function approveCommand(config: Config, version: string): string {
-  return `${config.name === "testnet" ? "BRAINCHAIN_NETWORK=testnet " : ""}npx -y brainchain-mcp@${version} approve`;
+/** Quoting a leading ~ is safe: the server expands it itself. */
+const shellWord = (word: string) => (/^[\w./~-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`);
+
+export function approveCommand(config: Config, version: string, env: Record<string, string | undefined>): string {
+  const network = config.name === "testnet" ? "BRAINCHAIN_NETWORK=testnet " : "";
+  const file = env.BRAINCHAIN_PAYER_KEY_FILE?.trim();
+  // `approve` is a new process that sees only its own environment. A value that is no path may be a key in the wrong variable, so it is never printed.
+  const key = file && isAbsolute(expandHome(file)) ? `BRAINCHAIN_PAYER_KEY_FILE=${shellWord(file)} ` : "";
+  return `${network}${key}npx -y brainchain-mcp@${version} approve`;
 }
 
 /** A missing key or a bad setting is reported when a tool needs it, so the server always starts and lists its tools. */
@@ -186,7 +193,7 @@ function deskFor(
   const desk = createDesk({
     config,
     signer: payer,
-    approveCommand: approveCommand(config, version),
+    approveCommand: approveCommand(config, version, env),
     fetch: fetchImpl,
     limits,
     funds: async () => {

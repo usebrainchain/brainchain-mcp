@@ -64,7 +64,7 @@ if (command === undefined) {
 } else if (command === "wallet") {
   const { config, account } = settings();
   const funds = await walletFunds(config, account.address).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
-  console.log(walletReport(config, account.address, funds, approveCommand(config, version)));
+  console.log(walletReport(config, account.address, funds, approveCommand(config, version, process.env)));
 } else {
   await approve(process.argv[3] ?? "100");
 }

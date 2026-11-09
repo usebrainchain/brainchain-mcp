@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
 import { guidance } from "./payments.js";
-import { approvalFailure, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
+import { approvalFailure, approveCommand, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_GRADE_NAME, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
@@ -321,6 +322,34 @@ describe("approvalFailure", () => {
   });
 });
 
+describe("approveCommand", () => {
+  const mainnet = resolveConfig({});
+  const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
+  const command = "npx -y brainchain-mcp@0.0.0-test approve";
+
+  it("adds nothing for a key in BRAINCHAIN_PAYER_KEY, and never prints the key", () => {
+    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY: KEY })).toBe(command);
+    expect(approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY: KEY })).toBe(`BRAINCHAIN_NETWORK=testnet ${command}`);
+  });
+
+  it("names the key file as it was given, so the command finds the key on its own", () => {
+    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: " ~/.brainchain/payer.key\n" })).toBe(`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key ${command}`);
+    expect(approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "/keys/payer.key" })).toBe(`BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=/keys/payer.key ${command}`);
+  });
+
+  it("quotes a path so a shell reads it back unchanged", () => {
+    if (process.platform === "win32") return;
+    for (const path of ["/my keys/payer.key", "/keys/it's/$HOME/`id`.key"]) {
+      const [assignment] = approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: path }).split(" npx ");
+      expect(execFileSync("sh", ["-c", `${assignment} printenv BRAINCHAIN_PAYER_KEY_FILE`], { encoding: "utf8" })).toBe(`${path}\n`);
+    }
+  });
+
+  it("leaves out a value that is no path, which may be a key in the wrong variable", () => {
+    for (const value of [KEY, `0x${KEY}`, "payer.key", "~other/payer.key"]) expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: value })).toBe(command);
+  });
+});
+
 describe("wallet", () => {
   const address = privateKeyToAccount(`0x${KEY}`).address;
   const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
@@ -352,6 +381,13 @@ describe("wallet", () => {
     );
     expect(walletReport(raised, address, { balance: 5_000_000n, allowance: 5_000_000n, eth: 0n }, approve)).toBe(
       `${address} pays for tasks in test USDG on Robinhood Chain testnet.\nIt holds 5 test USDG.\nPermit2 may spend up to 5 of its test USDG.`,
+    );
+  });
+
+  it("prints an approve command that finds a key kept in a file", () => {
+    const fromFile = approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "~/.brainchain/payer.key" });
+    expect(walletReport(testnet, address, { balance: 1_000_000n, allowance: 0n, eth: 0n }, fromFile)).toContain(
+      "Run `BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.0.0-test approve` once;",
     );
   });
 

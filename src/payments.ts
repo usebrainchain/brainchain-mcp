@@ -195,7 +195,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
         return `The paying wallet holds ${formatUnits(balance)} ${config.token} on ${config.chain}; a ${kind} costs ${formatUnits(needed)}. Nothing was charged. Send at least ${formatUnits(needed - balance)} ${config.token} to ${address} on ${config.chain}, then ${kind === "task" ? "post again" : "send it again"}.`;
       }
       if (config.permit2 && allowance !== undefined && allowance < needed) {
-        return `Permit2 is not yet approved to spend this wallet's ${config.token}. Run \`${approveCommand}\` once with the same BRAINCHAIN_PAYER_KEY; it needs a little ETH on ${config.chain}. Nothing was charged.`;
+        return `Permit2 is not yet approved to spend this wallet's ${config.token}. Run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on ${config.chain}. Nothing was charged.`;
       }
     } catch {
       // The chain read failed or ran out of time; the desk's own reason is the best explanation left.
