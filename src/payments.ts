@@ -262,9 +262,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       if (recent.get(key) === entry) recent.delete(key);
     };
     entry.reply.then((reply) => {
-      const id = (reply as Record<string, unknown>)[kind === "task" ? "order" : "grade"];
+      const { [kind === "task" ? "order" : "grade"]: id, state } = reply as Record<string, unknown>;
       if (typeof id === "string") paid.set(keyed(kind, id), { at: now, forget });
-      else forget();
+      // A failed grade's reply says to send it again, and sending it again must not return this reply.
+      if (typeof id !== "string" || (kind === "grade" && state === "failed")) forget();
     }, forget);
     return entry.reply;
   }
@@ -342,7 +343,9 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       const id = idOf(orderIdOf(signed));
       // The desk answers an identical grade from the same wallet with the earlier one and cancels this payment.
       const cancelled = kind === "grade" && id.toLowerCase() !== orderIdOf(signed).toLowerCase();
-      if (cancelled) await unreserve();
+      const failed = kind === "grade" && reply.state === "failed";
+      if (cancelled || failed) await unreserve();
+      if (failed) await release(kind, id);
       const done = { ...reply, ...receipt(id), ...(cancelled ? { duplicate: true } : {}) };
       return kind === "task" ? done : { ...done, ...gradeGuidance(done) };
     }

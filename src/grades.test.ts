@@ -1,3 +1,7 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -179,6 +183,39 @@ describe("a grade's money", () => {
     const read = (await d.getGrade(grade)) as Record<string, unknown>;
     expect(read).toMatchObject({ done: true });
     expect(read.next).toMatch(/nothing was charged/);
+    expect(d.spent()).toBe(0n);
+  });
+
+  it("gives back what a paid grade held when the desk answers it as failed, so it can be sent again at once", async () => {
+    let answers = 0;
+    const { fetchImpl, seen } = fakeDesk((p) => (++answers === 1 ? new Response(JSON.stringify({ grade: orderIdOf(p), state: "failed" }), { status: 200 }) : verdict(p)));
+    // A daily limit of one grade, so the second payment can only be signed if the first was given back.
+    const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+    const d = createDesk({ config: { ...config, daily: 250_000n, stateDir }, signer, approveCommand: "unused", fetch: fetchImpl, postTimeoutMs: 10_000 });
+    const failed = (await d.grade(request)) as Record<string, unknown>;
+    expect(failed).toMatchObject({ grade: orderIdOf(seen[0]!), state: "failed", price: "0 test USDG", done: true });
+    expect(failed.next).toMatch(/nothing was charged .* Send it again/);
+    expect(d.spent()).toBe(0n);
+
+    const again = (await d.grade(request)) as Record<string, unknown>;
+    expect(seen).toHaveLength(2);
+    expect(again).toMatchObject({ grade: orderIdOf(seen[1]!), accepted: true, price: "0.25 test USDG" });
+    expect(again).not.toHaveProperty("duplicate");
+    expect(d.spent()).toBe(250_000n);
+  });
+
+  it("gives back an earlier grade's hold when the desk answers a repeat with that grade as failed", async () => {
+    let first = "";
+    const { fetchImpl } = fakeDesk((p) => {
+      if (first) return new Response(JSON.stringify({ grade: first, state: "failed" }), { status: 200 });
+      first = orderIdOf(p);
+      return new Response("{}", { status: 502 });
+    });
+    const d = desk(fetchImpl);
+    await d.grade(request);
+    expect(d.spent()).toBe(250_000n);
+    later();
+    expect(await d.grade(request)).toMatchObject({ grade: first, state: "failed", duplicate: true, done: true });
     expect(d.spent()).toBe(0n);
   });
 
