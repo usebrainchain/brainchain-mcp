@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,13 +12,14 @@ import { describe, expect, it } from "vitest";
 import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
 import { guidance } from "./payments.js";
-import { approvalFailure, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
+import { approvalFailure, approveCommand, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_GRADE_NAME, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
 const KEY = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const task = { title: "Explain a Merkle proof", brief: "In two paragraphs.", levels: ["Accurate and complete", "Accurate"] };
 const order = `0x${"ab".repeat(32)}`;
+const grade = { brief: "Sort 3, 1 and 2.", result: "1, 2, 3" };
 
 async function connect(env: Record<string, string | undefined>, options: ServerOptions = {}) {
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
@@ -91,6 +93,8 @@ describe("the server", () => {
       for (const call of [
         { name: POST_TASK_NAME, arguments: task },
         { name: GET_TASK_NAME, arguments: { order } },
+        { name: GRADE_NAME, arguments: grade },
+        { name: GET_GRADE_NAME, arguments: { grade: order } },
         { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } },
         { name: BOND_STATUS_NAME, arguments: { task: "12" } },
       ]) {
@@ -127,14 +131,15 @@ describe("the server", () => {
       expect(logged).toHaveLength(1);
       expect(logged[0]).toContain(problem);
       const { tools } = await client.listTools();
-      // Reading a bond needs the key too, so all three tools lead with the problem.
-      for (const name of [POST_TASK_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]) {
+      // Reading a bond needs the key too, so all four tools lead with the problem.
+      for (const name of [POST_TASK_NAME, GRADE_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]) {
         expect(tools.find((tool) => tool.name === name)!.description).toMatch(/^Invalid setting: /);
         expect(tools.find((tool) => tool.name === name)!.description).toContain(problem);
       }
       // The tools that need the key answer with the problem, on a network where bonds are closed too.
       for (const call of [
         { name: POST_TASK_NAME, arguments: task },
+        { name: GRADE_NAME, arguments: grade },
         { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } },
         { name: BOND_STATUS_NAME, arguments: { task: "12" } },
       ]) {
@@ -146,6 +151,7 @@ describe("the server", () => {
         }
       }
       expect((await client.callTool({ name: GET_TASK_NAME, arguments: { order } })).isError).toBe(false);
+      expect((await client.callTool({ name: GET_GRADE_NAME, arguments: { grade: order } })).isError).toBe(false);
     }
   });
 
@@ -180,10 +186,10 @@ describe("the server", () => {
         expect(logged).toEqual([`brainchain-mcp has an invalid setting: ${problem}`]);
 
         const { tools } = await client.listTools();
-        for (const name of [POST_TASK_NAME, BOND_TASK_NAME]) {
+        for (const [name, valid] of [[POST_TASK_NAME, task], [GRADE_NAME, grade], [BOND_TASK_NAME, { task: "12", amount: "5" }]] as const) {
           expect(tools.find((tool) => tool.name === name)!.description).toMatch(new RegExp(`^Invalid setting: ${problem.replace(/[.]/g, "\\.")} Until .* this tool only returns that error\\. `));
           // A call that is wrong in itself gets the same answer: the tool returns that error and nothing else.
-          for (const sent of [name === POST_TASK_NAME ? task : { task: "12", amount: "5" }, {}, { task: "0", extra: true }]) {
+          for (const sent of [valid, {}, { task: "0", extra: true }]) {
             const result = await client.callTool({ name, arguments: sent });
             expect(result.isError).toBe(true);
             expect(JSON.parse(text(result))).toEqual({ error: problem });
@@ -191,9 +197,10 @@ describe("the server", () => {
         }
         expect(asked).toEqual([]);
 
-        // Reading an order pays nothing and needs no record.
+        // Reading an order or a grade pays nothing and needs no record.
         expect((await client.callTool({ name: GET_TASK_NAME, arguments: { order } })).isError).toBe(false);
-        expect(asked).toHaveLength(1);
+        expect((await client.callTool({ name: GET_GRADE_NAME, arguments: { grade: order } })).isError).toBe(false);
+        expect(asked).toHaveLength(2);
 
         // Nor does reading a bond: its description names no problem, and on testnet it answers as it always does there.
         const status = tools.find((tool) => tool.name === BOND_STATUS_NAME)!.description!;
@@ -206,7 +213,8 @@ describe("the server", () => {
       }
     }
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-    expect(readme).toContain("stops the two tools that pay, `brainchain_post_task` and `brainchain_bond_task`; `brainchain_bond_status` and `brainchain_get_task` read nothing that needs the folder and keep working.");
+    expect(readme).toContain("A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_bond_task` and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working.");
+    expect(readme).toContain("stops the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; `brainchain_bond_status`, `brainchain_get_task` and `brainchain_get_grade` read nothing that needs the folder and keep working.");
     expect(readme).not.toContain("the task and bond tools return the error");
   });
 
@@ -223,8 +231,10 @@ describe("the server", () => {
     const read = text(await client.callTool({ name: BOND_STATUS_NAME, arguments: { task: "12" } }));
     expect(read).toContain("BRAINCHAIN_PAYER_KEY must be 64 hex characters");
     expect(read).not.toContain("BRAINCHAIN_STATE_DIR");
-    // The two tools that pay name both.
-    expect(text(await client.callTool({ name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } }))).toContain("BRAINCHAIN_STATE_DIR is /proc/brainchain");
+    // The tools that pay name both.
+    for (const call of [{ name: GRADE_NAME, arguments: grade }, { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } }]) {
+      expect(text(await client.callTool(call))).toContain("BRAINCHAIN_STATE_DIR is /proc/brainchain");
+    }
   });
 
   it("names the wallet that pays in the post tool, so an agent never needs the key to find it", async () => {
@@ -321,6 +331,34 @@ describe("approvalFailure", () => {
   });
 });
 
+describe("approveCommand", () => {
+  const mainnet = resolveConfig({});
+  const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
+  const command = "npx -y brainchain-mcp@0.0.0-test approve";
+
+  it("adds nothing for a key in BRAINCHAIN_PAYER_KEY, and never prints the key", () => {
+    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY: KEY })).toBe(command);
+    expect(approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY: KEY })).toBe(`BRAINCHAIN_NETWORK=testnet ${command}`);
+  });
+
+  it("names the key file as it was given, so the command finds the key on its own", () => {
+    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: " ~/.brainchain/payer.key\n" })).toBe(`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key ${command}`);
+    expect(approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "/keys/payer.key" })).toBe(`BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=/keys/payer.key ${command}`);
+  });
+
+  it("quotes a path so a shell reads it back unchanged", () => {
+    if (process.platform === "win32") return;
+    for (const path of ["/my keys/payer.key", "/keys/it's/$HOME/`id`.key"]) {
+      const [assignment] = approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: path }).split(" npx ");
+      expect(execFileSync("sh", ["-c", `${assignment} printenv BRAINCHAIN_PAYER_KEY_FILE`], { encoding: "utf8" })).toBe(`${path}\n`);
+    }
+  });
+
+  it("leaves out a value that is no path, which may be a key in the wrong variable", () => {
+    for (const value of [KEY, `0x${KEY}`, "payer.key", "~other/payer.key"]) expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: value })).toBe(command);
+  });
+});
+
 describe("wallet", () => {
   const address = privateKeyToAccount(`0x${KEY}`).address;
   const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
@@ -352,6 +390,13 @@ describe("wallet", () => {
     );
     expect(walletReport(raised, address, { balance: 5_000_000n, allowance: 5_000_000n, eth: 0n }, approve)).toBe(
       `${address} pays for tasks in test USDG on Robinhood Chain testnet.\nIt holds 5 test USDG.\nPermit2 may spend up to 5 of its test USDG.`,
+    );
+  });
+
+  it("prints an approve command that finds a key kept in a file", () => {
+    const fromFile = approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "~/.brainchain/payer.key" });
+    expect(walletReport(testnet, address, { balance: 1_000_000n, allowance: 0n, eth: 0n }, fromFile)).toContain(
+      "Run `BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.0.0-test approve` once;",
     );
   });
 

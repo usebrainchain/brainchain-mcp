@@ -326,6 +326,15 @@ describe("posting", () => {
     await expect(desk(fetchImpl).post(task)).rejects.toThrow(/asks 2 test USDG per task, above this server's limit of 1/);
     expect(seen).toHaveLength(0);
   });
+
+  it("gives the approve command for whichever way the key was set when Permit2 is not approved", async () => {
+    for (const approveCommand of ["npx -y brainchain-mcp approve", "BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp approve"]) {
+      const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "insufficient_allowance" }), { status: 402 }));
+      const d = createDesk({ config, signer, approveCommand, fetch: fetchImpl, funds: async () => ({ balance: 5_000_000n, allowance: 0n }) });
+      const message = await d.post(task).catch((error: Error) => error.message);
+      expect(message).toBe(`Permit2 is not yet approved to spend this wallet's test USDG. Run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on Robinhood Chain testnet. Nothing was charged.`);
+    }
+  });
 });
 
 describe("posting the same task again", () => {

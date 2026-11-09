@@ -195,7 +195,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
         return `The paying wallet holds ${formatUnits(balance)} ${config.token} on ${config.chain}; a ${kind} costs ${formatUnits(needed)}. Nothing was charged. Send at least ${formatUnits(needed - balance)} ${config.token} to ${address} on ${config.chain}, then ${kind === "task" ? "post again" : "send it again"}.`;
       }
       if (config.permit2 && allowance !== undefined && allowance < needed) {
-        return `Permit2 is not yet approved to spend this wallet's ${config.token}. Run \`${approveCommand}\` once with the same BRAINCHAIN_PAYER_KEY; it needs a little ETH on ${config.chain}. Nothing was charged.`;
+        return `Permit2 is not yet approved to spend this wallet's ${config.token}. Run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on ${config.chain}. Nothing was charged.`;
       }
     } catch {
       // The chain read failed or ran out of time; the desk's own reason is the best explanation left.
@@ -262,9 +262,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       if (recent.get(key) === entry) recent.delete(key);
     };
     entry.reply.then((reply) => {
-      const id = (reply as Record<string, unknown>)[kind === "task" ? "order" : "grade"];
+      const { [kind === "task" ? "order" : "grade"]: id, state } = reply as Record<string, unknown>;
       if (typeof id === "string") paid.set(keyed(kind, id), { at: now, forget });
-      else forget();
+      // A failed grade's reply says to send it again, and sending it again must not return this reply.
+      if (typeof id !== "string" || (kind === "grade" && state === "failed")) forget();
     }, forget);
     return entry.reply;
   }
@@ -342,7 +343,9 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       const id = idOf(orderIdOf(signed));
       // The desk answers an identical grade from the same wallet with the earlier one and cancels this payment.
       const cancelled = kind === "grade" && id.toLowerCase() !== orderIdOf(signed).toLowerCase();
-      if (cancelled) await unreserve();
+      const failed = kind === "grade" && reply.state === "failed";
+      if (cancelled || failed) await unreserve();
+      if (failed) await release(kind, id);
       const done = { ...reply, ...receipt(id), ...(cancelled ? { duplicate: true } : {}) };
       return kind === "task" ? done : { ...done, ...gradeGuidance(done) };
     }
