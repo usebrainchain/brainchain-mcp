@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: usebrainchain/review-action@15613cdbba7763dc9ba7b4e088f4f94d7dc0c5b4 # v1.4.1
+      - uses: usebrainchain/review-action@8a5d1ddb5876a32907e18b7c99850a486fc3a97e # v1.4.2
         with:
           payer-key: ${{ secrets.BRAINCHAIN_PAYER_KEY }}
           pay-on: robinhood
