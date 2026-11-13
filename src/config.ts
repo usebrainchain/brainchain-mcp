@@ -3,7 +3,7 @@ import { isAbsolute, join } from "node:path";
 
 import type { Terms } from "./tools.js";
 
-const MAINNET_DESK = { desk: "https://brain.usebrainchain.com", payTo: "0xafB0C4Ef895D4895040cdC6435B96D3EE8350c6E", finalAfter: "about six hours" } as const;
+const MAINNET_DESK = { desk: "https://brain.usebrainchain.com", payTo: "0x97D558417c3D61f1074422AD843e1Db1E565b952", finalAfter: "about six hours" } as const;
 const TESTNET_DESK = { desk: "https://brain.testnet.usebrainchain.com", payTo: "0xf848984c8A0D9E49Cc9C97380C62b34C6f3b97D1", finalAfter: "about an hour" } as const;
 
 const PRESETS = {
