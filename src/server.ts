@@ -139,12 +139,22 @@ export function walletReport(config: Config, address: string, funds: WalletFunds
 /** Quoting a leading ~ is safe: the server expands it itself. */
 const shellWord = (word: string) => (/^[\w./~-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`);
 
-export function approveCommand(config: Config, version: string, env: Record<string, string | undefined>): string {
-  const network = config.name === "testnet" ? "BRAINCHAIN_NETWORK=testnet " : "";
+/** PowerShell, the shell a Windows terminal opens, reads a single-quoted word as written, with '' for a quote. */
+const powershellWord = (word: string) => `'${word.replaceAll("'", "''")}'`;
+
+/**
+ * The command that approves Permit2 with this server's key, in the form the
+ * local shell runs: an inline assignment on macOS and Linux, PowerShell's
+ * $env: on Windows, where `NAME=value command` is not a command at all.
+ */
+export function approveCommand(config: Config, version: string, env: Record<string, string | undefined>, platform: NodeJS.Platform = process.platform): string {
   const file = env.BRAINCHAIN_PAYER_KEY_FILE?.trim();
   // `approve` is a new process that sees only its own environment. A value that is no path may be a key in the wrong variable, so it is never printed.
-  const key = file && isAbsolute(expandHome(file)) ? `BRAINCHAIN_PAYER_KEY_FILE=${shellWord(file)} ` : "";
-  return `${network}${key}npx -y brainchain-mcp@${version} approve`;
+  const named = file && isAbsolute(expandHome(file)) ? file : undefined;
+  const settings: [string, string][] = [...(config.name === "testnet" ? [["BRAINCHAIN_NETWORK", "testnet"] as [string, string]] : []), ...(named ? [["BRAINCHAIN_PAYER_KEY_FILE", named] as [string, string]] : [])];
+  const run = `npx -y brainchain-mcp@${version} approve`;
+  if (platform === "win32") return [...settings.map(([name, value]) => `$env:${name}=${powershellWord(value)}`), run].join("; ");
+  return [...settings.map(([name, value]) => `${name}=${name === "BRAINCHAIN_NETWORK" ? value : shellWord(value)}`), run].join(" ");
 }
 
 /** A missing key or a bad setting is reported when a tool needs it, so the server always starts and lists its tools. */

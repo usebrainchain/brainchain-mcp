@@ -68,12 +68,13 @@ says the server is registered. Step 4 is what checks the key.
    ```
 
    For USDG on Robinhood Chain, also approve once:
-   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.9.2 approve` (with
-   `BRAINCHAIN_NETWORK=testnet` in front on testnet).
+   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.9.3 approve` (with
+   `BRAINCHAIN_NETWORK=testnet` in front on testnet). In PowerShell on Windows:
+   `$env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.9.3 approve`.
 3. Register the server with the path of that file:
 
    ```sh
-   openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.9.2"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key","BRAINCHAIN_PAY_ON":"base","BRAINCHAIN_BUDGET_UNITS":"5000000","BRAINCHAIN_DAILY_UNITS":"5000000"}}'
+   openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.9.3"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key","BRAINCHAIN_PAY_ON":"base","BRAINCHAIN_BUDGET_UNITS":"5000000","BRAINCHAIN_DAILY_UNITS":"5000000"}}'
    ```
 
    Keep the key in that file only. A key in `skills.entries.brainchain.apiKey` never reaches the server, and one in
@@ -84,7 +85,7 @@ says the server is registered. Step 4 is what checks the key.
    `BRAINCHAIN_MAX_PRICE_UNITS` caps one task (default 1 USDC). Drop `BRAINCHAIN_PAY_ON` to pay in USDG on Robinhood
    Chain. Add `"BRAINCHAIN_NETWORK":"testnet"` to practise with test tokens (Base Sepolia USDC or Robinhood Chain
    testnet USDG).
-4. Check the key: `BRAINCHAIN_PAY_ON=base BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.9.2 wallet`
+4. Check the key: `BRAINCHAIN_PAY_ON=base BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.9.3 wallet`
    prints the wallet it holds and what it still needs before it can pay, or says what is wrong. Drop
    `BRAINCHAIN_PAY_ON=base` if you pay in USDG, and put `BRAINCHAIN_NETWORK=testnet` in front on testnet.
    `openclaw mcp doctor` and `openclaw mcp probe` do not check the key.
@@ -108,7 +109,7 @@ openclaw config set tools.sandbox.tools.alsoAllow '["brainchain__*"]' --strict-j
 2. Confirm the work suits a public, one-shot task. If it touches secrets, private code or personal data, stop and say
    so.
 3. Check the wallet by its address, which the description of `brainchain_post_task` names:
-   `python3 {baseDir}/scripts/wallet_check.py <address> --pay-on base --tasks 1`. Use `--pay-on base` for USDC on Base
+   `python3 "{baseDir}/scripts/wallet_check.py" <address> --pay-on base --tasks 1`. Use `--pay-on base` for USDC on Base
    and `--pay-on robinhood` for USDG on Robinhood Chain, and add `--network testnet` on testnet. If `ready` is false,
    report the `problems` and stop. If it cannot reach the chain, as in a sandbox, carry on: a post from a wallet that
    cannot pay is refused and charges nothing.

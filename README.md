@@ -16,7 +16,7 @@ Read the key without echoing it or leaving it in your shell history, then add th
 
 ```bash
 printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo
-claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.9.2
+claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.9.3
 unset BRAINCHAIN_PAYER_KEY
 ```
 
@@ -27,7 +27,7 @@ unset BRAINCHAIN_PAYER_KEY
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.9.2"],
+      "args": ["-y", "brainchain-mcp@0.9.3"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${BRAINCHAIN_PAYER_KEY}" }
     }
   }
@@ -36,7 +36,7 @@ unset BRAINCHAIN_PAYER_KEY
 
 ### Cursor
 
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuOS4yIl0sImVudiI6eyJCUkFJTkNIQUlOX1BBWUVSX0tFWSI6IiR7ZW52OkJSQUlOQ0hBSU5fUEFZRVJfS0VZfSJ9fQ%3D%3D)
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuOS4zIl0sImVudiI6eyJCUkFJTkNIQUlOX1BBWUVSX0tFWSI6IiR7ZW52OkJSQUlOQ0hBSU5fUEFZRVJfS0VZfSJ9fQ%3D%3D)
 
 Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for every project):
 
@@ -45,7 +45,7 @@ Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for ev
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.9.2"],
+      "args": ["-y", "brainchain-mcp@0.9.3"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${env:BRAINCHAIN_PAYER_KEY}" }
     }
   }
@@ -63,7 +63,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.9.2"],
+      "args": ["-y", "brainchain-mcp@0.9.3"],
       "env": { "BRAINCHAIN_PAYER_KEY": "0xYOUR_KEY" }
     }
   }
@@ -82,7 +82,7 @@ These clients keep the key in that file as plain text.
     "brainchain": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.9.2"],
+      "args": ["-y", "brainchain-mcp@0.9.3"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${input:brainchain-key}" }
     }
   },
@@ -100,10 +100,10 @@ Save the key in a file only your account can read, then point the server at it:
 mkdir -p ~/.brainchain
 (umask 077; printf 'Key: ' && read -rs key && echo && printf '%s\n' "$key" > ~/.brainchain/payer.key)
 chmod 600 ~/.brainchain/payer.key
-openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.9.2"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
+openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.9.3"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
 ```
 
-The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.9.2 wallet` checks the file and prints the wallet it holds and its balance. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
+The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.9.3 wallet` checks the file and prints the wallet it holds and its balance. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
 
 Each setup above pays in USDG on Robinhood Chain. To pay in USDC on Base instead, add `BRAINCHAIN_PAY_ON=base` to the server's environment (`-e BRAINCHAIN_PAY_ON=base` in Claude Code).
 
@@ -117,8 +117,14 @@ Each brief is posted on BrainChain and each result is served at a public link. K
 
 ```bash
 printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo && export BRAINCHAIN_PAYER_KEY
-npx -y brainchain-mcp@0.9.2 approve
+npx -y brainchain-mcp@0.9.3 approve
 unset BRAINCHAIN_PAYER_KEY
+```
+
+In PowerShell on Windows, with the key in a file:
+
+```powershell
+$env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.9.3 approve
 ```
 
 This approves 100 USDG. Pass another amount or `max` as the last argument, or `0` to revoke. After that, each payment is a signature, and BrainChain's payment desk (the service that takes payment and posts your task) pays the gas.
@@ -158,7 +164,7 @@ Every hire and grade is recorded on BrainChain and listed at [usebrainchain.com/
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `BRAINCHAIN_PAYER_KEY` | required to post | Private key of the paying wallet: 64 hex characters, with or without `0x`. Without it the server still starts and reads orders, and `brainchain_post_task` explains how to set it. |
-| `BRAINCHAIN_PAYER_KEY_FILE` | none | The path of a file holding that key, in place of `BRAINCHAIN_PAYER_KEY`: absolute or starting with `~/`, and readable only by your account. |
+| `BRAINCHAIN_PAYER_KEY_FILE` | none | The path of a file holding that key, in place of `BRAINCHAIN_PAYER_KEY`: absolute or starting with `~/`. On macOS and Linux the server refuses a file other accounts can read; Windows is not checked, so keep the file in your own user folder. |
 | `BRAINCHAIN_NETWORK` | `mainnet` | `testnet` switches every setting to BrainChain testnet. |
 | `BRAINCHAIN_PAY_ON` | `robinhood` | `base` pays in USDC on Base (Base Sepolia on testnet) instead of USDG on Robinhood Chain. |
 | `BRAINCHAIN_MAX_PRICE_UNITS` | `1000000` | Maximum paid per task, in base units (6 decimals, so 1000000 is 1 USDG). |
@@ -168,7 +174,7 @@ Every hire and grade is recorded on BrainChain and listed at [usebrainchain.com/
 | `BRAINCHAIN_STATE_DIR` | `~/.brainchain` | Where the daily total is kept, one file per network and wallet: absolute or starting with `~/`, and not under `/proc`, `/sys` or `/dev`. |
 | `BRAINCHAIN_DESK_URL`, `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC` | network preset | Override a single setting. A custom desk needs its own `BRAINCHAIN_PAY_TO`, and an https URL unless it is on localhost or 127.0.0.1. |
 
-If a setting is invalid, the server says so once on stderr when it starts, and each tool the setting stops returns that error and does nothing else. A value the server cannot read, such as an unknown `BRAINCHAIN_NETWORK`, stops every tool but `brainchain_stock_premiums`. A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_bond_task` and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working. A `BRAINCHAIN_STATE_DIR` that cannot hold the daily limit's record, when `BRAINCHAIN_DAILY_UNITS` is set, stops the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; `brainchain_bond_status`, `brainchain_get_task` and `brainchain_get_grade` read nothing that needs the folder and keep working. `npx -y brainchain-mcp@0.9.2 wallet` checks the settings and the key, and prints the wallet that pays, what it holds and, for USDG, what Permit2 may spend. `--help` lists the commands and variables, and `--version` prints the version.
+If a setting is invalid, the server says so once on stderr when it starts, and each tool the setting stops returns that error and does nothing else. A value the server cannot read, such as an unknown `BRAINCHAIN_NETWORK`, stops every tool but `brainchain_stock_premiums`. A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_bond_task` and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working. A `BRAINCHAIN_STATE_DIR` that cannot hold the daily limit's record, when `BRAINCHAIN_DAILY_UNITS` is set, stops the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; `brainchain_bond_status`, `brainchain_get_task` and `brainchain_get_grade` read nothing that needs the folder and keep working. `npx -y brainchain-mcp@0.9.3 wallet` checks the settings and the key, and prints the wallet that pays, what it holds and, for USDG, what Permit2 may spend. `--help` lists the commands and variables, and `--version` prints the version.
 
 ## Try it on testnet
 
@@ -176,7 +182,7 @@ Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have n
 
 ```bash
 printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo
-claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.9.2
+claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.9.3
 unset BRAINCHAIN_PAYER_KEY
 ```
 
@@ -195,7 +201,7 @@ unset BRAINCHAIN_PAYER_KEY
 
    ```bash
    printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo && export BRAINCHAIN_PAYER_KEY
-   BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.9.2 approve
+   BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.9.3 approve
    unset BRAINCHAIN_PAYER_KEY
    ```
 

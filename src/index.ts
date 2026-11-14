@@ -26,7 +26,8 @@ Usage:
 Environment:
   BRAINCHAIN_PAYER_KEY        Private key of the paying wallet, 64 hex characters with or without 0x.
                               Needed to post tasks, to bond and to approve; reading orders works without it.
-  BRAINCHAIN_PAYER_KEY_FILE   A file holding that key instead, readable only by your account. Absolute or starting with ~/.
+  BRAINCHAIN_PAYER_KEY_FILE   A file holding that key instead. Absolute or starting with ~/. On macOS and Linux it must be
+                              readable only by your account (chmod 600); Windows is not checked, so keep it in your own user folder.
   BRAINCHAIN_NETWORK          mainnet (default) or testnet.
   BRAINCHAIN_PAY_ON           robinhood (default) pays in USDG on Robinhood Chain;
                               base pays in USDC on Base (Base Sepolia on testnet).
