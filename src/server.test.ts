@@ -354,6 +354,14 @@ describe("approveCommand", () => {
     }
   });
 
+  it("gives the PowerShell form on Windows, where an inline assignment is no command", () => {
+    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY: KEY }, "win32")).toBe(command);
+    expect(approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "~/.brainchain/payer.key" }, "win32")).toBe(
+      `$env:BRAINCHAIN_NETWORK='testnet'; $env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; ${command}`,
+    );
+    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "~/it's/payer.key" }, "win32")).toBe(`$env:BRAINCHAIN_PAYER_KEY_FILE='~/it''s/payer.key'; ${command}`);
+  });
+
   it("leaves out a value that is no path, which may be a key in the wrong variable", () => {
     for (const value of [KEY, `0x${KEY}`, "payer.key", "~other/payer.key"]) expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: value })).toBe(command);
   });

@@ -35,7 +35,7 @@ def server() -> MCPStdioTool:
     return MCPStdioTool(
         name="brainchain",
         command="npx",
-        args=["-y", "brainchain-mcp@0.9.2"],
+        args=["-y", "brainchain-mcp@0.9.3"],
         env=settings,
         allowed_tools=["brainchain_post_task", "brainchain_get_task"],
         request_timeout=180,

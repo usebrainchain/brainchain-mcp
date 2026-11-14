@@ -35,7 +35,9 @@ ALLOWANCE = "0xdd62ed3e"
 
 
 def _word(address: str) -> str:
-    return address.lower().removeprefix("0x").rjust(64, "0")
+    # str.removeprefix needs Python 3.9; this runs on 3.8 too.
+    bare = address.lower()
+    return (bare[2:] if bare.startswith("0x") else bare).rjust(64, "0")
 
 
 def rpc(url: str, method: str, params: list, timeout: float = 15.0):
