@@ -1,8 +1,9 @@
 import { once } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +29,13 @@ const ORDER = {
 const FUNCTION = 'from datetime import date\n\ndef week_start(text):\n    year, week = text.split("-W")\n    return date.fromisocalendar(int(year), int(week), 1)';
 const BROKEN = "from datetime import date\n\ndef week_start(text):\n    return date.today()";
 const fenced = (code: string) => `\`\`\`python\n${code}\n\`\`\``;
+
+/** The payment headers the seller's store holds, oldest order first. */
+async function storedHeaders(dir: string): Promise<string[]> {
+  const names = await readdir(join(dir, "orders")).catch(() => []);
+  const orders = await Promise.all(names.filter((name) => name.endsWith(".json")).map(async (name) => JSON.parse(await readFile(join(dir, "orders", name), "utf8"))));
+  return orders.flatMap((order) => order.attempts.flatMap((attempt: { signed?: { headers: Record<string, string> } }) => (attempt.signed ? [attempt.signed.headers["PAYMENT-SIGNATURE"]!] : [])));
+}
 
 interface Client {
   request(path: string, init?: RequestInit): Promise<Response>;
@@ -69,10 +77,11 @@ async function setup(
   const dir = given.dir ?? (await mkdtemp(join(tmpdir(), "reference-seller-")));
   const brainchain = given.brainchain ?? mockBrainChain({ origin: ORIGIN, ...LANE, price: 250_000n, ...given.mock });
   const printed: string[] = [];
+  const logged: string[] = [];
   const config: JudgeConfig = { url: ORIGIN, ...LANE, token: "test USDC", maxUnits: 250_000n, dailyUnits: 2_500_000n, dir, key: KEY, ...given.judge };
   const judge = createJudge(config, { fetch: given.fetch ?? brainchain.fetch, pollMs: 5, log: (line) => printed.push(line) });
   const work = vi.fn(given.work ?? (async () => FUNCTION));
-  const seller = await createSeller({ dir, judge, work, log: () => {} });
+  const seller = await createSeller({ dir, judge, work, retryMs: 5, log: (line) => logged.push(line) });
   const client = await FRAMEWORKS[framework](seller);
   cleanups.push(async () => {
     await client.close();
@@ -97,7 +106,7 @@ async function setup(
     const text = await readFile(join(dir, "spend.json"), "utf8").catch(() => undefined);
     return text === undefined ? "0" : (JSON.parse(text) as { units: string }).units;
   };
-  return { dir, brainchain, printed, work, client, order, settled, placeAndSettle, spent };
+  return { dir, brainchain, printed, logged, work, client, order, settled, placeAndSettle, spent };
 }
 
 describe.each(["express", "hono"] as const)("a seller on %s", (framework) => {
@@ -194,6 +203,68 @@ describe.each(["express", "hono"] as const)("a seller on %s", (framework) => {
     expect(await second.settled(order)).toMatchObject({ state: "accepted" });
     expect(brainchain.signed).toBe(1);
     expect(await second.spent()).toBe("250000");
+  });
+
+  it("stores the signed payment before sending it, and after a lost reply sends that same header again on restart", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "reference-seller-"));
+    const brainchain = mockBrainChain({ origin: ORIGIN, ...LANE, price: 250_000n });
+    let storedFirst = false;
+    // BrainChain takes the payment and grades the work, and the reply never reaches the seller.
+    const lost: typeof fetch = async (input, init) => {
+      const header = new Request(input, init).headers.get("payment-signature");
+      if (!header) return brainchain.fetch(input, init);
+      storedFirst = (await storedHeaders(dir)).includes(header);
+      await brainchain.fetch(input, init);
+      return new Promise(() => {});
+    };
+    const first = await setup(framework, { brainchain, fetch: lost, dir });
+    const { order } = (await first.order()).body;
+    await vi.waitFor(() => expect(brainchain.paid).toHaveLength(1));
+    expect(storedFirst).toBe(true);
+    expect(await first.spent()).toBe("250000");
+
+    const second = await setup(framework, { brainchain, dir });
+    expect(await second.settled(order)).toMatchObject({ state: "accepted", judged: [{ accepted: true }] });
+    expect(brainchain.payments).toHaveLength(2);
+    expect(brainchain.payments[1]).toEqual(brainchain.payments[0]);
+    expect(brainchain.signed).toBe(1);
+    expect(brainchain.paid).toHaveLength(1);
+    expect(await second.spent()).toBe("250000");
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("sends the same header again when BrainChain does not answer", async () => {
+    const brainchain = mockBrainChain({ origin: ORIGIN, ...LANE, price: 250_000n });
+    let failures = 1;
+    const flaky: typeof fetch = async (input, init) => {
+      if (new Request(input, init).headers.has("payment-signature") && failures-- > 0) throw new TypeError("fetch failed");
+      return brainchain.fetch(input, init);
+    };
+    const { placeAndSettle, spent } = await setup(framework, { brainchain, fetch: flaky });
+    expect(await placeAndSettle()).toMatchObject({ state: "accepted" });
+    expect(brainchain.signed).toBe(1);
+    expect(brainchain.paid).toHaveLength(1);
+    expect(await spent()).toBe("250000");
+  });
+
+  it("signs once more, and says so, when the stored payment expired before it ever reached BrainChain", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "reference-seller-"));
+    const brainchain = mockBrainChain({ origin: ORIGIN, ...LANE, price: 250_000n, maxTimeoutSeconds: 2 });
+    const dropped: typeof fetch = (input, init) => (new Request(input, init).headers.has("payment-signature") ? new Promise(() => {}) : brainchain.fetch(input, init));
+    const first = await setup(framework, { brainchain, fetch: dropped, dir });
+    const { order } = (await first.order()).body;
+    await vi.waitFor(async () => expect(await storedHeaders(dir)).toHaveLength(1));
+    const [stale] = await storedHeaders(dir);
+    await sleep(2_100);
+
+    const second = await setup(framework, { brainchain, dir });
+    expect(await second.settled(order)).toMatchObject({ state: "accepted" });
+    expect(brainchain.payments.map((p) => p.header)).not.toContain(stale);
+    expect(brainchain.signed).toBe(1);
+    expect(await storedHeaders(dir)).toEqual([brainchain.payments[0]!.header]);
+    expect(second.logged.filter((line) => line.includes("expired before it reached BrainChain"))).toHaveLength(1);
+    expect(await second.spent()).toBe("250000");
+    await rm(dir, { recursive: true, force: true });
   });
 
   it("fails the order on a refused payment and counts nothing against the day", async () => {

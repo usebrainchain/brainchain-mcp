@@ -18,6 +18,8 @@ export interface MockOptions {
   pending?: number;
   /** Refuses every payment with this reason. */
   refuse?: string;
+  /** How long a payment authorization may last. */
+  maxTimeoutSeconds?: number;
 }
 
 interface Payment {
@@ -49,16 +51,25 @@ function canonical(value: unknown): string {
 
 /**
  * BrainChain's grade route as a fetch handler: the 402 offer, an EIP-3009 payment checked down to its signature,
- * partner routes bound to their wallets, 202 while Jev grades, and the status URL.
+ * partner routes bound to their wallets, 202 while Jev grades, the status URL, and a payment header that already paid
+ * answered from its grade at any age without being settled again.
  */
 export function mockBrainChain(options: MockOptions) {
   const paid: { path: string; request: Record<string, unknown>; payer: Address; amount: string }[] = [];
   const reads: string[] = [];
   const seen: string[] = [];
-  let signed = 0;
+  const payments: { header: string; body: string }[] = [];
   const grades = new Map<string, { n: number; polls: number; grade: MockGrade; payer: Address }>();
 
-  const accept = (price: bigint) => ({ scheme: "exact", network: options.network, amount: price.toString(), asset: options.asset, payTo: options.payTo, maxTimeoutSeconds: 300, extra: DOMAIN });
+  const accept = (price: bigint) => ({
+    scheme: "exact",
+    network: options.network,
+    amount: price.toString(),
+    asset: options.asset,
+    payTo: options.payTo,
+    maxTimeoutSeconds: options.maxTimeoutSeconds ?? 300,
+    extra: DOMAIN,
+  });
 
   function offer(url: URL, price: bigint, error?: string): Response {
     const required = { x402Version: 2, error: error ?? "Payment required", resource: { url: url.href, description: "Jev grades a result against your brief.", mimeType: "application/json" }, accepts: [accept(price)] };
@@ -117,12 +128,15 @@ export function mockBrainChain(options: MockOptions) {
     if (route[1] !== undefined && !partner) return json({ error: "No such route." }, 404);
     const price = partner?.price ?? options.price;
 
+    const text = await request.clone().text();
     const body = (await request.json().catch(() => undefined)) as Record<string, unknown> | undefined;
     if (typeof body?.brief !== "string" || typeof body.result !== "string") return json({ error: "Send a JSON object with brief and result." }, 400);
     const header = request.headers.get("payment-signature");
     if (!header) return offer(url, price);
-    signed++;
+    payments.push({ header, body: text });
     const payment = JSON.parse(Buffer.from(header, "base64").toString()) as Payment;
+    const id = keccak256(toBytes(canonical(payment.payload)));
+    if (grades.has(id)) return json(view(id, true), grades.get(id)!.polls > 0 ? 202 : 200);
     const refused = (await refusal(payment, price)) ?? options.refuse;
     if (refused) return offer(url, price, refused);
     const payer = getAddress(payment.payload.authorization.from);
@@ -130,7 +144,6 @@ export function mockBrainChain(options: MockOptions) {
       return json({ error: "This route is for a named partner's wallets. Nothing was charged; pay at /x402/grades." }, 403);
     }
 
-    const id = keccak256(toBytes(canonical(payment.payload)));
     grades.set(id, { n: 4800 + grades.size, polls: options.pending ?? 0, grade: options.decide?.(body) ?? { passProbability: 0.91, checks: "passed" }, payer });
     paid.push({ path: url.pathname, request: body, payer, amount: payment.payload.authorization.value });
     const settled = { "payment-response": base64({ success: true, transaction: keccak256(toBytes(id)), network: options.network, payer }) };
@@ -144,9 +157,11 @@ export function mockBrainChain(options: MockOptions) {
     reads,
     seen,
     grades,
-    /** How many requests carried a payment header, refused or not. */
+    /** Every request that carried a payment header, refused or not. */
+    payments,
+    /** How many different payment headers arrived. */
     get signed() {
-      return signed;
+      return new Set(payments.map((p) => p.header)).size;
     },
   };
 }

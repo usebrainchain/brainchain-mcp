@@ -12,7 +12,9 @@ This example sells one job: a Python function that passes the buyer's tests. The
 4. BrainChain runs the tests after the delivered code. Work that fails them is rejected at full confidence. Jev grades work that passes against the levels and accepts it when the probability of a passing level reaches the bar, 80% today.
 5. The seller stores the verdict and the decision page with the order. `GET /orders/<id>` shows the buyer every grade and, once one is accepted, the delivery.
 
-When Jev takes longer than 90 seconds, BrainChain answers `202` and the seller reads the grade's status URL until the verdict arrives. A seller that restarts picks up its open orders and reads the grades it already paid for instead of paying again.
+When Jev takes longer than 90 seconds, BrainChain answers `202` and the seller reads the grade's status URL until the verdict arrives.
+
+The seller writes each signed payment to the order before it sends it. When a reply is lost, or the seller restarts, it sends that same payment again with the same request. BrainChain answers a payment it already took from its grade and never charges it twice. The seller signs again only when a payment expired before it ever reached BrainChain, which can never be charged, and it logs that it did. `SELLER_STATE_DIR` therefore holds signed payment authorizations. Each one can only ever pay BrainChain for its own grade.
 
 The buyer's view of an order:
 
@@ -97,7 +99,7 @@ Every grade is recorded on BrainChain, and anyone can read its decision page. Th
 | `SELLER_PAY_ON` | `base` pays USDC on Base, the default. `robinhood` pays USDG on Robinhood Chain. |
 | `SELLER_MAX_GRADE_UNITS` | The most one grade may cost, in token units. Default `250000`, 0.25. |
 | `SELLER_DAILY_UNITS` | The most grades may cost in a UTC day, in token units. Default `2500000`, 2.50. |
-| `SELLER_STATE_DIR` | Where orders and the day's spending are kept. Default `state`. |
+| `SELLER_STATE_DIR` | Where orders, their signed payments and the day's spending are kept. Default `state`. |
 | `BRAINCHAIN_PARTNER` | The partner name BrainChain gave you. |
 | `BRAINCHAIN_NETWORK` | `mainnet`, the default, or `testnet`. |
 | `PORT` | Default `3000`. |
@@ -106,4 +108,4 @@ The grade route, its fields and its limits are on [From another agent network](h
 
 ## Tests
 
-`npm test` runs the seller in both frameworks against a mock of BrainChain's grade route. The mock checks the signature on every payment. The tests cover accepted work, rejected work, failed tests, a `202`, a restart, a refused payment, the partner route and both caps. No request leaves the machine.
+`npm test` runs the seller in both frameworks against a mock of BrainChain's grade route. The mock checks the signature on every payment. The tests cover accepted work, rejected work, failed tests, a `202`, a lost reply, a restart, an expired payment, a refused payment, the partner route and both caps. No request leaves the machine.

@@ -4,12 +4,14 @@ import { join } from "node:path";
 
 import { readJson, writeJson } from "./files.ts";
 import { deliverable, gradeRequest, JOB, prompt, type OrderRequest } from "./job.ts";
-import type { Judge, Paid, Verdict } from "./judge.ts";
+import { Unanswered, type Judge, type Paid, type Signed, type Verdict } from "./judge.ts";
 
 export type OrderState = "working" | "grading" | "accepted" | "not accepted" | "failed" | "dry";
 
 export interface Attempt {
   delivery: string;
+  /** The payment signed for this delivery's grade, written here before it is sent. */
+  signed?: Signed;
   paid?: Paid;
   verdict?: Verdict;
 }
@@ -73,8 +75,10 @@ export async function createSeller(options: {
   work: (prompt: string) => Promise<string>;
   policy?: Policy;
   log?: (line: string) => void;
+  /** How long an order waits before it sends a payment BrainChain did not answer again. */
+  retryMs?: number;
 }): Promise<Seller> {
-  const { judge, work, policy = DEFAULT_POLICY, log = console.error } = options;
+  const { judge, work, policy = DEFAULT_POLICY, log = console.error, retryMs = 60_000 } = options;
   const dir = join(options.dir, "orders");
   const orders = new Map<string, Order>();
   const save = (order: Order) => writeJson(join(dir, `${order.id}.json`), order);
@@ -87,18 +91,35 @@ export async function createSeller(options: {
     return attempt;
   }
 
+  /**
+   * A signed payment is on disk before it is sent, and only that payment is ever sent for the attempt, however often.
+   * The one exception is a payment that expired before it reached BrainChain, which can never be charged.
+   */
+  async function grade(order: Order, attempt: Attempt): Promise<Verdict | undefined> {
+    if (attempt.paid) return judge.read(attempt.paid);
+    if (attempt.signed && (await judge.lapsed(attempt.signed))) {
+      log(`order ${order.id}: the payment signed for grade ${attempt.signed.grade} expired before it reached BrainChain and can never be charged; signing a new one.`);
+      delete attempt.signed;
+    }
+    if (!attempt.signed) {
+      const signed = await judge.sign(gradeRequest(order.request, attempt.delivery));
+      if (!signed) return undefined;
+      attempt.signed = signed;
+      await save(order);
+    }
+    return judge.send(attempt.signed, (paid) => {
+      attempt.paid = paid;
+      return save(order);
+    });
+  }
+
   async function run(order: Order): Promise<void> {
     for (;;) {
       const last = order.attempts.at(-1);
       const attempt = last && !last.verdict ? last : await deliver(order, last);
       order.state = "grading";
       await save(order);
-      const verdict = attempt.paid
-        ? await judge.read(attempt.paid)
-        : await judge.grade(gradeRequest(order.request, attempt.delivery), (paid) => {
-            attempt.paid = paid;
-            return save(order);
-          });
+      const verdict = await grade(order, attempt);
       if (!verdict) {
         order.state = "dry";
         return save(order);
@@ -117,6 +138,11 @@ export async function createSeller(options: {
 
   function start(order: Order): void {
     run(order).catch(async (error: unknown) => {
+      if (error instanceof Unanswered) {
+        log(`order ${order.id}: ${error.message} Sending the same payment again in ${retryMs / 1000} s.`);
+        setTimeout(() => start(order), retryMs);
+        return;
+      }
       order.state = "failed";
       order.reason = error instanceof Error ? error.message : String(error);
       log(`order ${order.id} failed: ${order.reason}`);
@@ -130,8 +156,8 @@ export async function createSeller(options: {
     const order = await readJson<Order>(join(dir, name));
     if (order) orders.set(order.id, order);
   }
-  // An order the last run left open picks up where it stopped. A grade it paid for is read, never paid again. One it
-  // was still paying for is sent again, and BrainChain answers the same request from the same wallet from the first grade.
+  // An order the last run left open picks up where it stopped: a grade it paid for is read, and a payment it signed is
+  // sent again as it was.
   for (const order of orders.values()) if (order.state === "working" || order.state === "grading") start(order);
 
   return {
