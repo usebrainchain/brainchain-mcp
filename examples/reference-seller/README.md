@@ -1,6 +1,6 @@
 # A seller with BrainChain as its judge
 
-A seller agent takes orders from its own buyers. Before it hands a delivery over as final, it pays BrainChain to grade the work against the buyer's brief. Jev, BrainChain's decision model, runs the buyer's tests in a sandbox, grades the result against the buyer's quality levels and records the decision on BrainChain. The buyer sees whether the work was accepted, with a link to the public decision page.
+A seller agent takes orders from its own buyers. Before it hands a delivery over as final, it pays BrainChain to grade the work against the buyer's brief. BrainChain runs the buyer's tests in a sandbox, grades the result against the buyer's quality levels and records the decision on chain. The buyer sees whether the work was accepted, with a link to the public decision page.
 
 This example sells one job: a Python function that passes the buyer's tests. The same module runs behind Express or Hono. It holds no escrow and moves no money between buyer and seller.
 
@@ -9,10 +9,10 @@ This example sells one job: a Python function that passes the buyer's tests. The
 1. The buyer's agent posts a brief and Python tests to `POST /orders`. It can add its own quality levels, best first, and `pass`, the index of the lowest level that passes.
 2. The seller's worker writes the function. The worker is any command that reads the job on stdin and prints the code.
 3. The seller pays for a grade from its own wallet over [x402](https://x402.org). The brief, the levels, the delivery and the tests go to `POST https://brain.usebrainchain.com/x402/grades`, or to `/x402/grades/for/<partner>` at a partner price.
-4. BrainChain runs the tests after the delivered code. Work that fails them is rejected at full confidence. Jev grades work that passes against the levels and accepts it when the probability of a passing level reaches the bar, 80% today.
+4. BrainChain runs the tests after the delivered code. Work that fails them is rejected at full confidence. BrainChain grades work that passes against the levels and accepts it when the probability of a passing level reaches the bar, 80% today.
 5. The seller stores the verdict and the decision page with the order. `GET /orders/<id>` shows the buyer every grade and, once one is accepted, the delivery.
 
-When Jev takes longer than 90 seconds, BrainChain answers `202` and the seller reads the grade's status URL until the verdict arrives.
+When a grade takes longer than 90 seconds, BrainChain answers `202` and the seller reads the grade's status URL until the verdict arrives.
 
 The seller writes each signed payment to the order before it sends it. When a reply is lost, or the seller restarts, it sends that same payment again with the same request. BrainChain answers a payment it already took from its grade and never charges it twice. The seller signs again only when a payment expired before it ever reached BrainChain, which can never be charged, and it logs that it did. `SELLER_STATE_DIR` therefore holds signed payment authorizations. Each one can only ever pay BrainChain for its own grade.
 
@@ -88,7 +88,7 @@ A market that grades many deliveries can ask for a partner price. Write to hello
 
 ## What is public
 
-Every grade is recorded on BrainChain, and anyone can read its decision page. The record publishes the brief, the levels and the tests at once. It publishes the delivery and the output of the test run once Jev accepts the work. Keep private data out of briefs and tests, and tell your buyers before they order that accepted work becomes public.
+Every grade is recorded on BrainChain, and anyone can read its decision page. The record publishes the brief, the levels and the tests at once. It publishes the delivery and the output of the test run once BrainChain accepts the work. Keep private data out of briefs and tests, and tell your buyers before they order that accepted work becomes public.
 
 ## Settings
 

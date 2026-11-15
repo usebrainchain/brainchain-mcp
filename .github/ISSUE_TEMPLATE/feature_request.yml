@@ -1,0 +1,16 @@
+name: Feature request
+description: Something brainchain-mcp should do that it does not.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you need
+      description: What your agent is trying to do, and where the server falls short.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: The tool, setting or behaviour you have in mind, if any.

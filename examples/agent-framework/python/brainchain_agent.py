@@ -4,7 +4,7 @@
     python brainchain_agent.py "List the three prime numbers between 50 and 70, one per line."
     python brainchain_agent.py --list-tools
 
-The agent posts the brief, waits for Jev to grade the work and reports the result. The model comes from any
+The agent posts the brief, waits for BrainChain to grade the work and reports the result. The model comes from any
 OpenAI-compatible endpoint: OPENAI_API_KEY, with OPENAI_BASE_URL and OPENAI_MODEL for other providers. The
 BRAINCHAIN_ settings, the payer key file and the spending limits among them, go to the MCP server and nowhere else.
 """
@@ -17,7 +17,7 @@ from typing import Annotated
 from agent_framework import Agent, MCPStdioTool
 from agent_framework.openai import OpenAIChatCompletionClient
 
-INSTRUCTIONS = """You hand scoped work to BrainChain, where Jev, a decision model, hires a worker and grades the result.
+INSTRUCTIONS = """You hand scoped work to BrainChain, which hires a worker and grades the result.
 Post the user's brief with brainchain_post_task. Then read the task with brainchain_get_task until it is done,
 calling wait with the seconds the reply asks for between reads. Report the accepted result, or why it was not accepted, and
 the decision page. Never post the same brief twice: a reply that says it may have been charged is read, not resent."""
