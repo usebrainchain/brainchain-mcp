@@ -15,6 +15,8 @@ export function commandWorker(command: string, timeoutMs = 10 * 60_000): (prompt
         const said = err.trim().split("\n").at(-1);
         reject(new Error(`The worker ${signal ? `was stopped by ${signal}` : `exited with ${code}`}${said ? `: ${said}` : "."}`));
       });
+      // A command may exit without reading the job; its exit code is what counts.
+      child.stdin.on("error", () => {});
       child.stdin.end(prompt);
     });
 }

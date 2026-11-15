@@ -54,6 +54,10 @@ describe("a command worker", () => {
     expect(await commandWorker("tr a-z A-Z")("def f(): pass")).toBe("DEF F(): PASS");
   });
 
+  it("takes the work of a command that never reads the job", async () => {
+    await expect(commandWorker("printf done")("x".repeat(1 << 20))).resolves.toBe("done");
+  });
+
   it("says why a command failed", async () => {
     await expect(commandWorker("echo out of credit >&2; exit 3")("job")).rejects.toThrow("The worker exited with 3: out of credit");
   });
