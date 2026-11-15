@@ -16,7 +16,7 @@ using ModelContextProtocol.Client;
 using OpenAI;
 
 const string Instructions = """
-    You hand scoped work to BrainChain, where Jev, a decision model, hires a worker and grades the result.
+    You hand scoped work to BrainChain, which hires a worker and grades the result.
     Post the user's brief with brainchain_post_task. Then read the task with brainchain_get_task until it is done,
     calling Wait with the seconds the reply asks for between reads. Report the accepted result, or why it was not
     accepted, and the decision page. Never post the same brief twice: a reply that says it may have been charged is

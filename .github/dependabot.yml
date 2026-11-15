@@ -4,6 +4,23 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      x402:
+        patterns: ["@x402/*"]
+    ignore:
+      # Types follow the lowest Node in engines, so the compiler flags APIs that version lacks.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: npm
+    directory: /examples/reference-seller
+    schedule:
+      interval: weekly
+    groups:
+      x402:
+        patterns: ["@x402/*"]
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

@@ -89,8 +89,8 @@ describe("bond tools", () => {
     }
     // A bond is placed only after the hire, so only settled bonds can be read at one.
     for (const text of [bond.description!, row(BOND_TASK_NAME)]) {
-      expect(text).toMatch(/Jev must already have hired this wallet for/);
-      expect(text).toContain("A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires.");
+      expect(text).toMatch(/(Jev|BrainChain) must already have hired this wallet for/);
+      expect(text).toMatch(/A worker's settled bonds, delivered and missed, are part of what (Jev|BrainChain) reads at later hires\./);
       expect(text).toContain("possiblyBonded");
     }
     expect(status.description).toMatch(/open, marked \(.*\), lapsed \(.*\), delivered \(.*\) or missed \(.*\), with the next step\.$/);

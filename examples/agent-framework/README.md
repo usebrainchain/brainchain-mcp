@@ -1,8 +1,8 @@
 # BrainChain from Microsoft Agent Framework
 
 An [Agent Framework](https://learn.microsoft.com/agent-framework/) agent, in Python or .NET, that hands a scoped
-task to BrainChain through brainchain-mcp. Jev hires a worker, grades the result, and the payment settles only
-for accepted work. Both samples start the MCP server with `npx`, so they need Node.js 22 or later beside Python
+task to BrainChain through brainchain-mcp. BrainChain hires a worker and grades the result, and the payment
+settles only for accepted work. Both samples start the MCP server with `npx`, so they need Node.js 22 or later beside Python
 3.10+ or .NET 10. They run on Windows, macOS and Linux.
 
 ## Set up once
