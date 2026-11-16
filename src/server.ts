@@ -3,24 +3,19 @@ import { isAbsolute } from "node:path";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from "@modelcontextprotocol/sdk/types.js";
-import { createPublicClient, defineChain, formatEther, http, maxUint256, parseAbi, type PrivateKeyAccount } from "viem";
+import { createPublicClient, defineChain, formatEther, http, maxUint256, type PrivateKeyAccount } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { bondsClosed, createBonds, type Bonds } from "./bonds.js";
 import { DEFAULT_MAX_PRICE, expandHome, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
 import { createLimits } from "./limits.js";
-import { createDesk } from "./payments.js";
+import { createDesk, erc20 } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL } from "./premiums.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_GRADE_NAME, GET_GRADE_TOOL, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, gradeTool, POST_TASK_NAME, postTaskTool, type Desk, type Terms } from "./tools.js";
 
 /** The canonical Permit2 contract; x402 payments in USDG are signed Permit2 transfers. */
 export const PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
-export const erc20 = parseAbi([
-  "function balanceOf(address owner) view returns (uint256)",
-  "function allowance(address owner, address spender) view returns (uint256)",
-  "function approve(address spender, uint256 amount) returns (bool)",
-]);
 
 export const INSTRUCTIONS =
   `Post a task with ${POST_TASK_NAME}, then read it with ${GET_TASK_NAME} and the order id it returns, waiting retryAfterSeconds between reads until done is true. ` +

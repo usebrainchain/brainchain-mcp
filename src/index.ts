@@ -6,7 +6,8 @@ import { createWalletClient, http, maxUint256, type PrivateKeyAccount } from "vi
 
 import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
-import { approvalFailure, approveCommand, chainClients, createServer, erc20, payerAccount, PERMIT2, walletFunds, walletReport } from "./server.js";
+import { erc20 } from "./payments.js";
+import { approvalFailure, approveCommand, chainClients, createServer, payerAccount, PERMIT2, walletFunds, walletReport } from "./server.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 

@@ -1,7 +1,7 @@
 import type { ClientEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
-import { keccak256, RpcRequestError, toBytes } from "viem";
+import { keccak256, parseAbi, RpcRequestError, toBytes } from "viem";
 
 import { formatUnits, MAX_TIMEOUT_SECONDS, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { createLimits, type Hold, type Limits } from "./limits.js";
@@ -11,6 +11,12 @@ const BUDGET_REASON = "budget";
 const DAILY_REASON = "daily limit";
 /** A result longer than this is cut, with a link to the rest. */
 export const RESULT_LIMIT = 20_000;
+/** The token calls this server makes, for Permit2's allowance on a payment and the registry's on a bond. */
+export const erc20 = parseAbi([
+  "function balanceOf(address owner) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+]);
 
 /** What a refused budget or daily limit tells a person who posts. */
 async function limitReached(config: Config, limits: Limits, which: "budget" | "daily limit"): Promise<string> {

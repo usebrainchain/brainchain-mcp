@@ -14,7 +14,6 @@ import {
   InternalRpcError,
   isAddress,
   keccak256,
-  parseAbi,
   parseEventLogs,
   RpcError,
   RpcRequestError,
@@ -25,14 +24,9 @@ import {
 
 import { formatUnits, type BondsConfig, type Config } from "./config.js";
 import type { Limits, Refusal } from "./limits.js";
-import { brief, firstLine, sentence } from "./payments.js";
-import { BOND_LEAD_SEC, BPS, bondTerms, CHECK_CONFIRM_SEC, CHECK_HOLD_SEC, DeedStatus, FEE_BPS, MIN_BOND, MISSED_TO, shippedAbi, taskBoardAbi, taskOfCheck, TaskStatus, type BondTerms } from "./shipped.js";
+import { brief, erc20, firstLine, sentence } from "./payments.js";
+import { BOND_LEAD_SEC, BPS, bondTerms, CHECK_CONFIRM_SEC, CHECK_HOLD_SEC, DeedStatus, FEE_BPS, MIN_BOND, MISSED_TO, proofIndexAbi, shippedAbi, taskBoardAbi, taskOfCheck, TaskStatus, type BondTerms } from "./shipped.js";
 
-const erc20 = parseAbi([
-  "function balanceOf(address owner) view returns (uint256)",
-  "function allowance(address owner, address spender) view returns (uint256)",
-  "function approve(address spender, uint256 amount) returns (bool)",
-]);
 /** Gas the transactions take, measured on a fork of Robinhood Chain, with room. */
 const GAS = { approve: 60_000n, create: 1_100_000n };
 const DEED_BATCH = 200;
@@ -179,7 +173,7 @@ export function createBondChain(bonds: BondsConfig, account: PrivateKeyAccount, 
       return { deed: created.args.deedId, tx: hash };
     },
     bondsOn: (task) => read(bonds.chain, deedsOn(task)),
-    proofOf: (task, board = bonds.brainchain.board) => read(bonds.chain, client.readContract({ address: bonds.proofIndex!, abi: parseAbi(["function proofOf(address board, uint256 taskId) view returns (uint256)"]), functionName: "proofOf", args: [board, task] })),
+    proofOf: (task, board = bonds.brainchain.board) => read(bonds.chain, client.readContract({ address: bonds.proofIndex!, abi: proofIndexAbi, functionName: "proofOf", args: [board, task] })),
     owed: () => read(bonds.chain, client.readContract({ ...registry, functionName: "owed", args: [account.address, bonds.usdg] })),
     async payerOf(task) {
       let response: Response;
