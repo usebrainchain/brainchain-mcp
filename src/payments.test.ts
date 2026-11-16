@@ -378,11 +378,20 @@ describe("posting", () => {
     expect(seen).toHaveLength(2);
   });
 
-  it("refuses to pay anyone but the desk, or for longer than 600 seconds", async () => {
-    for (const terms of [{ payTo: "0x000000000000000000000000000000000000dEaD" }, { maxTimeoutSeconds: 3_600 }]) {
+  it("refuses to pay anyone but the desk, or for longer than 600 seconds, and names only what failed", async () => {
+    const stranger = "0x000000000000000000000000000000000000dEaD";
+    const check = "Check BRAINCHAIN_NETWORK and BRAINCHAIN_PAY_ON, or set BRAINCHAIN_PAY_TO for a custom BRAINCHAIN_DESK_URL.";
+    for (const [terms, said] of [
+      [{ payTo: stranger }, `The desk asked to be paid on terms this server does not accept: it named ${stranger} as the payee, and this server pays only ${config.payTo}. ${check} Nothing was charged.`],
+      [{ maxTimeoutSeconds: 3_600 }, "The desk asked to be paid on terms this server does not accept: it asked for an authorization that lasts 3600 seconds, and this server signs none for longer than 600. Nothing was charged."],
+      [{ payTo: stranger, maxTimeoutSeconds: 3_600 }, `The desk asked to be paid on terms this server does not accept: the payee must be ${config.payTo} and the authorization may last at most 600 seconds. ${check} Nothing was charged.`],
+    ] as const) {
       const { fetchImpl, seen } = fakeDesk(accepted, terms);
-      await expect(desk(fetchImpl).post(task)).rejects.toThrow(/does not accept/);
+      const d = desk(fetchImpl);
+      const message = await d.post(task).catch((error: Error) => error.message);
+      expect(message).toBe(said);
       expect(seen).toHaveLength(0);
+      expect(d.spent()).toBe(0n);
     }
   });
 

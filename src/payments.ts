@@ -185,8 +185,18 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
   }
 
+  /** What the desk asked that this server will not sign, named by the condition that failed. */
+  function refusedTerms(requirements: readonly { payTo: string; maxTimeoutSeconds: number }[]): string {
+    const payee = requirements.some((r) => sameAddress(r.payTo, config.payTo));
+    const brief = requirements.some((r) => r.maxTimeoutSeconds <= MAX_TIMEOUT_SECONDS);
+    const check = "Check BRAINCHAIN_NETWORK and BRAINCHAIN_PAY_ON, or set BRAINCHAIN_PAY_TO for a custom BRAINCHAIN_DESK_URL.";
+    if (!payee && brief) return `it named ${requirements[0]!.payTo} as the payee, and this server pays only ${config.payTo}. ${check}`;
+    if (payee && !brief) return `it asked for an authorization that lasts ${Math.min(...requirements.map((r) => r.maxTimeoutSeconds))} seconds, and this server signs none for longer than ${MAX_TIMEOUT_SECONDS}.`;
+    return `the payee must be ${config.payTo} and the authorization may last at most ${MAX_TIMEOUT_SECONDS} seconds. ${check}`;
+  }
+
   /** Turns an x402 client error, raised before anything was signed, into a step a person or model can act on. */
-  async function explainUnsigned(kind: Kind, error: unknown): Promise<string> {
+  async function explainUnsigned(kind: Kind, error: unknown, refused?: string): Promise<string> {
     const message = firstLine(error);
     if (message.includes(`Payment creation aborted: ${BUDGET_REASON}`)) return await limitReached(config, limits, "budget");
     if (message.includes(`Payment creation aborted: ${DAILY_REASON}`)) return await limitReached(config, limits, "daily limit");
@@ -198,7 +208,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       return `The desk asked for a payment outside this server's limits (${config.token} at ${config.asset}, at most ${formatUnits(config.maxPrice)} per ${kind}). Check BRAINCHAIN_PAY_ON and BRAINCHAIN_PAYMENT_ASSET. Nothing was charged.`;
     }
     if (/filtered out by policies/.test(message)) {
-      return `The desk asked to be paid on terms this server does not accept: the payee must be ${config.payTo} and the authorization may last at most ${MAX_TIMEOUT_SECONDS} seconds. Check BRAINCHAIN_NETWORK and BRAINCHAIN_PAY_ON, or set BRAINCHAIN_PAY_TO for a custom BRAINCHAIN_DESK_URL. Nothing was charged.`;
+      return `The desk asked to be paid on terms this server does not accept: ${refused ?? refusedTerms([])} Nothing was charged.`;
     }
     if (/No network\/scheme registered/.test(message)) {
       return `The desk does not take payment on ${config.chain} (${config.network}). Check BRAINCHAIN_NETWORK and BRAINCHAIN_PAY_ON. Nothing was charged.`;
@@ -311,6 +321,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const url = kind === "task" ? endpoint : gradesEndpoint;
     let signed: { payload: unknown } | undefined;
     let hold: Hold | undefined;
+    let refused: string | undefined;
     const unreserve = async () => {
       const given = hold;
       hold = undefined;
@@ -327,14 +338,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       schemes: [{ network: config.network, client: new ExactEvmScheme(account()) }],
       spendControls: { allowedAssets: [{ network: config.network, asset: config.asset, maxAmountPerPayment: config.maxPrice.toString() }] },
       policies: [
-        (_version, requirements) =>
-          requirements.filter(
-            (r) =>
-              r.network === config.network &&
-              sameAddress(r.asset, config.asset) &&
-              sameAddress(r.payTo, config.payTo) &&
-              r.maxTimeoutSeconds <= MAX_TIMEOUT_SECONDS,
-          ),
+        (_version, requirements) => {
+          const kept = requirements.filter(
+            (r) => r.network === config.network && sameAddress(r.asset, config.asset) && sameAddress(r.payTo, config.payTo) && r.maxTimeoutSeconds <= MAX_TIMEOUT_SECONDS,
+          );
+          if (kept.length === 0) refused = refusedTerms(requirements);
+          return kept;
+        },
       ],
     });
     // A payment is reserved against the budget and the daily limit before it is
@@ -369,7 +379,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     } catch (error) {
       clearTimeout(timer);
       if (signed) return possiblyCharged(kind, receipt(orderIdOf(signed)), `The desk did not confirm the ${kind === "task" ? "order" : "grade"} (${firstLine(error)}).`);
-      throw new Error(await explainUnsigned(kind, error));
+      throw new Error(await explainUnsigned(kind, error, refused));
     }
     // A desk or proxy can send its headers and then stall, so the deadline holds until the body is read.
     const reply = (await until(deadline.signal, jsonObject(response)).catch(() => undefined)) ?? {};
