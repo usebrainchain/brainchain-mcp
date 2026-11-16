@@ -75,6 +75,11 @@ describe("resolveConfig", () => {
     expect(resolveConfig({ BRAINCHAIN_DESK_URL: "https://desk.example.com//" }).desk).toBe("https://desk.example.com");
   });
 
+  it("refuses a bond cap under the smallest bond, which would refuse every bond", () => {
+    expect(() => resolveConfig({ BRAINCHAIN_MAX_BOND_UNITS: "1999999" })).toThrow("BRAINCHAIN_MAX_BOND_UNITS must be at least 2000000 (2 USDG), the smallest bond this server places.");
+    expect(resolveConfig({ BRAINCHAIN_MAX_BOND_UNITS: "2000000" }).maxBond).toBe(2_000_000n);
+  });
+
   it("refuses an unknown chain", () => {
     expect(() => resolveConfig({ BRAINCHAIN_PAY_ON: "solana" })).toThrow(/robinhood or base/);
   });

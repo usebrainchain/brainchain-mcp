@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
+import { MIN_BOND } from "./shipped.js";
 import type { Terms } from "./tools.js";
 
 const MAINNET_DESK = { desk: "https://brain.usebrainchain.com", payTo: "0x97D558417c3D61f1074422AD843e1Db1E565b952", finalAfter: "about six hours" } as const;
@@ -194,6 +195,7 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
   const daily = envString(env, "BRAINCHAIN_DAILY_UNITS") === undefined ? undefined : envUnits(env, "BRAINCHAIN_DAILY_UNITS", 0n);
   if (daily !== undefined && daily < maxPrice) throw new Error("BRAINCHAIN_DAILY_UNITS must be at least BRAINCHAIN_MAX_PRICE_UNITS.");
   const maxBond = envUnits(env, "BRAINCHAIN_MAX_BOND_UNITS", DEFAULT_MAX_BOND);
+  if (maxBond < MIN_BOND) throw new Error(`BRAINCHAIN_MAX_BOND_UNITS must be at least ${MIN_BOND} (${formatUnits(MIN_BOND)} USDG), the smallest bond this server places.`);
   const bonds = BONDS[name];
 
   return {
