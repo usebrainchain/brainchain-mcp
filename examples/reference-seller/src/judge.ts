@@ -77,7 +77,7 @@ export interface Judge {
   sign(request: GradeRequest): Promise<Signed | undefined>;
   /** Sends a signed grade and waits for the verdict. */
   send(signed: Signed, paid: (grade: Paid) => Promise<void>): Promise<Verdict>;
-  /** Waits for the verdict of a grade already paid for. Reading it is free. */
+  /** Waits for the verdict of a grade already paid for. Reading it is free; a 4xx other than 408, 425 and 429 ends the wait. */
   read(grade: Paid): Promise<Verdict>;
   /** Whether a signed payment expired without ever reaching BrainChain, so it can never be charged. Its units go back to the day. */
   lapsed(signed: Signed): Promise<boolean>;
@@ -87,6 +87,8 @@ export interface Judge {
 export class Unanswered extends Error {}
 
 const JSON_HEADERS = { "content-type": "application/json", accept: "application/json" };
+/** Statuses that say "not now" rather than "no", alongside every 5xx. */
+const RETRY_LATER = new Set([408, 425, 429]);
 /** BrainChain waits 90 seconds for a verdict before it answers 202. */
 const PAID_TIMEOUT_MS = 120_000;
 const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
@@ -229,10 +231,20 @@ export function createJudge(config: JudgeConfig, options: { fetch?: typeof fetch
 
   async function read(taken: Paid): Promise<Verdict> {
     for (;;) {
-      // A read that fails is tried again: BrainChain keeps grading a paid request until it decides.
-      const response = await fetchImpl(taken.status, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) }).catch(() => undefined);
-      if (response?.status === 404) throw new Error(`BrainChain has no grade ${taken.grade}.`);
-      const view = response?.ok ? await json(response) : {};
+      const response = await fetchImpl(taken.status, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) }).catch((error: Error) => error);
+      if (response instanceof Response && response.status === 404) throw new Error(`BrainChain has no grade ${taken.grade}.`);
+      // Any other 4xx is an answer, and asking again would only get it again.
+      if (response instanceof Response && response.status >= 400 && response.status < 500 && !RETRY_LATER.has(response.status)) {
+        const { error } = await json(response);
+        throw new Error(`BrainChain answered ${response.status} when grade ${taken.grade} was read${typeof error === "string" ? `: ${sentence(error)}` : "."}`);
+      }
+      // BrainChain keeps grading a paid request until it decides, so a read that fails for now is tried again.
+      if (!(response instanceof Response) || !response.ok) {
+        log(`grade ${taken.grade}: the read failed (${response instanceof Response ? `BrainChain answered ${response.status}` : response.message}); reading it again in ${pollMs / 1000} s.`);
+        await sleep(pollMs);
+        continue;
+      }
+      const view = await json(response);
       if (view.state === "graded") return verdictOf(view);
       if (view.state === "failed") {
         await spend.give(BigInt(taken.units));

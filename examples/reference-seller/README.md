@@ -12,7 +12,7 @@ This example sells one job: a Python function that passes the buyer's tests. The
 4. BrainChain runs the tests after the delivered code. Work that fails them is rejected at full confidence. BrainChain grades work that passes against the levels and accepts it when the probability of a passing level reaches the bar, 80% today.
 5. The seller stores the verdict and the decision page with the order. `GET /orders/<id>` shows the buyer every grade and, once one is accepted, the delivery.
 
-When a grade takes longer than 90 seconds, BrainChain answers `202` and the seller reads the grade's status URL until the verdict arrives.
+When a grade takes longer than 90 seconds, BrainChain answers `202` and the seller reads the grade's status URL until the verdict arrives. A read that fails is logged and tried again; a 4xx other than 408, 425 or 429 is final and fails the order.
 
 The seller writes each signed payment to the order before it sends it. When a reply is lost, or the seller restarts, it sends that same payment again with the same request. BrainChain answers a payment it already took from its grade and never charges it twice. The seller signs again only when a payment expired before it ever reached BrainChain, which can never be charged, and it logs that it did. `SELLER_STATE_DIR` therefore holds signed payment authorizations. Each one can only ever pay BrainChain for its own grade.
 

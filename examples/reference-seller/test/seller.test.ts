@@ -358,3 +358,31 @@ describe.each(["express", "hono"] as const)("a seller on %s", (framework) => {
     expect(work).not.toHaveBeenCalled();
   });
 });
+
+describe("reading a grade", () => {
+  const grade = `0x${"ab".repeat(32)}`;
+  const taken = { grade, status: `${ORIGIN}/x402/grades/${grade}`, units: "250000" };
+
+  it("tries a read that fails for now again, saying so, and stops at a refusal", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "reference-seller-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const answers: (() => Response)[] = [
+      () => {
+        throw new TypeError("fetch failed");
+      },
+      () => new Response("{}", { status: 503 }),
+      () => new Response("{}", { status: 429 }),
+      () => new Response(JSON.stringify({ error: "This wallet may not read that grade" }), { status: 403 }),
+    ];
+    const reads = vi.fn(async () => answers.shift()!());
+    const printed: string[] = [];
+    const judge = createJudge({ url: ORIGIN, ...LANE, token: "test USDC", maxUnits: 250_000n, dailyUnits: 2_500_000n, dir, key: KEY }, { fetch: reads as unknown as typeof fetch, pollMs: 1, log: (line) => printed.push(line) });
+    await expect(judge.read(taken)).rejects.toThrow(`BrainChain answered 403 when grade ${grade} was read: This wallet may not read that grade.`);
+    expect(reads).toHaveBeenCalledTimes(4);
+    expect(printed).toEqual([
+      `grade ${grade}: the read failed (fetch failed); reading it again in 0.001 s.`,
+      `grade ${grade}: the read failed (BrainChain answered 503); reading it again in 0.001 s.`,
+      `grade ${grade}: the read failed (BrainChain answered 429); reading it again in 0.001 s.`,
+    ]);
+  });
+});
