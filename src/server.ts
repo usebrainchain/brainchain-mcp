@@ -215,7 +215,7 @@ function unreadable(problem: string): Wiring {
     desk: { post: refuse, get: refuse, grade: refuse, getGrade: refuse },
     terms: problem,
     bonds: { bond: refuse, status: refuse },
-    bondTools: bondTools({}, undefined, { bond: `Invalid setting: ${problem}`, status: `Invalid setting: ${problem}` }),
+    bondTools: bondTools({}, undefined, { invalid: { bond: problem, status: problem } }),
     gradeTool: gradeTool(problem),
     refused: new Map([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, BOND_TASK_NAME, BOND_STATUS_NAME].map((name) => [name, problem])),
   };
@@ -268,7 +268,6 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
   // and touches nothing else. A setting only payments read stops the tools that pay, and so does a refused
   // state folder, which could still take a write or hang on one. Reading a bond needs the key and no record,
   // so only a key problem stops that.
-  const closed = bondsClosed(config);
   const refused = new Map<string, string>();
   if (problem) for (const name of [POST_TASK_NAME, GRADE_NAME, BOND_TASK_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);
   if (keyProblem) refused.set(BOND_STATUS_NAME, `${keyProblem} ${KEY_HELP}`);
@@ -278,7 +277,7 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
     terms,
     gradeTool: gradeTool(terms),
     bonds: createBonds({ config, signer: payer, limits }),
-    bondTools: bondTools(config, account?.address, { bond: problem ? `Invalid setting: ${problem}` : closed, status: keyProblem ? `Invalid setting: ${keyProblem}` : closed }),
+    bondTools: bondTools(config, account?.address, { closed: bondsClosed(config), invalid: { bond: problem || undefined, status: keyProblem } }),
     refused,
   };
 }

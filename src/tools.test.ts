@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { formatUnits, resolveConfig } from "./config.js";
-import type { Bonds } from "./bonds.js";
+import { bondsClosed, type Bonds } from "./bonds.js";
 import { PREMIUMS_TOOL } from "./premiums.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_GRADE_TOOL, GET_TASK_NAME, GET_TASK_TOOL, gradeTool, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
 
@@ -61,18 +61,29 @@ describe("bond tools", () => {
     expect(bond.description).not.toContain("Until then");
     expect(status.name).toBe(BOND_STATUS_NAME);
     expect(status.description).toMatch(/^Where this server's wallet 0xabc's bonds on a task stand: /);
-    const [closed, closedStatus] = bondTools({ maxBond: 10_000_000n }, undefined, { bond: "Delivery bonds are not open yet.", status: "Delivery bonds are not open yet." });
-    expect(closed.description!.startsWith("Delivery bonds are not open yet. Until then this tool only returns that error. ")).toBe(true);
+    const [closed, closedStatus] = bondTools({ maxBond: 10_000_000n }, undefined, { closed: "Delivery bonds are not open yet." });
+    expect(closed.description!.startsWith("Delivery bonds are not open yet. On this network this tool only returns that error. ")).toBe(true);
     expect(closed.description).toContain("from this server's wallet, as the worker");
-    expect(closedStatus.description).toMatch(/^Delivery bonds are not open yet\. Until then this tool only returns that error\. Where this server's wallet's bonds/);
+    expect(closedStatus.description).toMatch(/^Delivery bonds are not open yet\. On this network this tool only returns that error\. Where this server's wallet's bonds/);
+  });
+
+  it("says on testnet that bonds run on mainnet, with no condition left hanging", () => {
+    const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
+    for (const tool of bondTools(testnet, "0xabc", { closed: bondsClosed(testnet) })) {
+      expect(tool.description).toMatch(/^Delivery bonds run on Robinhood Chain against Shipped's registry, which BrainChain testnet has no counterpart of\. They are open with BRAINCHAIN_NETWORK=mainnet\. On this network this tool only returns that error\. /);
+      expect(tool.description).not.toContain("Until then");
+    }
   });
 
   it("leads each tool only with what stops that tool, and names the cap by its variable when no setting could be read", () => {
     // A state folder that cannot be used stops a bond from being placed, not from being read.
-    const [bond, status] = bondTools({ maxBond: 10_000_000n }, "0xabc", { bond: "Invalid setting: BRAINCHAIN_STATE_DIR is unusable." });
-    expect(bond.description).toMatch(/^Invalid setting: BRAINCHAIN_STATE_DIR is unusable\. Until then this tool only returns that error\. Lock USDG/);
+    const [bond, status] = bondTools({ maxBond: 10_000_000n }, "0xabc", { invalid: { bond: "BRAINCHAIN_STATE_DIR is unusable." } });
+    expect(bond.description).toMatch(/^Invalid setting: BRAINCHAIN_STATE_DIR is unusable\. Until the operator fixes it, this tool only returns that error\. Lock USDG/);
     expect(status.description).toMatch(/^Where this server's wallet 0xabc's bonds on a task stand: /);
-    const [unread] = bondTools({}, undefined, { bond: "Invalid setting: BRAINCHAIN_NETWORK must be mainnet or testnet." });
+    // A setting to fix comes before a closed network, since fixing it is what the operator can do now.
+    const [both] = bondTools({ maxBond: 10_000_000n }, "0xabc", { closed: "Delivery bonds are not open yet.", invalid: { bond: "BRAINCHAIN_STATE_DIR is unusable." } });
+    expect(both.description).toMatch(/^Invalid setting: BRAINCHAIN_STATE_DIR is unusable\. Until the operator fixes it/);
+    const [unread] = bondTools({}, undefined, { invalid: { bond: "BRAINCHAIN_NETWORK must be mainnet or testnet." } });
     expect(unread.description).toContain("at least the task's bounty and 2 USDG, at most BRAINCHAIN_MAX_BOND_UNITS per task");
     expect(unread.description).not.toContain("0 USDG");
   });

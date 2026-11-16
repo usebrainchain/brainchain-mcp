@@ -50,21 +50,28 @@ const BOND_TASK_INPUT: Tool["inputSchema"] = {
 };
 const BOND_STATUS_INPUT: Tool["inputSchema"] = { type: "object", properties: { task: TASK_ID }, required: ["task"], additionalProperties: false };
 
+/** How a tool leads its description while a setting the operator must fix stops it. */
+export const invalidSetting = (problem: string) => `Invalid setting: ${problem} Until the operator fixes it, this tool only returns that error. `;
+
 /**
- * The bond tools, worded for the network and the wallet this server holds. `closed` says, per tool, why it
- * cannot run: reading a bond needs less than placing one, so the two can differ. Without settings to read,
- * the cap is named by its variable.
+ * The bond tools, worded for the network and the wallet this server holds. `closed` says why bonds do not run
+ * on this network, and `invalid`, per tool, the setting that stops it: reading a bond needs less than placing
+ * one, so the two can differ. Without settings to read, the cap is named by its variable.
  */
-export function bondTools(config: Partial<Pick<Config, "maxBond">>, wallet: string | undefined, closed: { bond?: string; status?: string } = {}): [Tool, Tool] {
+export function bondTools(
+  config: Partial<Pick<Config, "maxBond">>,
+  wallet: string | undefined,
+  { closed, invalid = {} }: { closed?: string; invalid?: { bond?: string; status?: string } } = {},
+): [Tool, Tool] {
   const where = wallet ? `this server's wallet ${wallet}` : "this server's wallet";
-  const lead = (why: string | undefined) => (why ? `${why} Until then this tool only returns that error. ` : "");
+  const lead = (problem: string | undefined) => (problem ? invalidSetting(problem) : closed ? `${closed} On this network this tool only returns that error. ` : "");
   const cap = config.maxBond === undefined ? "BRAINCHAIN_MAX_BOND_UNITS" : `${formatUnits(config.maxBond)} USDG`;
   return [
     {
       name: BOND_TASK_NAME,
       title: "Bond a BrainChain task on Shipped",
       description:
-        lead(closed.bond) +
+        lead(invalid.bond) +
         `Lock USDG on Shipped behind a BrainChain task from ${where}, as the worker that will deliver it. Jev must already have hired this wallet for the task. ` +
         `If the task is paid and its Proof is recorded by the bond's deadline, which is set after the task's and comes back in the reply, the bond less Shipped's 1% fee is credited to the wallet on Shipped's registry, where the worker CLI's \`bond claim\` collects it; if not, the bond goes to ${MISSED_TO}. ` +
         `A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires. ` +
@@ -78,7 +85,7 @@ export function bondTools(config: Partial<Pick<Config, "maxBond">>, wallet: stri
       name: BOND_STATUS_NAME,
       title: "Read this wallet's bond on a BrainChain task",
       description:
-        lead(closed.status) +
+        lead(invalid.status) +
         `Where ${where}'s bonds on a task stand: open, marked (the Proof is recorded and the check waits out its hour), ` +
         `lapsed (the bond's deadline passed with its check unmarked, so the bond waits to settle as missed), ` +
         `delivered (the bond less Shipped's 1% fee was credited to the wallet on Shipped's registry; the reply says whether it was collected or what the registry still owes the wallet) ` +
@@ -131,8 +138,8 @@ export function postTaskTool(terms: Terms | string): Tool {
     title: "Post a paid task to BrainChain",
     description:
       typeof terms === "string"
-        ? `Invalid setting: ${terms} Until then this tool only returns that error. ${about}`
-        : (terms.problem ? `Invalid setting: ${terms.problem} Until the operator fixes it, this tool only returns that error. ` : "") +
+        ? `${invalidSetting(terms)}${about}`
+        : (terms.problem ? invalidSetting(terms.problem) : "") +
           about +
           `Each task costs ${terms.cost}, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. ${terms.refuses?.task ? `${terms.refuses.task} ` : ""}The result is delivered only if Jev accepts the work. If Jev rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. If no model delivers within 24 hours, the full amount is refunded. ` +
           `Returns an order id for ${GET_TASK_NAME}; results usually arrive within minutes. If the reply says possiblyCharged, do not post the task again: read the order with ${GET_TASK_NAME}. ` +
@@ -174,8 +181,8 @@ export function gradeTool(terms: Terms | string): Tool {
     title: "Grade delivered work on BrainChain",
     description:
       typeof terms === "string"
-        ? `Invalid setting: ${terms} Until then this tool only returns that error. ${about}`
-        : (terms.problem ? `Invalid setting: ${terms.problem} Until the operator fixes it, this tool only returns that error. ` : "") +
+        ? `${invalidSetting(terms)}${about}`
+        : (terms.problem ? invalidSetting(terms.problem) : "") +
           about +
           `Each grade costs ${terms.gradeCost} whatever the verdict, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, and counts against its budget and daily limit. ` +
           (terms.refuses?.grade ? `${terms.refuses.grade} ` : "") +

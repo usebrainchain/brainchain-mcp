@@ -273,7 +273,7 @@ describe("the server", () => {
     expect(logged[0]).toContain("BRAINCHAIN_STATE_DIR is /proc/brainchain, which is a system folder");
     const { tools } = await client.listTools();
     const status = tools.find((tool) => tool.name === BOND_STATUS_NAME)!.description!;
-    expect(status).toMatch(/^Invalid setting: BRAINCHAIN_PAYER_KEY must be 64 hex characters, with or without 0x\. Until then this tool only returns that error\. Where /);
+    expect(status).toMatch(/^Invalid setting: BRAINCHAIN_PAYER_KEY must be 64 hex characters, with or without 0x\. Until the operator fixes it, this tool only returns that error\. Where /);
     expect(status).not.toContain("BRAINCHAIN_STATE_DIR");
     const read = text(await client.callTool({ name: BOND_STATUS_NAME, arguments: { task: "12" } }));
     expect(read).toContain("BRAINCHAIN_PAYER_KEY must be 64 hex characters");
