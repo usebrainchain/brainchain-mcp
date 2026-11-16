@@ -169,7 +169,10 @@ describe("bond", () => {
       [fakeChain({ task: task() }), USDG(1.5), "The bond must be at least 2 USDG"],
       [fakeChain({ task: task() }), USDG(11), "This server bonds at most 10 USDG on one task. Raise BRAINCHAIN_MAX_BOND_UNITS"],
       [fakeChain({ task: undefined }), USDG(5), "There is no task 12 on BrainChain."],
-      [fakeChain({ task: task({ status: 6 }) }), USDG(5), "Task 12 is not hired to this wallet"],
+      [fakeChain({ task: task({ status: TaskStatus.Open, model: `0x${"0".repeat(64)}` }) }), USDG(5), "Task 12 is not hired to this wallet. Bond a task after Jev hires it for the task."],
+      [fakeChain({ task: task({ model: `0x${"0".repeat(24)}${POSTER.slice(2)}` }) }), USDG(5), "Task 12 is not hired to this wallet."],
+      [fakeChain({ task: task({ status: TaskStatus.Paid }) }), USDG(5), "Task 12 has moved past the stage where a bond can be placed: a bond goes on while the task is hired to this wallet, before the work is delivered."],
+      [fakeChain({ task: task({ status: 3 }) }), USDG(5), "Task 12 has moved past the stage where a bond can be placed"],
       [fakeChain({ task: task({ deadline: NOW - 1n }) }), USDG(5), "deadline, 2027-01-15T07:59:59.000Z, has passed"],
       [fakeChain({ task: task(), bonds: [view()] }), USDG(5), "This wallet already has a bond open on task 12 (registry id 4). Nothing was bonded."],
     ] as const) {

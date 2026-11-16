@@ -287,8 +287,9 @@ export function createBonds(options: BondsOptions): Bonds {
     const t = await c.task(task);
     if (!t) throw new Error(`There is no task ${task} on BrainChain. Nothing was bonded.`);
     if (t.poster.toLowerCase() === c.account.toLowerCase()) throw new Error(`Task ${task} was posted by this wallet. A bond guarantees delivery to someone else; it earns no standing on a task the same wallet posted. Nothing was bonded.`);
-    const hiredHere = t.status === TaskStatus.Hired && t.model.toLowerCase().endsWith(c.account.slice(2).toLowerCase());
+    const hiredHere = t.status >= TaskStatus.Hired && t.model.toLowerCase().endsWith(c.account.slice(2).toLowerCase());
     if (!hiredHere) throw new Error(`Task ${task} is not hired to this wallet. Bond a task after Jev hires it for the task. Nothing was bonded.`);
+    if (t.status !== TaskStatus.Hired) throw new Error(`Task ${task} has moved past the stage where a bond can be placed: a bond goes on while the task is hired to this wallet, before the work is delivered. Nothing was bonded.`);
     const now = await c.now();
     if (t.deadline <= now) throw new Error(`Task ${task}'s deadline, ${iso(t.deadline)}, has passed. Nothing was bonded.`);
     if (amount < t.bounty) throw new Error(`The bond must be at least the task's bounty, ${formatUnits(t.bounty)} USDG; ${formatUnits(amount)} USDG is under it. Nothing was bonded.`);
