@@ -7,7 +7,7 @@ import { createWalletClient, http, maxUint256, type Hex, type PrivateKeyAccount 
 import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
 import { erc20 } from "./payments.js";
-import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, pastedKey, payerAccount, PERMIT2, walletExitCode, walletFunds, walletReport } from "./server.js";
+import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, pastedKey, payerAccount, PERMIT2, terminalHint, walletExitCode, walletFunds, walletReport } from "./server.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -66,6 +66,8 @@ const extra = process.argv[command === "approve" ? 4 : 3];
 if (command !== undefined && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : "wallet takes none"}.\n\n${USAGE}`);
 
 if (command === undefined) {
+  const hint = terminalHint(process.stdin, version);
+  if (hint) console.error(hint);
   await createServer(process.env, version).connect(new StdioServerTransport());
 } else if (command === "wallet") {
   const { config, account } = settings();

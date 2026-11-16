@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
 import { guidance } from "./payments.js";
-import { approvalFailure, approvalUnconfirmed, approveCommand, createServer, INSTRUCTIONS, pastedKey, payerAccount, walletExitCode, walletReport, type ServerOptions } from "./server.js";
+import { approvalFailure, approvalUnconfirmed, approveCommand, createServer, INSTRUCTIONS, pastedKey, payerAccount, terminalHint, walletExitCode, walletReport, type ServerOptions } from "./server.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_GRADE_NAME, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
@@ -375,6 +375,16 @@ describe("payerAccount", () => {
     expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "  " })).toThrow(/^No paying key is set: point BRAINCHAIN_PAYER_KEY_FILE at a file/);
     expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "0x1234" })).toThrow(/64 hex characters/);
     expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "0".repeat(64) })).toThrow(/not a valid private key/);
+  });
+});
+
+describe("terminalHint", () => {
+  it("says on one line, only in a terminal, that the server waits for an MCP client and how to add it to one", () => {
+    const hint = terminalHint({ isTTY: true }, "0.0.0-test")!;
+    expect(hint).toContain("brainchain-mcp 0.0.0-test speaks MCP on stdio and is waiting for a client");
+    expect(hint).toContain("claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.0.0-test");
+    expect(hint).not.toContain("\n");
+    for (const stdin of [{ isTTY: false }, {}]) expect(terminalHint(stdin, "0.0.0-test")).toBeUndefined();
   });
 });
 

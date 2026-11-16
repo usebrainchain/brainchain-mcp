@@ -71,6 +71,12 @@ export function payerAccount(env: Record<string, string | undefined>): PrivateKe
   }
 }
 
+/** Started by hand in a terminal, the server would wait in silence for a client that never comes. */
+export function terminalHint(stdin: { isTTY?: boolean }, version: string): string | undefined {
+  if (!stdin.isTTY) return undefined;
+  return `brainchain-mcp ${version} speaks MCP on stdio and is waiting for a client; press Ctrl+C to quit. Add it to one instead, for example \`claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@${version}\`, or run it with --help.`;
+}
+
 /** A private key typed as an argument is never printed back: by now it is in the shell's history. */
 export function pastedKey(args: readonly string[]): string | undefined {
   if (!args.some((arg) => /(^|[^0-9a-f])[0-9a-f]{64}($|[^0-9a-f])/i.test(arg))) return undefined;
