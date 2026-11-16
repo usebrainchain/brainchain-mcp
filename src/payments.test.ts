@@ -568,11 +568,10 @@ describe("input checks", () => {
 describe("reading an order", () => {
   it("stops at an order the desk does not know, unless this server paid for it in the last 15 minutes", async () => {
     const order = `0x${"ab".repeat(32)}`;
-    expect(await desk((async () => new Response("{}", { status: 404 })) as typeof fetch).get(order)).toMatchObject({
-      done: true,
-      error: "The desk has no order with this id.",
-      next: expect.stringMatching(/^Check the order id/),
-    });
+    // An id this server never posted is an error, and nothing can be said of what it was charged.
+    await expect(desk((async () => new Response("{}", { status: 404 })) as typeof fetch).get(order)).rejects.toThrow(
+      /^The desk has no order with this id\. Check the id: it must be one that brainchain_post_task returned\.$/,
+    );
 
     // The paid request drops, so the desk may not have recorded the order yet.
     let paid = "";
@@ -593,7 +592,7 @@ describe("reading an order", () => {
 
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + REPOST_AFTER_MINUTES * 60_000);
     try {
-      expect(await d.get(paid)).toMatchObject({ done: true, error: "The desk has no order with this id." });
+      await expect(d.get(paid)).rejects.toThrow("The desk has no order with this id. This server posted it more than 15 minutes ago, so it was never charged, and the task can be posted again.");
     } finally {
       vi.restoreAllMocks();
     }

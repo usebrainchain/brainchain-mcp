@@ -238,6 +238,20 @@ describe("the server", () => {
     }
   });
 
+  it("answers an order or grade id the desk does not know as an error", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ error: "No order with that id." }), { status: 404 })) as typeof fetch;
+    const client = await connect({}, { fetch: fetchImpl });
+    for (const [name, args, said] of [
+      [GET_TASK_NAME, { order }, "The desk has no order with this id. Check the id: it must be one that brainchain_post_task returned."],
+      [GET_GRADE_NAME, { grade: order }, "The desk has no grade with this id. Check the id: it must be one that brainchain_grade returned."],
+    ] as const) {
+      const result = await client.callTool({ name, arguments: args });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(text(result))).toEqual({ error: said });
+      expect(text(result)).not.toContain("never charged");
+    }
+  });
+
   it("names the wallet that pays in the post tool, so an agent never needs the key to find it", async () => {
     const { address } = privateKeyToAccount(`0x${KEY}`);
     for (const env of [{ BRAINCHAIN_PAYER_KEY: KEY }, { BRAINCHAIN_PAYER_KEY_FILE: keyFile(`${KEY}\n`) }]) {

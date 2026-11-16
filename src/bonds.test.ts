@@ -383,7 +383,12 @@ describe("bond status", () => {
         next: `The Proof is in the index, but the bond's check holds no mark and Shipped sets none after the deadline. The bond settles after 2027-01-16T08:59:59.000Z to ${MISSED_TO}: ${POSTER}.`,
       },
     ]);
-    expect(await setup(fakeChain()).bonds.status(12n)).toEqual({ task: "12", wallet: account.address, bonds: [] });
+    expect(await setup(fakeChain()).bonds.status(12n)).toEqual({
+      task: "12",
+      wallet: account.address,
+      bonds: [],
+      next: "This wallet has no bond on task 12. Check the task id; a bond is placed with brainchain_bond_task while BrainChain has the task hired to this wallet.",
+    });
   });
 
   it("says a delivered bond was collected once the registry owes the wallet nothing, and never tells it to claim what is not there", async () => {

@@ -369,7 +369,14 @@ export function createBonds(options: BondsOptions): Bonds {
     async status(task) {
       const c = connected();
       const bonds = await c.bondsOn(task);
-      if (bonds.length === 0) return { task: task.toString(), wallet: c.account, bonds: [] };
+      if (bonds.length === 0) {
+        return {
+          task: task.toString(),
+          wallet: c.account,
+          bonds: [],
+          next: `This wallet has no bond on task ${task}. Check the task id; a bond is placed with brainchain_bond_task while BrainChain has the task hired to this wallet.`,
+        };
+      }
       const delivered = bonds.some((b) => b.status === DeedStatus.Settled && b.remainderBps === Number(BPS));
       // Only a bond still waiting for its Proof is worded by where the task stands.
       const [now, indexed, tasks, owed, pages] = await Promise.all([

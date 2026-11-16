@@ -414,16 +414,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
     const view = await jsonObject(response);
     if (response.status === 404) {
-      if (paid.has(keyed("grade", order))) return { order, error: "This id is a grade, not a task's order.", done: true, next: "Read it with brainchain_get_grade." };
+      if (paid.has(keyed("grade", order))) throw new Error("This id is a grade, not a task's order. Read it with brainchain_get_grade.");
       const at = paid.get(keyed("task", order))?.at;
-      if (at === undefined || Date.now() - at >= REPOST_AFTER_MINUTES * 60_000) {
+      // Only an order this server paid for can be said never to have been charged.
+      if (at === undefined) throw new Error("The desk has no order with this id. Check the id: it must be one that brainchain_post_task returned.");
+      if (Date.now() - at >= REPOST_AFTER_MINUTES * 60_000) {
         await release("task", order);
-        return {
-          order,
-          error: "The desk has no order with this id.",
-          done: true,
-          next: `Check the order id: it must be one that brainchain_post_task returned. If you posted it more than ${REPOST_AFTER_MINUTES} minutes ago, it was never charged.`,
-        };
+        throw new Error(`The desk has no order with this id. This server posted it more than ${REPOST_AFTER_MINUTES} minutes ago, so it was never charged, and the task can be posted again.`);
       }
       return {
         order,
@@ -468,9 +465,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
     const view = await jsonObject(response);
     if (response.status === 404) {
-      if (paid.has(keyed("task", id))) return { grade: id, error: "This id is a task's order, not a grade.", done: true, next: "Read it with brainchain_get_task." };
+      if (paid.has(keyed("task", id))) throw new Error("This id is a task's order, not a grade. Read it with brainchain_get_task.");
       const at = paid.get(keyed("grade", id))?.at;
-      if (at !== undefined && Date.now() - at < REPOST_AFTER_MINUTES * 60_000) {
+      if (at === undefined) throw new Error("The desk has no grade with this id. Check the id: it must be one that brainchain_grade returned.");
+      if (Date.now() - at < REPOST_AFTER_MINUTES * 60_000) {
         return {
           grade: id,
           error: "The desk has no grade with this id.",
@@ -480,12 +478,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
         };
       }
       await release("grade", id);
-      return {
-        grade: id,
-        error: "The desk has no grade with this id.",
-        done: true,
-        next: `Check the id: it must be one that brainchain_grade returned. If you sent it more than ${REPOST_AFTER_MINUTES} minutes ago, it was never charged, so you can send it again.`,
-      };
+      throw new Error(`The desk has no grade with this id. This server sent it more than ${REPOST_AFTER_MINUTES} minutes ago, so it was never charged, and it can be sent again.`);
     }
     if (response.status >= 500 || RETRY_LATER.has(response.status)) {
       return { grade: id, error: `The desk answered ${response.status}.`, done: false, next: "The desk is busy or briefly unavailable. Read the grade again after retryAfterSeconds.", retryAfterSeconds: retryAfter(response) ?? 30 };
