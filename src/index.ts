@@ -2,12 +2,12 @@
 import { createRequire } from "node:module";
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createWalletClient, http, maxUint256, type PrivateKeyAccount } from "viem";
+import { createWalletClient, http, maxUint256, type Hex, type PrivateKeyAccount } from "viem";
 
 import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
 import { erc20 } from "./payments.js";
-import { approvalFailure, approveCommand, chainClients, createServer, payerAccount, PERMIT2, walletFunds, walletReport } from "./server.js";
+import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, payerAccount, PERMIT2, walletFunds, walletReport } from "./server.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -97,18 +97,19 @@ async function approve(arg: string): Promise<void> {
   const amount = max ? maxUint256 : BigInt(whole!) * 10n ** BigInt(DECIMALS) + BigInt(fraction.padEnd(DECIMALS, "0"));
   const { chain, reader } = chainClients(config);
   const wallet = createWalletClient({ account, chain, transport: http(config.rpc, { timeout: 30_000 }) });
+  let hash: Hex;
   try {
-    const hash = await wallet.writeContract({ address: config.asset, abi: erc20, functionName: "approve", args: [PERMIT2, amount] });
-    console.log(`Sent ${hash} on ${config.chain}. Waiting for it to confirm…`);
-    const receipt = await reader.waitForTransactionReceipt({ hash, timeout: 180_000 });
-    if (receipt.status !== "success") fail(`The approval ${hash} reverted on ${config.chain}. Nothing changed; run approve again.`);
-    console.log(
-      amount === 0n
-        ? `Permit2 can no longer spend ${config.token} from ${account.address}. Run approve with an amount to pay for tasks again.`
-        : `Permit2 can now spend ${max ? "any amount of" : formatUnits(amount)} ${config.token} from ${account.address}.`,
-    );
-    process.exit(0);
+    hash = await wallet.writeContract({ address: config.asset, abi: erc20, functionName: "approve", args: [PERMIT2, amount] });
   } catch (error) {
     fail(approvalFailure(account.address, config.chain, error));
   }
+  console.log(`Sent ${hash} on ${config.chain}. Waiting for it to confirm…`);
+  const receipt = await reader.waitForTransactionReceipt({ hash, timeout: 180_000 }).catch((error: unknown) => fail(approvalUnconfirmed(hash, config.chain, error)));
+  if (receipt.status !== "success") fail(`The approval ${hash} reverted on ${config.chain}. Nothing changed; run approve again.`);
+  console.log(
+    amount === 0n
+      ? `Permit2 can no longer spend ${config.token} from ${account.address}. Run approve with an amount to pay for tasks again.`
+      : `Permit2 can now spend ${max ? "any amount of" : formatUnits(amount)} ${config.token} from ${account.address}.`,
+  );
+  process.exit(0);
 }

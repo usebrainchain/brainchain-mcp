@@ -3,14 +3,14 @@ import { isAbsolute } from "node:path";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from "@modelcontextprotocol/sdk/types.js";
-import { createPublicClient, defineChain, formatEther, http, maxUint256, type PrivateKeyAccount } from "viem";
+import { createPublicClient, defineChain, formatEther, http, maxUint256, WaitForTransactionReceiptTimeoutError, type PrivateKeyAccount } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { bondsClosed, createBonds, type Bonds } from "./bonds.js";
 import { DEFAULT_MAX_PRICE, expandHome, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
 import { createLimits } from "./limits.js";
-import { createDesk, erc20 } from "./payments.js";
+import { createDesk, erc20, firstLine } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL } from "./premiums.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_GRADE_NAME, GET_GRADE_TOOL, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, gradeTool, POST_TASK_NAME, postTaskTool, type Desk, type Terms } from "./tools.js";
 
@@ -74,6 +74,12 @@ export function payerAccount(env: Record<string, string | undefined>): PrivateKe
 export function approvalFailure(address: string, chain: string, error: unknown): string {
   const message = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
   return /insufficient funds|exceeds the balance/i.test(message) ? `${address} needs a little ETH on ${chain} to send the approval.` : `The approval failed: ${message}`;
+}
+
+/** What `approve` says when the approval was sent and its receipt did not come back: it may still confirm, so it is no failure. */
+export function approvalUnconfirmed(hash: string, chain: string, error: unknown): string {
+  const what = error instanceof WaitForTransactionReceiptTimeoutError ? " and has not confirmed yet" : `, and whether it confirmed could not be read (${firstLine(error).replace(/[.!?]+$/, "")})`;
+  return `The approval ${hash} was sent on ${chain}${what}. It may still go through: look it up in a ${chain} block explorer before you run approve again.`;
 }
 
 export function chainClients(config: Config) {

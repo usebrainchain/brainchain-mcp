@@ -5,14 +5,14 @@ import { join } from "node:path";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { InsufficientFundsError } from "viem";
+import { InsufficientFundsError, WaitForTransactionReceiptTimeoutError } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 
 import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
 import { guidance } from "./payments.js";
-import { approvalFailure, approveCommand, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
+import { approvalFailure, approvalUnconfirmed, approveCommand, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_GRADE_NAME, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
@@ -328,6 +328,19 @@ describe("approvalFailure", () => {
 
   it("passes on anything else, one line of it", () => {
     expect(approvalFailure(address, "Base", new Error("nonce too low\nmore detail"))).toBe("The approval failed: nonce too low");
+  });
+});
+
+describe("approvalUnconfirmed", () => {
+  const hash = `0x${"ab".repeat(32)}`;
+
+  it("names a sent approval that has not confirmed as one that may still go through, never as failed", () => {
+    expect(approvalUnconfirmed(hash, "Robinhood Chain", new WaitForTransactionReceiptTimeoutError({ hash: hash as `0x${string}` }))).toBe(
+      `The approval ${hash} was sent on Robinhood Chain and has not confirmed yet. It may still go through: look it up in a Robinhood Chain block explorer before you run approve again.`,
+    );
+    expect(approvalUnconfirmed(hash, "Base", new Error("HTTP request failed.\n\nStatus: 503"))).toBe(
+      `The approval ${hash} was sent on Base, and whether it confirmed could not be read (HTTP request failed). It may still go through: look it up in a Base block explorer before you run approve again.`,
+    );
   });
 });
 
