@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { formatUnits, resolveConfig } from "./config.js";
+import { CustodyError } from "./custody.js";
 import type { Bonds } from "./bonds.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
 
@@ -367,5 +368,47 @@ describe("stock premiums", () => {
     expect(result.isError).toBe(true);
     expect(body(result)).toEqual({ error: "Unknown field: symbol. This tool takes nothing." });
     expect(reads).toBe(0);
+  });
+});
+
+describe("custody additions", () => {
+  const board = { chain: "Robinhood Chain" as const, source: "https://github.com/BitGo/BitGoJS/tree/master/modules/statics/src/coins", readAt: "2026-11-16T10:00:00.000Z", since: "2026-10-17T10:00:00.000Z", additions: [] };
+  const call = (args: unknown, custody: (days: number) => Promise<typeof board>) => callTool(desk, "brainchain_custody_additions", args, undefined, undefined, undefined, custody);
+
+  it("serves the board without a desk or a key, for 30 days unless told otherwise", async () => {
+    const asked: number[] = [];
+    const read = async (days: number) => (asked.push(days), board);
+    for (const args of [{}, undefined, { days: 1 }, { days: 7 }, { days: 90 }]) {
+      const result = await call(args, read);
+      expect(result.isError).toBe(false);
+      expect(body(result)).toEqual(board);
+    }
+    expect(asked).toEqual([30, 30, 1, 7, 90]);
+  });
+
+  it("refuses a period it does not read, and fields it does not take, before reading anything", async () => {
+    let reads = 0;
+    const read = async () => (reads++, board);
+    for (const days of [0, 91, 1.5, -3, "30", null, Number.NaN]) {
+      const result = await call({ days }, read);
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: "days must be a whole number from 1 to 90. Leave it out to look back 30 days." });
+    }
+    expect(body(await call({ token: "cashcat" }, read))).toEqual({ error: "Unknown field: token. This tool takes only days." });
+    expect(reads).toBe(0);
+  });
+
+  it("answers a failed read in one line, and passes on what is already written for the reader", async () => {
+    const dump = Object.assign(new Error("GitHub answered 502."), { status: 502 });
+    for (const [error, said] of [
+      [dump, "BitGo's code on GitHub could not be read just now: HTTP 502. Try again in a minute."],
+      [new TypeError("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND api.github.com") }), "BitGo's code on GitHub could not be read just now: fetch failed. Try again in a minute."],
+      [new Error("GitHub's answer was not a list of changes to a branch."), "BitGo's code on GitHub could not be read just now: GitHub's answer was not a list of changes to a branch. Try again in a minute."],
+      [new CustodyError("GitHub allows 60 unauthenticated API requests an hour from one IP address, and this address has used them up. Try again after 12:17 UTC."), "GitHub allows 60 unauthenticated API requests an hour from one IP address, and this address has used them up. Try again after 12:17 UTC."],
+    ] as const) {
+      const result = await call({}, async () => Promise.reject(error));
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: said });
+    }
   });
 });

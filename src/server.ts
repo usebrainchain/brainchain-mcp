@@ -8,6 +8,7 @@ import { privateKeyToAccount } from "viem/accounts";
 
 import { bondsClosed, createBonds, type Bonds } from "./bonds.js";
 import { DEFAULT_MAX_PRICE, expandHome, formatUnits, resolveConfig, type Config } from "./config.js";
+import { CUSTODY_NAME, CUSTODY_TOOL } from "./custody.js";
 import { stateDirProblem } from "./daily.js";
 import { createLimits } from "./limits.js";
 import { createDesk } from "./payments.js";
@@ -34,7 +35,7 @@ export const INSTRUCTIONS =
 
 const KEY_HELP =
   `Add BRAINCHAIN_PAYER_KEY to this server's env in your MCP client config (in Claude Code, \`claude mcp add … -e BRAINCHAIN_PAYER_KEY=…\`), or BRAINCHAIN_PAYER_KEY_FILE with the path of a file holding it, then restart the server. ` +
-  `${GET_TASK_NAME}, ${GET_GRADE_NAME} and ${PREMIUMS_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
+  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME} and ${CUSTODY_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -243,7 +244,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
   const { desk, terms, bonds, bondTools: bondToolList, gradeTool: gradeToolDef, refused } = deskFor(env, version, options.fetch);
   const problem = typeof terms === "string" ? terms : terms.problem;
   if (problem) (options.log ?? console.error)(`brainchain-mcp has an invalid setting: ${problem}`);
-  const tools = [postTaskTool(terms), GET_TASK_TOOL, gradeToolDef, GET_GRADE_TOOL, PREMIUMS_TOOL, ...bondToolList];
+  const tools = [postTaskTool(terms), GET_TASK_TOOL, gradeToolDef, GET_GRADE_TOOL, PREMIUMS_TOOL, CUSTODY_TOOL, ...bondToolList];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, (request) => callTool(desk, request.params.name, request.params.arguments, undefined, bonds, refused));

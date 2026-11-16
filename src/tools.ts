@@ -2,6 +2,7 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import type { Bonds } from "./bonds.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
+import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DEFAULT_DAYS, MAX_DAYS, readCustodyAdditions, type CustodyBoard } from "./custody.js";
 import { brief, canonicalStringify, RESULT_LIMIT } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL, readPremiums, type PremiumBoard } from "./premiums.js";
 import { MIN_BOND, MISSED_TO } from "./shipped.js";
@@ -344,6 +345,7 @@ export async function callTool(
   premiums: () => Promise<PremiumBoard> = readPremiums,
   bonds?: Bonds,
   refused: ReadonlyMap<string, string> = new Map(),
+  custody: (days: number) => Promise<CustodyBoard> = readCustodyAdditions,
 ): Promise<CallToolResult> {
   const input = (args ?? {}) as Record<string, unknown>;
   const refusal = refused.get(name);
@@ -384,6 +386,16 @@ export async function callTool(
       refuseUnknownFields(input, PREMIUMS_TOOL.inputSchema);
       const board = await premiums().catch((error: unknown) => {
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
+      });
+      return reply(board);
+    }
+    if (name === CUSTODY_NAME) {
+      refuseUnknownFields(input, CUSTODY_TOOL.inputSchema);
+      const days = input.days === undefined ? DEFAULT_DAYS : input.days;
+      if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > MAX_DAYS) throw new Error(`days must be a whole number from 1 to ${MAX_DAYS}. Leave it out to look back ${DEFAULT_DAYS} days.`);
+      const board = await custody(days).catch((error: unknown) => {
+        if (error instanceof CustodyError) throw error;
+        throw new Error(`BitGo's code on GitHub could not be read just now: ${brief(error)} Try again in a minute.`);
       });
       return reply(board);
     }
