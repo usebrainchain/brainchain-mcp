@@ -172,6 +172,51 @@ A market or seller with its own buyers can call the grade route from its own ser
 
 Results usually arrive within minutes. A post reply with `possiblyCharged` means the payment was signed and the server could not rule out a charge: the connection dropped, the desk returned an unexpected status, or the desk refused the payment while its order was still open or could not be read. The payment may have gone through, so read the order with `brainchain_get_task` rather than posting again. While the server keeps running, an identical post within 15 minutes returns the first order, marked `duplicate`, instead of paying twice. Once `brainchain_get_task` reads an order's payment as failed, nothing was charged: the task can be posted again at once, and on the server that posted it its amount no longer counts against the budget or the daily limit.
 
+### Sample replies
+
+What a reply looks like before you pay for one. The ids, hashes, times and figures below are examples. `brainchain_get_task` on a task Jev accepted returns this summary, then the result text as a second content block:
+
+```json
+{
+  "order": "0x6d9a…41c2",
+  "state": "posted",
+  "network": "eip155:4663",
+  "paymentTx": "0x3f1e…9b07",
+  "taskId": "4812",
+  "board": "0x44b8464342Bbfb9B565FAE494DfDefa37D33A211",
+  "task": { "status": "graded", "accepted": true, "due": { "step": "dispute", "by": "2026-11-16T21:04:00.000Z" } },
+  "result": "https://brain.usebrainchain.com/records/0x9e0c…77d1.txt",
+  "done": true,
+  "next": "Jev accepted the work. The result follows this summary. The payment becomes final when the dispute window closes, about six hours after grading."
+}
+```
+
+`brainchain_get_grade` on a grade Jev has decided:
+
+```json
+{
+  "grade": "0x8c2f…a913",
+  "state": "graded",
+  "status": "https://brain.usebrainchain.com/x402/grades/0x8c2f…a913",
+  "network": "eip155:4663",
+  "paymentTx": "0x51ab…c3d0",
+  "accepted": true,
+  "answer": "accept",
+  "passProbability": 0.91,
+  "bar": 0.8,
+  "confidence": 0.91,
+  "levels": [
+    { "level": "Does everything the brief asks, correctly and completely", "probability": 0.62, "passes": true },
+    { "level": "Does what the brief asks, with minor gaps", "probability": 0.29, "passes": true },
+    { "level": "Misses what the brief asks", "probability": 0.09, "passes": false }
+  ],
+  "second": { "model": "deepseek/deepseek-v4.1-flash", "passProbability": 0.93 },
+  "decision": { "id": "4800", "record": "https://brain.usebrainchain.com/records/0x2b7d…e5f0.json", "page": "https://usebrainchain.com/decision?id=4800" },
+  "done": true,
+  "next": "Jev accepts the work at 91%. The record is at decision.page."
+}
+```
+
 ## Payments and limits
 
 - 1 USDG or 1 USDC, taken when the task is posted. The server never pays more per task than `BRAINCHAIN_MAX_PRICE_UNITS` (1 USDG or USDC by default), never more in total than `BRAINCHAIN_BUDGET_UNITS` (10 USDG or USDC by default), and only to the BrainChain payment desk. Each server keeps its own budget, which resets whenever it restarts, including when your MCP client restarts it. For an agent that runs unattended, `BRAINCHAIN_DAILY_UNITS` sets a limit per UTC day that holds across restarts, and across servers paying from the same wallet on either chain, as long as they share a `BRAINCHAIN_STATE_DIR`.

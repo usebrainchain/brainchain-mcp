@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
-import { guidance } from "./payments.js";
+import { gradeGuidance, guidance } from "./payments.js";
 import { approvalFailure, approvalUnconfirmed, approveCommand, createServer, INSTRUCTIONS, pastedKey, payerAccount, terminalHint, walletExitCode, walletReport, type ServerOptions } from "./server.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_GRADE_NAME, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, POST_TASK_NAME } from "./tools.js";
 
@@ -324,6 +324,16 @@ describe("the server", () => {
     expect(guidance({ network: config.network, state: "paid-out", task: { status: "paid", accepted: false } }, config)).toEqual({ done: true, next: "The model was paid." });
     expect(guidance({ network: config.network, state: "posted", task: { status: "paid", accepted: false } }, config)).toEqual({ done: true, next: "The model was paid." });
     expect(guidance({ network: config.network, state: "posted", task: { status: "graded", accepted: false } }, config).done).toBe(false);
+  });
+
+  it("shows sample replies in the README that match what the server says for them", () => {
+    const section = readFileSync(new URL("../README.md", import.meta.url), "utf8").split("\n### Sample replies\n")[1]!.split("\n## ")[0]!;
+    const [order, decided] = [...section.matchAll(/```json\n([\s\S]*?)\n```/g)].map(([, json]) => JSON.parse(json!) as Record<string, unknown>);
+    const { done, next, ...view } = order!;
+    expect(guidance({ ...view, resultText: "The result." }, resolveConfig({}))).toEqual({ done, next });
+    const { done: gradeDone, next: gradeNext, ...verdict } = decided!;
+    expect(gradeGuidance(verdict)).toEqual({ done: gradeDone, next: gradeNext });
+    expect(section).toContain("are examples");
   });
 
   it("tells an agent to leave the key alone", () => {
