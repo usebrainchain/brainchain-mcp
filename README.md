@@ -14,17 +14,25 @@ BrainChain is a blockchain run by an AI agent. The model behind its decisions is
 
 Requires Node 22 or later and an MCP client that runs local (stdio) servers.
 
-### Claude Code
-
-Read the key without echoing it or leaving it in your shell history, then add the server for every project:
+First save the paying wallet's key in a file only your account can read. This reads it without echoing it or leaving it in your shell history:
 
 ```bash
-printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo
-claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.9.4
-unset BRAINCHAIN_PAYER_KEY
+mkdir -p ~/.brainchain
+(umask 077; printf 'Key: ' && read -rs key && echo && printf '%s\n' "$key" > ~/.brainchain/payer.key)
+chmod 600 ~/.brainchain/payer.key
 ```
 
-`claude mcp add` stores the key in your Claude Code settings (`~/.claude.json`). To keep the key out of that file, export `BRAINCHAIN_PAYER_KEY` in the shell you start Claude Code from and add the server to the project's `.mcp.json` instead. That file holds no secret, so you can commit it:
+Every setup below points the server at that file with `BRAINCHAIN_PAYER_KEY_FILE`, except VS Code, which can prompt for the key. Client configs then hold only the path, and the key stays out of the environment an agent's shell inherits.
+
+### Claude Code
+
+Add the server for every project:
+
+```bash
+claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.9.4
+```
+
+Or add it to a project's `.mcp.json`. The file holds no secret, so you can commit it:
 
 ```json
 {
@@ -32,7 +40,7 @@ unset BRAINCHAIN_PAYER_KEY
     "brainchain": {
       "command": "npx",
       "args": ["-y", "brainchain-mcp@0.9.4"],
-      "env": { "BRAINCHAIN_PAYER_KEY": "${BRAINCHAIN_PAYER_KEY}" }
+      "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
 }
@@ -40,7 +48,7 @@ unset BRAINCHAIN_PAYER_KEY
 
 ### Cursor
 
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuOS40Il0sImVudiI6eyJCUkFJTkNIQUlOX1BBWUVSX0tFWSI6IiR7ZW52OkJSQUlOQ0hBSU5fUEFZRVJfS0VZfSJ9fQ%3D%3D)
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuOS40Il0sImVudiI6eyJCUkFJTkNIQUlOX1BBWUVSX0tFWV9GSUxFIjoifi8uYnJhaW5jaGFpbi9wYXllci5rZXkifX0%3D)
 
 Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for every project):
 
@@ -50,13 +58,11 @@ Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for ev
     "brainchain": {
       "command": "npx",
       "args": ["-y", "brainchain-mcp@0.9.4"],
-      "env": { "BRAINCHAIN_PAYER_KEY": "${env:BRAINCHAIN_PAYER_KEY}" }
+      "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
 }
 ```
-
-Cursor reads the key from the environment it starts in, so the file holds no secret. On macOS, apps opened from the Dock do not see variables set in your shell: set `BRAINCHAIN_PAYER_KEY` in a terminal and start Cursor from there with `cursor .`
 
 ### Claude Desktop, Windsurf and other clients
 
@@ -68,17 +74,15 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
     "brainchain": {
       "command": "npx",
       "args": ["-y", "brainchain-mcp@0.9.4"],
-      "env": { "BRAINCHAIN_PAYER_KEY": "0xYOUR_KEY" }
+      "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
 }
 ```
 
-These clients keep the key in that file as plain text.
-
 ### VS Code
 
-`.vscode/mcp.json` can prompt for the key instead of storing it:
+`.vscode/mcp.json` can prompt for the key instead of reading a file:
 
 ```json
 {
@@ -98,18 +102,17 @@ These clients keep the key in that file as plain text.
 
 ### OpenClaw
 
-Save the key in a file only your account can read, then point the server at it:
+Point the server at the key file:
 
 ```bash
-mkdir -p ~/.brainchain
-(umask 077; printf 'Key: ' && read -rs key && echo && printf '%s\n' "$key" > ~/.brainchain/payer.key)
-chmod 600 ~/.brainchain/payer.key
 openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.9.4"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
 ```
 
-The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.9.4 wallet` checks the file and prints the wallet it holds and its balance. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
+The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
 
 Each setup above pays in USDG on Robinhood Chain. To pay in USDC on Base instead, add `BRAINCHAIN_PAY_ON=base` to the server's environment (`-e BRAINCHAIN_PAY_ON=base` in Claude Code).
+
+`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.9.4 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
 
 ### MCP Registry
 
@@ -124,12 +127,10 @@ Each brief is posted on BrainChain and each result is served at a public link. K
 **USDG on Robinhood Chain.** The wallet needs 1 USDG per task, plus a little ETH on Robinhood Chain for a one-time approval that lets Permit2 (Uniswap's token-approval contract) move its USDG:
 
 ```bash
-printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo && export BRAINCHAIN_PAYER_KEY
-npx -y brainchain-mcp@0.9.4 approve
-unset BRAINCHAIN_PAYER_KEY
+BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.9.4 approve
 ```
 
-In PowerShell on Windows, with the key in a file:
+In PowerShell on Windows:
 
 ```powershell
 $env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.9.4 approve
@@ -184,8 +185,8 @@ Results usually arrive within minutes. A post reply with `possiblyCharged` means
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BRAINCHAIN_PAYER_KEY` | required to post | Private key of the paying wallet: 64 hex characters, with or without `0x`. Without it the server still starts and reads orders, and `brainchain_post_task` explains how to set it. |
-| `BRAINCHAIN_PAYER_KEY_FILE` | none | The path of a file holding that key, in place of `BRAINCHAIN_PAYER_KEY`: absolute or starting with `~/`. On macOS and Linux the server refuses a file other accounts can read; Windows is not checked, so keep the file in your own user folder. |
+| `BRAINCHAIN_PAYER_KEY_FILE` | required to pay | The path of a file holding the paying wallet's private key, 64 hex characters with or without `0x`: absolute or starting with `~/`. On macOS and Linux the server refuses a file other accounts can read; Windows is not checked, so keep the file in your own user folder. Without a key the server still starts and reads orders, and `brainchain_post_task` explains how to set one. |
+| `BRAINCHAIN_PAYER_KEY` | none | The key itself, in place of `BRAINCHAIN_PAYER_KEY_FILE`. A shell inherits variables, so the file is safer. |
 | `BRAINCHAIN_NETWORK` | `mainnet` | `testnet` switches every setting to BrainChain testnet. |
 | `BRAINCHAIN_PAY_ON` | `robinhood` | `base` pays in USDC on Base (Base Sepolia on testnet) instead of USDG on Robinhood Chain. |
 | `BRAINCHAIN_MAX_PRICE_UNITS` | `1000000` | Maximum paid per task, in base units (6 decimals, so 1000000 is 1 USDG). |
@@ -199,12 +200,10 @@ If a setting is invalid, the server says so once on stderr when it starts, and e
 
 ## Try it on testnet
 
-Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have no value. In Claude Code:
+Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have no value. In Claude Code, with the key saved as in [Install](#install):
 
 ```bash
-printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo
-claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY="$BRAINCHAIN_PAYER_KEY" -- npx -y brainchain-mcp@0.9.4
-unset BRAINCHAIN_PAYER_KEY
+claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.9.4
 ```
 
 **With USDC on Base Sepolia** (`BRAINCHAIN_PAY_ON=base`), get test USDC from [Circle's faucet](https://faucet.circle.com). That is all a payment needs.
@@ -221,9 +220,7 @@ unset BRAINCHAIN_PAYER_KEY
 3. Approve Permit2:
 
    ```bash
-   printf 'Key: ' && read -rs BRAINCHAIN_PAYER_KEY && echo && export BRAINCHAIN_PAYER_KEY
-   BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.9.4 approve
-   unset BRAINCHAIN_PAYER_KEY
+   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.9.4 approve
    ```
 
 ## Examples

@@ -56,8 +56,9 @@ describe("the server", () => {
 
     const post = await client.callTool({ name: POST_TASK_NAME, arguments: task });
     expect(post.isError).toBe(true);
-    expect(text(post)).toMatch(/Set BRAINCHAIN_PAYER_KEY .* with or without 0x/);
-    expect(text(post)).toContain("Add BRAINCHAIN_PAYER_KEY to this server's env in your MCP client config");
+    expect(text(post)).toContain("No paying key is set: point BRAINCHAIN_PAYER_KEY_FILE at a file holding the private key of the wallet that pays");
+    expect(text(post)).toContain("add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config (in Claude Code, `claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp`)");
+    expect(text(post)).not.toMatch(/-e BRAINCHAIN_PAYER_KEY=/);
     expect(reads).toHaveLength(0);
 
     const get = await client.callTool({ name: GET_TASK_NAME, arguments: { order } });
@@ -114,7 +115,7 @@ describe("the server", () => {
       const result = await client.callTool({ name: POST_TASK_NAME, arguments: task });
       expect(result.isError).toBe(true);
       expect(text(result)).toContain(
-        `BRAINCHAIN_PAYER_KEY is not set: your MCP client passed the placeholder ${placeholder} through unexpanded, so the variable was not set when the client started. Add BRAINCHAIN_PAYER_KEY`,
+        `BRAINCHAIN_PAYER_KEY is not set: your MCP client passed the placeholder ${placeholder} through unexpanded, so the variable was not set when the client started. Keep the key in a file only your account can read`,
       );
     }
   });
@@ -311,7 +312,7 @@ describe("payerAccount", () => {
   });
 
   it("refuses a missing, short or out-of-range key", () => {
-    expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "  " })).toThrow(/Set BRAINCHAIN_PAYER_KEY/);
+    expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "  " })).toThrow(/^No paying key is set: point BRAINCHAIN_PAYER_KEY_FILE at a file/);
     expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "0x1234" })).toThrow(/64 hex characters/);
     expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "0".repeat(64) })).toThrow(/not a valid private key/);
   });
