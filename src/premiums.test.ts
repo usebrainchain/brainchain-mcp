@@ -73,6 +73,11 @@ describe("the premium tool's words", () => {
     const row = readFileSync(new URL("../README.md", import.meta.url), "utf8").split("\n").find((line) => line.startsWith(`| \`${PREMIUMS_NAME}\` |`))!;
     for (const text of [PREMIUMS_TOOL.description!, row]) expect(text).not.toMatch(/minted|clears on its own/);
   });
+
+  it("promise each stock on the list rather than a fixed set of tickers", () => {
+    const row = readFileSync(new URL("../README.md", import.meta.url), "utf8").split("\n").find((line) => line.startsWith(`| \`${PREMIUMS_NAME}\` |`))!;
+    for (const text of [PREMIUMS_TOOL.description!, row]) expect(text).toContain("for each stock on BrainChain's list (today NVDA,");
+  });
 });
 
 describe("stockPremiums", () => {

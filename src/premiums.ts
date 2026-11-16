@@ -26,8 +26,8 @@ export const PREMIUMS_TOOL: Tool = {
   title: "Stock premiums on Robinhood Chain",
   description:
     "What tokenized US stocks cost on Robinhood Chain against their Chainlink price right now: pool price, Chainlink price, " +
-    "the premium in percent and the feed's age, for NVDA, SPY, AAPL, TSLA, GOOGL, META and MSFT. Read from the chain, free, no key " +
-    "and no payment. Over a weekend the feeds stand still and the pools keep trading. " +
+    "the premium in percent and the feed's age, for each stock on BrainChain's list (today NVDA, SPY, AAPL, TSLA, GOOGL, META and MSFT). " +
+    "Read from the chain, free, no key and no payment. Over a weekend the feeds stand still and the pools keep trading. " +
     "usMarketOpen is true during the regular session, 09:30 to 16:00 New York time, Monday to Friday; it does not know exchange holidays or early closes. " +
     "Prices are in USDG per token with each token's split multiplier applied. A stock that cannot be priced just now is listed under unpriced, with the reason. " +
     "Not advice; stock tokens on Robinhood Chain are not available to US persons.",
