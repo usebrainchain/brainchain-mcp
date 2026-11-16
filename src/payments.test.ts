@@ -10,7 +10,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it, vi } from "vitest";
 
 import { REPOST_AFTER_MINUTES, resolveConfig } from "./config.js";
-import { canonicalStringify, createDesk, guidance, orderIdOf, paidOn } from "./payments.js";
+import { BODY_LIMIT, canonicalStringify, createDesk, guidance, orderIdOf, paidOn } from "./payments.js";
 import { callTool, checkBrief, POST_TASK_NAME, type Desk } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
@@ -607,6 +607,32 @@ describe("reading an order", () => {
     expect(view.resultText.startsWith("y".repeat(20_000))).toBe(true);
     expect(view.resultText).not.toContain("y".repeat(20_001));
     expect(view.resultText).toContain(`Cut at 20,000 of 25,000 UTF-16 units. The full result is at ${result}.`);
+  });
+
+  it("stops reading a result or a reply at the byte cap", async () => {
+    const result = `${config.desk}/records/0x${"1".repeat(64)}.txt`;
+    let pulled = 0;
+    const endless = () =>
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled += 1 << 16;
+          controller.enqueue(new TextEncoder().encode("y".repeat(1 << 16)));
+        },
+      });
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input) === result) return new Response(endless());
+      return new Response(JSON.stringify({ order: "0x01", state: "posted", task: { status: "graded", accepted: true }, result }));
+    }) as typeof fetch;
+    const view = (await desk(fetchImpl).get(`0x${"a".repeat(64)}`)) as { resultText: string; done: boolean };
+    expect(view.done).toBe(true);
+    expect(view.resultText.startsWith("y".repeat(20_000))).toBe(true);
+    expect(view.resultText).toContain(`Cut at 20,000 of more than ${BODY_LIMIT.toLocaleString("en-US")} UTF-16 units. The full result is at ${result}.`);
+    expect(pulled).toBeLessThanOrEqual(BODY_LIMIT + 3 * (1 << 16));
+
+    pulled = 0;
+    const flood = (async () => new Response(endless(), { status: 200 })) as typeof fetch;
+    expect(await desk(flood).get(`0x${"ab".repeat(32)}`)).toMatchObject({ done: false, retryAfterSeconds: 30, error: "The desk's reply could not be read." });
+    expect(pulled).toBeLessThanOrEqual(BODY_LIMIT + 3 * (1 << 16));
   });
 
   it("keeps the order when the result cannot be fetched", async () => {

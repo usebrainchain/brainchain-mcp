@@ -110,8 +110,33 @@ function retryAfter(response: Response): number | undefined {
   return Number.isFinite(seconds) ? Math.max(1, seconds) : undefined;
 }
 
+/** Far above any reply or result the desk sends, so a body that runs past it comes from something else. */
+export const BODY_LIMIT = 1 << 20;
+
+/** A body as text up to `limit` bytes; one that runs past it is cancelled there and comes back cut. */
+async function capped(response: Response, limit = BODY_LIMIT): Promise<{ text: string; cut: boolean }> {
+  const reader = response.body?.getReader();
+  if (!reader) return { text: "", cut: false };
+  const decoder = new TextDecoder();
+  let text = "";
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return { text: text + decoder.decode(), cut: false };
+    if (size + value.byteLength > limit) {
+      text += decoder.decode(value.subarray(0, limit - size), { stream: true });
+      void reader.cancel().catch(() => undefined);
+      return { text, cut: true };
+    }
+    size += value.byteLength;
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
 async function jsonObject(response: Response): Promise<Record<string, unknown> | undefined> {
-  const value: unknown = await response.json().catch(() => undefined);
+  const value: unknown = await capped(response)
+    .then(({ text, cut }) => (cut ? undefined : JSON.parse(text)))
+    .catch(() => undefined);
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
@@ -407,11 +432,11 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       try {
         const text = await fetchImpl(view.result, { signal: AbortSignal.timeout(20_000) });
         if (text.ok) {
-          const full = await text.text();
+          const { text: full, cut } = await capped(text);
           view.resultText =
-            full.length <= RESULT_LIMIT
+            full.length <= RESULT_LIMIT && !cut
               ? full
-              : `${full.slice(0, RESULT_LIMIT)}\n\n[Cut at ${RESULT_LIMIT.toLocaleString("en-US")} of ${full.length.toLocaleString("en-US")} UTF-16 units. The full result is at ${view.result}.]`;
+              : `${full.slice(0, RESULT_LIMIT)}\n\n[Cut at ${RESULT_LIMIT.toLocaleString("en-US")} of ${cut ? "more than " : ""}${full.length.toLocaleString("en-US")} UTF-16 units. The full result is at ${view.result}.]`;
         } else view.resultError = `The result could not be fetched (HTTP ${text.status}); it is at ${view.result}.`;
       } catch (error) {
         view.resultError = `The result could not be fetched (${firstLine(error)}); it is at ${view.result}.`;
