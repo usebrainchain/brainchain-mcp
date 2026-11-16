@@ -257,6 +257,15 @@ function text(name: string, value: unknown, max = Infinity): string {
   return sent;
 }
 
+/** Levels that differ only in case or spacing describe the same quality. */
+function distinct(levels: string[]): void {
+  const folded = levels.map((level) => level.toLowerCase());
+  folded.forEach((level, i) => {
+    const first = folded.indexOf(level);
+    if (first < i) throw new Error(`levels[${i}] repeats levels[${first}]; each level must describe a different quality.`);
+  });
+}
+
 function refuseUnknownFields(input: Record<string, unknown>, schema: Tool["inputSchema"]): void {
   const known = Object.keys(schema.properties ?? {});
   const unknown = Object.keys(input).filter((key) => !known.includes(key));
@@ -277,10 +286,7 @@ export function checkBrief(input: Record<string, unknown>): TaskRequest {
   if (!Array.isArray(levels)) throw new Error(`levels must be an array of strings, not ${typeName(levels)}.`);
   if (levels.length < 2 || levels.length > 3) throw new Error(`levels must list 2 or 3 quality levels, best first; this lists ${levels.length}.`);
   const sent = levels.map((level: unknown, i) => text(`levels[${i}]`, level, 200));
-  sent.forEach((level, i) => {
-    const first = sent.indexOf(level);
-    if (first < i) throw new Error(`levels[${i}] repeats levels[${first}]; each level must describe a different quality.`);
-  });
+  distinct(sent);
   // The desk sets the pass level itself: the lowest level never passes. A copied brief that names the same level is the same brief.
   const passIndex = Math.min(1, sent.length - 2);
   if (input.passIndex !== undefined && input.passIndex !== passIndex) {
@@ -313,16 +319,14 @@ export function checkGrade(input: Record<string, unknown>): GradeRequest {
     if (!Array.isArray(input.levels)) throw new Error(`levels must be an array of strings, not ${typeName(input.levels)}.`);
     if (input.levels.length < 2 || input.levels.length > 5) throw new Error(`levels must list 2 to 5 quality levels, best first; this lists ${input.levels.length}.`);
     const levels = input.levels.map((level: unknown, i) => text(`levels[${i}]`, level, 200));
-    levels.forEach((level, i) => {
-      const first = levels.indexOf(level);
-      if (first < i) throw new Error(`levels[${i}] repeats levels[${first}]; each level must describe a different quality.`);
-    });
+    distinct(levels);
     request.levels = levels;
   }
   if (input.pass !== undefined) {
     if (!request.levels) throw new Error("pass needs levels: it is the index of the lowest passing level among them.");
-    if (!Number.isInteger(input.pass) || (input.pass as number) < 0 || (input.pass as number) > request.levels.length - 2) {
-      throw new Error(`pass must be a whole number from 0 to ${request.levels.length - 2}: the last level never passes.`);
+    const highest = request.levels.length - 2;
+    if (!Number.isInteger(input.pass) || (input.pass as number) < 0 || (input.pass as number) > highest) {
+      throw new Error(highest === 0 ? "pass must be 0 with two levels: the last level never passes." : `pass must be a whole number from 0 to ${highest}: the last level never passes.`);
     }
     request.pass = input.pass as number;
   }

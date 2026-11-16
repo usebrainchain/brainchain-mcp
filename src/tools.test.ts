@@ -226,6 +226,7 @@ describe("callTool", () => {
       [{ ...task, levels: ["good", "\u200d"] }, "levels[1] is empty."],
       [{ ...task, levels: ["Accurate", " Accurate "] }, "levels[1] repeats levels[0]; each level must describe a different quality."],
       [{ ...task, levels: ["good", "ok", "good"] }, "levels[2] repeats levels[0]; each level must describe a different quality."],
+      [{ ...task, levels: ["Same", "same "] }, "levels[1] repeats levels[0]; each level must describe a different quality."],
       [{ ...task, brief: "漢".repeat(25_000) }, "The task is 75,061 bytes as JSON; the limit is 64,000. Shorten the brief."],
     ] as const) {
       const result = await callTool(desk, POST_TASK_NAME, input);

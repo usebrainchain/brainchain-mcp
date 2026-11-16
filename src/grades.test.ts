@@ -121,7 +121,10 @@ describe("checkGrade", () => {
     expect(() => checkGrade({ ...request, levels: ["only one"] })).toThrow(/2 to 5 quality levels/);
     expect(() => checkGrade({ ...request, levels: ["Good", "Good"] })).toThrow(/repeats/);
     expect(() => checkGrade({ ...request, pass: 0 })).toThrow(/pass needs levels/);
-    expect(() => checkGrade({ ...request, levels: ["A", "B", "C"], pass: 2 })).toThrow(/from 0 to 1/);
+    expect(() => checkGrade({ ...request, levels: ["A", "B", "C"], pass: 2 })).toThrow("pass must be a whole number from 0 to 1: the last level never passes.");
+    expect(() => checkGrade({ ...request, levels: ["A", "B"], pass: 1 })).toThrow(/^pass must be 0 with two levels: the last level never passes\.$/);
+    expect(checkGrade({ ...request, levels: ["A", "B"], pass: 0 }).pass).toBe(0);
+    expect(() => checkGrade({ ...request, levels: ["Same", "same ", "Other"] })).toThrow("levels[1] repeats levels[0]; each level must describe a different quality.");
   });
 });
 
