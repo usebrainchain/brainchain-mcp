@@ -1,6 +1,9 @@
+import { dirname, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
-import { loadSettings } from "../src/config.ts";
+import { loadSettings, type Settings } from "../src/config.ts";
 import { commandWorker } from "../src/worker.ts";
 
 const KEY = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -17,12 +20,19 @@ describe("settings", () => {
         token: "USDC",
         maxUnits: 250_000n,
         dailyUnits: 2_500_000n,
-        dir: "state",
+        dir: fileURLToPath(new URL("../state", import.meta.url)),
         key: `0x${KEY}`,
       },
       worker: "claude -p",
       port: 3000,
     });
+  });
+
+  it("keeps its state next to the example wherever it is started from, unless told otherwise", () => {
+    const { judge } = loadSettings(ENV, false) as Settings;
+    expect(isAbsolute(judge.dir)).toBe(true);
+    expect(judge.dir).toBe(join(dirname(fileURLToPath(import.meta.url)), "..", "state"));
+    expect((loadSettings({ ...ENV, SELLER_STATE_DIR: "/var/seller" }, false) as Settings).judge.dir).toBe("/var/seller");
   });
 
   it("takes a partner, Robinhood Chain and testnet", () => {

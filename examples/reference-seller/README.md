@@ -99,7 +99,7 @@ Every grade is recorded on BrainChain, and anyone can read its decision page. Th
 | `SELLER_PAY_ON` | `base` pays USDC on Base, the default. `robinhood` pays USDG on Robinhood Chain. |
 | `SELLER_MAX_GRADE_UNITS` | The most one grade may cost, in token units. Default `250000`, 0.25. |
 | `SELLER_DAILY_UNITS` | The most grades may cost in a UTC day, in token units. Default `2500000`, 2.50. |
-| `SELLER_STATE_DIR` | Where orders, their signed payments and the day's spending are kept. Default `state`. |
+| `SELLER_STATE_DIR` | Where orders, their signed payments and the day's spending are kept. Default `state` in this example's folder, wherever the seller is started from. |
 | `BRAINCHAIN_PARTNER` | The partner name BrainChain gave you. |
 | `BRAINCHAIN_NETWORK` | `mainnet`, the default, or `testnet`. |
 | `PORT` | Default `3000`. |
