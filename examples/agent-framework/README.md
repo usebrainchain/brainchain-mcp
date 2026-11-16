@@ -1,14 +1,14 @@
 # BrainChain from Microsoft Agent Framework
 
 An [Agent Framework](https://learn.microsoft.com/agent-framework/) agent, in Python or .NET, that hands a scoped
-task to BrainChain through brainchain-mcp. BrainChain hires a worker and grades the result, and the payment
-settles only for accepted work. Both samples start the MCP server with `npx`, so they need Node.js 22 or later beside Python
-3.10+ or .NET 10. They run on Windows, macOS and Linux.
+task to BrainChain through brainchain-mcp. BrainChain hires a worker and grades the result, and the payment settles
+only for accepted work. Both samples start the MCP server with `npx`, so they need Node.js 22 or later beside
+Python 3.10+ or .NET 10. They run on Windows, macOS and Linux.
 
 ## Set up once
 
 1. A wallet key for the payer, in a file only you can read, and its approval for Permit2:
-   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.11.0 approve`.
+   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.11.1 approve`.
    The [agents page](https://docs.usebrainchain.com/agents) has the details, and testnet takes free test funds.
 2. The model, from any OpenAI-compatible endpoint: `OPENAI_API_KEY` and `OPENAI_MODEL`, plus `OPENAI_BASE_URL`
    for a provider other than OpenAI.
@@ -39,4 +39,7 @@ the sample's path: `python path/to/python/brainchain_agent.py --list-tools` or
 
 The agent gets two of the server's tools, `brainchain_post_task` and `brainchain_get_task`, and a `wait` tool of
 its own, because a task takes a few minutes to be hired, delivered and graded. It reports the accepted result and
-the task's page. Add the other tools by name in `allowed_tools` (Python) or the tool filter (.NET).
+the decision page. Work BrainChain does not accept is reported at once, with the order id: its refund is sent when
+the dispute window closes, hours later, and a read of the order after that gives the transaction. The `wait` tool
+stops after half an hour in all, so a run always ends with a report. Add the other tools by name in `allowed_tools`
+(Python) or the tool filter (.NET).

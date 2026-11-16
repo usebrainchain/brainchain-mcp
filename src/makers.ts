@@ -45,7 +45,7 @@ export const MAKERS_TOOL: Tool = {
     "An approval is a transaction in which a wallet gives a contract permission to move its holdings of one token. " +
     "A market maker makes one when it is getting ready to trade a token, which can be before an exchange lists the token: " +
     "Wintermute's trading contract first approved Cash Cat on August 5, 2026, and Robinhood listed that token on August 6, 2026. " +
-    "That makes a first approval worth a closer look, not a prediction: it does not say why the market maker wants the token, and it does not mean an exchange will list it. " +
+    "A first approval is a lead to look into: it does not say why the market maker wants the token, and it does not mean an exchange will list it. " +
     "Pass the token's contract address as `token`; the `contract` of an entry from brainchain_custody_additions works. " +
     "The tool follows one market maker today, Wintermute, and reads that firm's trading contract at 0x51C72848c68a965f66FA7a88855F9f7784502a7F: " +
     "Etherscan tags that address as a market maker and Arkham attributes it to Wintermute. " +

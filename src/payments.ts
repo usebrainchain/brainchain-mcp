@@ -1,9 +1,9 @@
 import type { ClientEvmSigner } from "@x402/evm";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
-import { keccak256, RpcRequestError, toBytes } from "viem";
+import { keccak256, parseAbi, RpcRequestError, toBytes } from "viem";
 
-import { formatUnits, MAX_TIMEOUT_SECONDS, REPOST_AFTER_MINUTES, type Config } from "./config.js";
+import { formatUnits, MAX_TIMEOUT_SECONDS, PRICE, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { createLimits, type Hold, type Limits } from "./limits.js";
 import type { Desk, GradeRequest, TaskRequest } from "./tools.js";
 
@@ -11,6 +11,12 @@ const BUDGET_REASON = "budget";
 const DAILY_REASON = "daily limit";
 /** A result longer than this is cut, with a link to the rest. */
 export const RESULT_LIMIT = 20_000;
+/** The token calls this server makes, for Permit2's allowance on a payment and the registry's on a bond. */
+export const erc20 = parseAbi([
+  "function balanceOf(address owner) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+]);
 
 /** What a refused budget or daily limit tells a person who posts. */
 async function limitReached(config: Config, limits: Limits, which: "budget" | "daily limit"): Promise<string> {
@@ -99,7 +105,12 @@ const RETRY_LATER = new Set([408, 425, 429]);
 
 /** Settles as `work` does, or rejects once `signal` aborts. */
 function until<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
-  return Promise.race([work, new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }))]);
+  const aborted = new Promise<never>((_, reject) => {
+    // A signal that has already aborted fires no event.
+    if (signal.aborted) reject(signal.reason);
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+  return Promise.race([work, aborted]);
 }
 
 /** Retry-After in seconds, from either form the header takes. */
@@ -110,8 +121,33 @@ function retryAfter(response: Response): number | undefined {
   return Number.isFinite(seconds) ? Math.max(1, seconds) : undefined;
 }
 
+/** Far above any reply or result the desk sends, so a body that runs past it comes from something else. */
+export const BODY_LIMIT = 1 << 20;
+
+/** A body as text up to `limit` bytes; one that runs past it is cancelled there and comes back cut. */
+async function capped(response: Response, limit = BODY_LIMIT): Promise<{ text: string; cut: boolean }> {
+  const reader = response.body?.getReader();
+  if (!reader) return { text: "", cut: false };
+  const decoder = new TextDecoder();
+  let text = "";
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return { text: text + decoder.decode(), cut: false };
+    if (size + value.byteLength > limit) {
+      text += decoder.decode(value.subarray(0, limit - size), { stream: true });
+      void reader.cancel().catch(() => undefined);
+      return { text, cut: true };
+    }
+    size += value.byteLength;
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
 async function jsonObject(response: Response): Promise<Record<string, unknown> | undefined> {
-  const value: unknown = await response.json().catch(() => undefined);
+  const value: unknown = await capped(response)
+    .then(({ text, cut }) => (cut ? undefined : JSON.parse(text)))
+    .catch(() => undefined);
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
@@ -149,8 +185,18 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
   }
 
+  /** What the desk asked that this server will not sign, named by the condition that failed. */
+  function refusedTerms(requirements: readonly { payTo: string; maxTimeoutSeconds: number }[]): string {
+    const payee = requirements.some((r) => sameAddress(r.payTo, config.payTo));
+    const brief = requirements.some((r) => r.maxTimeoutSeconds <= MAX_TIMEOUT_SECONDS);
+    const check = "Check BRAINCHAIN_NETWORK and BRAINCHAIN_PAY_ON, or set BRAINCHAIN_PAY_TO for a custom BRAINCHAIN_DESK_URL.";
+    if (!payee && brief) return `it named ${requirements[0]!.payTo} as the payee, and this server pays only ${config.payTo}. ${check}`;
+    if (payee && !brief) return `it asked for an authorization that lasts ${Math.min(...requirements.map((r) => r.maxTimeoutSeconds))} seconds, and this server signs none for longer than ${MAX_TIMEOUT_SECONDS}.`;
+    return `the payee must be ${config.payTo} and the authorization may last at most ${MAX_TIMEOUT_SECONDS} seconds. ${check}`;
+  }
+
   /** Turns an x402 client error, raised before anything was signed, into a step a person or model can act on. */
-  async function explainUnsigned(kind: Kind, error: unknown): Promise<string> {
+  async function explainUnsigned(kind: Kind, error: unknown, refused?: string): Promise<string> {
     const message = firstLine(error);
     if (message.includes(`Payment creation aborted: ${BUDGET_REASON}`)) return await limitReached(config, limits, "budget");
     if (message.includes(`Payment creation aborted: ${DAILY_REASON}`)) return await limitReached(config, limits, "daily limit");
@@ -162,7 +208,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       return `The desk asked for a payment outside this server's limits (${config.token} at ${config.asset}, at most ${formatUnits(config.maxPrice)} per ${kind}). Check BRAINCHAIN_PAY_ON and BRAINCHAIN_PAYMENT_ASSET. Nothing was charged.`;
     }
     if (/filtered out by policies/.test(message)) {
-      return `The desk asked to be paid on terms this server does not accept: the payee must be ${config.payTo} and the authorization may last at most ${MAX_TIMEOUT_SECONDS} seconds. Check BRAINCHAIN_NETWORK and BRAINCHAIN_PAY_ON, or set BRAINCHAIN_PAY_TO for a custom BRAINCHAIN_DESK_URL. Nothing was charged.`;
+      return `The desk asked to be paid on terms this server does not accept: ${refused ?? refusedTerms([])} Nothing was charged.`;
     }
     if (/No network\/scheme registered/.test(message)) {
       return `The desk does not take payment on ${config.chain} (${config.network}). Check BRAINCHAIN_NETWORK and BRAINCHAIN_PAY_ON. Nothing was charged.`;
@@ -180,27 +226,28 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     return `The payment could not be prepared: ${sentence(message.replace(/^Failed to create payment payload: /, ""))} Nothing was charged.`;
   }
 
-  /** Explains a payment the desk refused, from the wallet's balance and Permit2 allowance where possible. */
+  /**
+   * Explains a payment the desk refused, from the wallet's balance and Permit2 allowance where they can be read,
+   * and from the desk's own code where they cannot.
+   */
   async function explainRefusal(kind: Kind, reason: unknown): Promise<string> {
-    const fallback =
-      typeof reason === "string" && reason.trim() ? `The desk refused the payment: ${sentence(reason)} Nothing was charged.` : "The desk refused the payment. Nothing was charged.";
-    if (!options.funds) return fallback;
-    try {
-      // One deadline for both reads, so a slow chain cannot hold the reply.
-      const deadline = AbortSignal.timeout(10_000);
-      const [{ balance, allowance }, quoted] = await until(deadline, Promise.all([options.funds(), quotedPrice(kind, deadline)]));
-      const needed = quoted ?? config.maxPrice;
-      if (balance < needed) {
-        const { address } = account();
-        return `The paying wallet holds ${formatUnits(balance)} ${config.token} on ${config.chain}; a ${kind} costs ${formatUnits(needed)}. Nothing was charged. Send at least ${formatUnits(needed - balance)} ${config.token} to ${address} on ${config.chain}, then ${kind === "task" ? "post again" : "send it again"}.`;
-      }
-      if (config.permit2 && allowance !== undefined && allowance < needed) {
-        return `Permit2 is not yet approved to spend this wallet's ${config.token}. Run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on ${config.chain}. Nothing was charged.`;
-      }
-    } catch {
-      // The chain read failed or ran out of time; the desk's own reason is the best explanation left.
+    const code = typeof reason === "string" ? reason.trim() : "";
+    // One deadline for both reads, so a slow chain cannot hold the reply, and either can fail without the other.
+    const deadline = AbortSignal.timeout(10_000);
+    const [funds, quoted] = await Promise.all([options.funds ? until(deadline, options.funds()).catch(() => undefined) : undefined, quotedPrice(kind, deadline)]);
+    const needed = quoted ?? PRICE[kind];
+    const again = kind === "task" ? "post again" : "send it again";
+    const unapproved = `Permit2 is not yet approved to spend this wallet's ${config.token}. Run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on ${config.chain}. Nothing was charged.`;
+    if (funds && funds.balance < needed) {
+      return `The paying wallet holds ${formatUnits(funds.balance)} ${config.token} on ${config.chain}; a ${kind} costs ${formatUnits(needed)}. Nothing was charged. Send at least ${formatUnits(needed - funds.balance)} ${config.token} to ${account().address} on ${config.chain}, then ${again}.`;
     }
-    return fallback;
+    if (funds && config.permit2 && funds.allowance !== undefined && funds.allowance < needed) return unapproved;
+    // The wallet's own figures win over the desk's code; without them the code says which it was.
+    if (!funds && /insufficient_(balance|funds)$/.test(code)) {
+      return `The paying wallet holds less than the ${formatUnits(needed)} ${config.token} a ${kind} costs on ${config.chain}. Nothing was charged. Send ${config.token} to ${account().address} on ${config.chain}, then ${again}.`;
+    }
+    if (!funds && config.permit2 && /allowance/.test(code)) return unapproved;
+    return code ? `The desk refused the payment: ${sentence(code)} Nothing was charged.` : "The desk refused the payment. Nothing was charged.";
   }
 
   function possiblyCharged(kind: Kind, receipt: Record<string, unknown>, cause: string): Record<string, unknown> {
@@ -274,9 +321,12 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const url = kind === "task" ? endpoint : gradesEndpoint;
     let signed: { payload: unknown } | undefined;
     let hold: Hold | undefined;
+    let refused: string | undefined;
     const unreserve = async () => {
-      if (hold) await limits.give(hold);
+      const given = hold;
       hold = undefined;
+      // An amount that cannot be given back stays counted, the safe direction, and must not hide why the payment stopped.
+      if (given) await limits.give(given).catch(() => undefined);
     };
     const price = () => `${formatUnits(hold?.amount ?? 0n)} ${config.token}`;
     const receipt = (id: string) => {
@@ -288,14 +338,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       schemes: [{ network: config.network, client: new ExactEvmScheme(account()) }],
       spendControls: { allowedAssets: [{ network: config.network, asset: config.asset, maxAmountPerPayment: config.maxPrice.toString() }] },
       policies: [
-        (_version, requirements) =>
-          requirements.filter(
-            (r) =>
-              r.network === config.network &&
-              sameAddress(r.asset, config.asset) &&
-              sameAddress(r.payTo, config.payTo) &&
-              r.maxTimeoutSeconds <= MAX_TIMEOUT_SECONDS,
-          ),
+        (_version, requirements) => {
+          const kept = requirements.filter(
+            (r) => r.network === config.network && sameAddress(r.asset, config.asset) && sameAddress(r.payTo, config.payTo) && r.maxTimeoutSeconds <= MAX_TIMEOUT_SECONDS,
+          );
+          if (kept.length === 0) refused = refusedTerms(requirements);
+          return kept;
+        },
       ],
     });
     // A payment is reserved against the budget and the daily limit before it is
@@ -328,13 +377,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
         body: JSON.stringify(body),
       });
     } catch (error) {
-      if (signed) return possiblyCharged(kind, receipt(orderIdOf(signed)), `The desk did not confirm the ${kind === "task" ? "order" : "grade"} (${firstLine(error)}).`);
-      throw new Error(await explainUnsigned(kind, error));
-    } finally {
       clearTimeout(timer);
+      if (signed) return possiblyCharged(kind, receipt(orderIdOf(signed)), `The desk did not confirm the ${kind === "task" ? "order" : "grade"} (${firstLine(error)}).`);
+      throw new Error(await explainUnsigned(kind, error, refused));
     }
-
-    const reply = (await jsonObject(response)) ?? {};
+    // A desk or proxy can send its headers and then stall, so the deadline holds until the body is read.
+    const reply = (await until(deadline.signal, jsonObject(response)).catch(() => undefined)) ?? {};
+    clearTimeout(timer);
     const idOf = (fallback: string) => (kind === "task" ? (typeof reply.order === "string" ? reply.order : fallback) : typeof reply.grade === "string" ? reply.grade : fallback);
     if (response.ok) {
       if (!signed) {
@@ -376,16 +425,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
     const view = await jsonObject(response);
     if (response.status === 404) {
-      if (paid.has(keyed("grade", order))) return { order, error: "This id is a grade, not a task's order.", done: true, next: "Read it with brainchain_get_grade." };
+      if (paid.has(keyed("grade", order))) throw new Error("This id is a grade, not a task's order. Read it with brainchain_get_grade.");
       const at = paid.get(keyed("task", order))?.at;
-      if (at === undefined || Date.now() - at >= REPOST_AFTER_MINUTES * 60_000) {
+      // Only an order this server paid for can be said never to have been charged.
+      if (at === undefined) throw new Error("The desk has no order with this id. Check the id: it must be one that brainchain_post_task returned.");
+      if (Date.now() - at >= REPOST_AFTER_MINUTES * 60_000) {
         await release("task", order);
-        return {
-          order,
-          error: "The desk has no order with this id.",
-          done: true,
-          next: `Check the order id: it must be one that brainchain_post_task returned. If you posted it more than ${REPOST_AFTER_MINUTES} minutes ago, it was never charged.`,
-        };
+        throw new Error(`The desk has no order with this id. This server posted it more than ${REPOST_AFTER_MINUTES} minutes ago, so it was never charged, and the task can be posted again.`);
       }
       return {
         order,
@@ -407,11 +453,11 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       try {
         const text = await fetchImpl(view.result, { signal: AbortSignal.timeout(20_000) });
         if (text.ok) {
-          const full = await text.text();
+          const { text: full, cut } = await capped(text);
           view.resultText =
-            full.length <= RESULT_LIMIT
+            full.length <= RESULT_LIMIT && !cut
               ? full
-              : `${full.slice(0, RESULT_LIMIT)}\n\n[Cut at ${RESULT_LIMIT.toLocaleString("en-US")} of ${full.length.toLocaleString("en-US")} UTF-16 units. The full result is at ${view.result}.]`;
+              : `${full.slice(0, RESULT_LIMIT)}\n\n[Cut at ${RESULT_LIMIT.toLocaleString("en-US")} of ${cut ? "more than " : ""}${full.length.toLocaleString("en-US")} UTF-16 units. The full result is at ${view.result}.]`;
         } else view.resultError = `The result could not be fetched (HTTP ${text.status}); it is at ${view.result}.`;
       } catch (error) {
         view.resultError = `The result could not be fetched (${firstLine(error)}); it is at ${view.result}.`;
@@ -430,9 +476,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
     const view = await jsonObject(response);
     if (response.status === 404) {
-      if (paid.has(keyed("task", id))) return { grade: id, error: "This id is a task's order, not a grade.", done: true, next: "Read it with brainchain_get_task." };
+      if (paid.has(keyed("task", id))) throw new Error("This id is a task's order, not a grade. Read it with brainchain_get_task.");
       const at = paid.get(keyed("grade", id))?.at;
-      if (at !== undefined && Date.now() - at < REPOST_AFTER_MINUTES * 60_000) {
+      if (at === undefined) throw new Error("The desk has no grade with this id. Check the id: it must be one that brainchain_grade returned.");
+      if (Date.now() - at < REPOST_AFTER_MINUTES * 60_000) {
         return {
           grade: id,
           error: "The desk has no grade with this id.",
@@ -442,12 +489,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
         };
       }
       await release("grade", id);
-      return {
-        grade: id,
-        error: "The desk has no grade with this id.",
-        done: true,
-        next: `Check the id: it must be one that brainchain_grade returned. If you sent it more than ${REPOST_AFTER_MINUTES} minutes ago, it was never charged, so you can send it again.`,
-      };
+      throw new Error(`The desk has no grade with this id. This server sent it more than ${REPOST_AFTER_MINUTES} minutes ago, so it was never charged, and it can be sent again.`);
     }
     if (response.status >= 500 || RETRY_LATER.has(response.status)) {
       return { grade: id, error: `The desk answered ${response.status}.`, done: false, next: "The desk is busy or briefly unavailable. Read the grade again after retryAfterSeconds.", retryAfterSeconds: retryAfter(response) ?? 30 };

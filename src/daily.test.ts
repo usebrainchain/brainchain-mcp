@@ -46,6 +46,11 @@ describe("daily ledger", () => {
     }
   });
 
+  it("refuses kernel folders as the state folder without touching them", () => {
+    expect(stateDirProblem("/proc/brainchain")).toMatch(/system folder/);
+    expect(stateDirProblem("/sys")).toMatch(/system folder/);
+  });
+
   it("refuses what would pass the limit and starts again on the next UTC day", async () => {
     const { path, clock, ledger } = await ledgerAt(2n);
     expect(await ledger.reserve(1n)).toEqual({ day: "2026-11-02", amount: 1n });

@@ -26,12 +26,13 @@ export const PREMIUMS_TOOL: Tool = {
   title: "Stock premiums on Robinhood Chain",
   description:
     "What tokenized US stocks cost on Robinhood Chain against their Chainlink price right now: pool price, Chainlink price, " +
-    "the premium in percent and the feed's age, for NVDA, SPY, AAPL, TSLA, GOOGL, META and MSFT. Read from the chain, free, no key " +
-    "and no payment. Over a weekend the feeds stand still and the pools keep trading. " +
+    "the premium in percent and the feed's age, for each stock on BrainChain's list (today NVDA, SPY, AAPL, TSLA, GOOGL, META and MSFT). " +
+    "Read from the chain, free, no key and no payment. Over a weekend the feeds stand still and the pools keep trading. " +
     "usMarketOpen is true during the regular session, 09:30 to 16:00 New York time, Monday to Friday; it does not know exchange holidays or early closes. " +
-    "Prices are in USDG per token with each token's split multiplier applied. Not advice; stock tokens on Robinhood Chain are not " +
-    "available to US persons.",
+    "Prices are in USDG per token with each token's split multiplier applied. A stock that cannot be priced just now is listed under unpriced, with the reason. " +
+    "Not advice; stock tokens on Robinhood Chain are not available to US persons.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  annotations: { readOnlyHint: true, openWorldHint: true },
 };
 
 export interface StockPremium {
@@ -45,17 +46,27 @@ export interface StockPremium {
   feedAgeSeconds: number;
 }
 
+/** A stock on the list that cannot be priced just now, and why. */
+export interface UnpricedStock {
+  symbol?: string;
+  token: Address;
+  pool: Address;
+  reason: string;
+}
+
 export interface PremiumBoard {
   chain: "Robinhood Chain";
   readAt: string;
   usMarketOpen: boolean;
   stocks: StockPremium[];
+  /** Absent when every stock was priced. */
+  unpriced?: UnpricedStock[];
 }
 
 export type ChainReader = Pick<PublicClient, "readContract" | "multicall">;
 
-export function chainReader(rpc = ROBINHOOD_RPC): ChainReader {
-  return createPublicClient({ transport: http(rpc) });
+export function chainReader(): ChainReader {
+  return createPublicClient({ transport: http(ROBINHOOD_RPC) });
 }
 
 /** The regular NYSE session, 09:30 to 16:00 New York time, Monday to Friday; exchange holidays are not known here. */
@@ -93,9 +104,10 @@ export async function stockPremiums(reader: ChainReader, now = new Date()): Prom
     contracts: tokens.map((token) => ({ address: MANDATE, abi: mandateAbi, functionName: "venues" as const, args: [token] })),
   })) as [Address, Address, boolean][];
   const live = tokens.map((token, i) => ({ token, pool: venues[i]![0], feed: venues[i]![1], live: venues[i]![2] })).filter((v) => v.live);
+  // One token, pool or feed that reverts must not take every other stock's row with it.
   const reads = await reader.multicall({
     multicallAddress: MULTICALL3,
-    allowFailure: false,
+    allowFailure: true,
     contracts: live.flatMap((v) => [
       { address: v.token, abi: tokenAbi, functionName: "symbol" as const },
       { address: v.token, abi: tokenAbi, functionName: "uiMultiplier" as const },
@@ -105,24 +117,39 @@ export async function stockPremiums(reader: ChainReader, now = new Date()): Prom
     ]),
   });
   const at = Math.floor(now.getTime() / 1000);
-  const stocks = live.map((v, i) => {
-    const [symbol, multiplier, token0, slot0, round] = reads.slice(i * 5, i * 5 + 5) as [string, bigint, Address, [bigint, ...unknown[]], [bigint, bigint, bigint, bigint, bigint]];
+  const stocks: StockPremium[] = [];
+  const unpriced: UnpricedStock[] = [];
+  live.forEach((v, i) => {
+    const row = reads.slice(i * 5, i * 5 + 5);
+    const [symbol, multiplier, token0, slot0, round] = row.map((read) => read.result) as [string | undefined, bigint, Address, [bigint, ...unknown[]], [bigint, bigint, bigint, bigint, bigint]];
+    const reason = row.some((read) => read.status !== "success")
+      ? "Its token, pool or feed could not be read just now."
+      : slot0[0] === 0n
+        ? "Its pool has no price yet."
+        : round[1] <= 0n
+          ? "Its Chainlink feed reports no price."
+          : undefined;
+    if (reason) {
+      unpriced.push({ ...(symbol === undefined ? {} : { symbol }), token: v.token, pool: v.pool, reason });
+      return;
+    }
     const spot = spotFromSlot0(slot0[0], token0);
     const feed = (round[1] * multiplier) / 10n ** 20n;
-    const bps = feed === 0n ? 0 : Number(((spot - feed) * 1_000_000n) / feed) / 100;
+    // Rounded to whole basis points before the sign is read, so a premium that rounds to nothing never prints as -0.00.
+    const bps = feed === 0n ? 0 : Math.round(Number(((spot - feed) * 1_000_000n) / feed) / 100);
     const updatedAt = Number(round[3]);
-    return {
-      symbol,
+    stocks.push({
+      symbol: symbol!,
       token: v.token,
       pool: v.pool,
       poolPrice: usd(spot),
       chainlinkPrice: usd(feed),
-      premiumPct: `${bps >= 0 ? "+" : ""}${(bps / 100).toFixed(2)}`,
+      premiumPct: `${bps >= 0 ? "+" : "-"}${(Math.abs(bps) / 100).toFixed(2)}`,
       feedUpdatedAt: new Date(updatedAt * 1000).toISOString(),
       feedAgeSeconds: Math.max(0, at - updatedAt),
-    };
+    });
   });
-  return { chain: "Robinhood Chain", readAt: now.toISOString(), usMarketOpen: usMarketOpen(now), stocks };
+  return { chain: "Robinhood Chain", readAt: now.toISOString(), usMarketOpen: usMarketOpen(now), stocks, ...(unpriced.length > 0 ? { unpriced } : {}) };
 }
 
 let reader: ChainReader | undefined;

@@ -10,7 +10,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it, vi } from "vitest";
 
 import { REPOST_AFTER_MINUTES, resolveConfig } from "./config.js";
-import { canonicalStringify, createDesk, guidance, orderIdOf, paidOn } from "./payments.js";
+import { createLimits } from "./limits.js";
+import { BODY_LIMIT, canonicalStringify, createDesk, guidance, orderIdOf, paidOn } from "./payments.js";
 import { callTool, checkBrief, POST_TASK_NAME, type Desk } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
@@ -215,6 +216,19 @@ describe("posting", () => {
     }
   });
 
+  it("answers by its deadline when the desk sends its headers and then stalls the body", async () => {
+    for (const status of [202, 502]) {
+      const { fetchImpl, seen } = fakeDesk(() => new Response(new ReadableStream({ start() {} }), { status }));
+      const d = createDesk({ config, signer, approveCommand: "npx -y brainchain-mcp approve", fetch: fetchImpl, postTimeoutMs: 300 });
+      const started = Date.now();
+      const reply = (await d.post(task)) as { order: string; possiblyCharged?: boolean };
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(reply.order).toBe(orderIdOf(seen[0]!));
+      expect(reply.possiblyCharged).toBe(status === 202 ? undefined : true);
+      expect(d.spent()).toBe(1_000_000n);
+    }
+  });
+
   it("releases the budget when the desk rejects the request", async () => {
     const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "brief must be 1 to 32,000 characters." }), { status: 400 }));
     const d = desk(fetchImpl);
@@ -241,8 +255,59 @@ describe("posting", () => {
       const refuse = (async () => new Response(JSON.stringify({ error }), { status: 400 })) as typeof fetch;
       await expect(desk(refuse).post(task)).rejects.toThrow(said);
     }
-    const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "insufficient_funds" }), { status: 402 }));
-    await expect(desk(fetchImpl).post(task)).rejects.toThrow("The desk refused the payment: insufficient_funds. Nothing was charged.");
+    const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "invalid_exact_evm_nonce_already_used" }), { status: 402 }));
+    await expect(desk(fetchImpl).post(task)).rejects.toThrow("The desk refused the payment: invalid_exact_evm_nonce_already_used. Nothing was charged.");
+  });
+
+  it("explains the desk's balance and allowance codes as the wallet's own figures would when the chain cannot be read", async () => {
+    const short = `The paying wallet holds less than the 1 test USDG a task costs on Robinhood Chain testnet. Nothing was charged. Send test USDG to ${signer.address} on Robinhood Chain testnet, then post again.`;
+    const unapproved = "Permit2 is not yet approved to spend this wallet's test USDG. Run `npx -y brainchain-mcp approve` once with the key this server uses; it needs a little ETH on Robinhood Chain testnet. Nothing was charged.";
+    const down = async () => Promise.reject(new Error("HTTP request failed.\n\nURL: http://127.0.0.1:47011"));
+    for (const [code, said] of [
+      ["permit2_insufficient_balance", short],
+      ["insufficient_funds", short],
+      ["invalid_exact_evm_insufficient_balance", short],
+      ["permit2_allowance_required", unapproved],
+      ["insufficient_allowance", unapproved],
+      ["invalid_exact_evm_payload_signature", "The desk refused the payment: invalid_exact_evm_payload_signature. Nothing was charged."],
+    ]) {
+      const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: code }), { status: 402 }));
+      for (const funds of [down, undefined]) {
+        const d = createDesk({ config, signer, approveCommand: "npx -y brainchain-mcp approve", fetch: fetchImpl, ...(funds ? { funds } : {}) });
+        await expect(d.post(task)).rejects.toThrow(said);
+        expect(d.spent()).toBe(0n);
+      }
+    }
+  });
+
+  it("names a grade's own price when the desk refuses one for the balance and its price cannot be read", async () => {
+    const grade = { brief: "Sort 3, 1 and 2.", result: "1, 2, 3" };
+    // The desk challenges the grade, then refuses the payment and answers nothing to a second look at its price.
+    let asked = 0;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (request.method === "GET") return noOrder();
+      if (request.headers.get("payment-signature")) return new Response(JSON.stringify({ error: "permit2_insufficient_balance" }), { status: 402 });
+      if (asked++ > 0) throw new TypeError("fetch failed");
+      return new Response("{}", { status: 402, headers: { "payment-required": challenge({ amount: "250000" }) } });
+    }) as typeof fetch;
+    const d = createDesk({ config, signer, approveCommand: "unused", fetch: fetchImpl, funds: async () => ({ balance: 100_000n, allowance: 0n }) });
+    await expect(d.grade(grade)).rejects.toThrow(`The paying wallet holds 0.1 test USDG on Robinhood Chain testnet; a grade costs 0.25. Nothing was charged. Send at least 0.15 test USDG to ${signer.address}`);
+  });
+
+  it("keeps the desk's reason when the amount cannot be given back, and leaves it counted", async () => {
+    for (const [status, said] of [
+      [400, "brief refused. Nothing was charged."],
+      [402, "The desk refused the payment: brief refused. Nothing was charged."],
+    ] as const) {
+      const counted = createLimits(config, () => signer);
+      const limits = { ...counted, give: vi.fn(async () => Promise.reject(new Error("EACCES: the daily record cannot be written"))) };
+      const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "brief refused" }), { status }));
+      const d = createDesk({ config, signer, approveCommand: "npx -y brainchain-mcp approve", fetch: fetchImpl, limits });
+      await expect(d.post(task)).rejects.toThrow(said);
+      expect(limits.give).toHaveBeenCalledOnce();
+      expect(d.spent()).toBe(1_000_000n);
+    }
   });
 
   it("refuses a desk that answers without asking for payment", async () => {
@@ -313,11 +378,20 @@ describe("posting", () => {
     expect(seen).toHaveLength(2);
   });
 
-  it("refuses to pay anyone but the desk, or for longer than 600 seconds", async () => {
-    for (const terms of [{ payTo: "0x000000000000000000000000000000000000dEaD" }, { maxTimeoutSeconds: 3_600 }]) {
+  it("refuses to pay anyone but the desk, or for longer than 600 seconds, and names only what failed", async () => {
+    const stranger = "0x000000000000000000000000000000000000dEaD";
+    const check = "Check BRAINCHAIN_NETWORK and BRAINCHAIN_PAY_ON, or set BRAINCHAIN_PAY_TO for a custom BRAINCHAIN_DESK_URL.";
+    for (const [terms, said] of [
+      [{ payTo: stranger }, `The desk asked to be paid on terms this server does not accept: it named ${stranger} as the payee, and this server pays only ${config.payTo}. ${check} Nothing was charged.`],
+      [{ maxTimeoutSeconds: 3_600 }, "The desk asked to be paid on terms this server does not accept: it asked for an authorization that lasts 3600 seconds, and this server signs none for longer than 600. Nothing was charged."],
+      [{ payTo: stranger, maxTimeoutSeconds: 3_600 }, `The desk asked to be paid on terms this server does not accept: the payee must be ${config.payTo} and the authorization may last at most 600 seconds. ${check} Nothing was charged.`],
+    ] as const) {
       const { fetchImpl, seen } = fakeDesk(accepted, terms);
-      await expect(desk(fetchImpl).post(task)).rejects.toThrow(/does not accept/);
+      const d = desk(fetchImpl);
+      const message = await d.post(task).catch((error: Error) => error.message);
+      expect(message).toBe(said);
       expect(seen).toHaveLength(0);
+      expect(d.spent()).toBe(0n);
     }
   });
 
@@ -539,11 +613,10 @@ describe("input checks", () => {
 describe("reading an order", () => {
   it("stops at an order the desk does not know, unless this server paid for it in the last 15 minutes", async () => {
     const order = `0x${"ab".repeat(32)}`;
-    expect(await desk((async () => new Response("{}", { status: 404 })) as typeof fetch).get(order)).toMatchObject({
-      done: true,
-      error: "The desk has no order with this id.",
-      next: expect.stringMatching(/^Check the order id/),
-    });
+    // An id this server never posted is an error, and nothing can be said of what it was charged.
+    await expect(desk((async () => new Response("{}", { status: 404 })) as typeof fetch).get(order)).rejects.toThrow(
+      /^The desk has no order with this id\. Check the id: it must be one that brainchain_post_task returned\.$/,
+    );
 
     // The paid request drops, so the desk may not have recorded the order yet.
     let paid = "";
@@ -564,7 +637,7 @@ describe("reading an order", () => {
 
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + REPOST_AFTER_MINUTES * 60_000);
     try {
-      expect(await d.get(paid)).toMatchObject({ done: true, error: "The desk has no order with this id." });
+      await expect(d.get(paid)).rejects.toThrow("The desk has no order with this id. This server posted it more than 15 minutes ago, so it was never charged, and the task can be posted again.");
     } finally {
       vi.restoreAllMocks();
     }
@@ -607,6 +680,32 @@ describe("reading an order", () => {
     expect(view.resultText.startsWith("y".repeat(20_000))).toBe(true);
     expect(view.resultText).not.toContain("y".repeat(20_001));
     expect(view.resultText).toContain(`Cut at 20,000 of 25,000 UTF-16 units. The full result is at ${result}.`);
+  });
+
+  it("stops reading a result or a reply at the byte cap", async () => {
+    const result = `${config.desk}/records/0x${"1".repeat(64)}.txt`;
+    let pulled = 0;
+    const endless = () =>
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled += 1 << 16;
+          controller.enqueue(new TextEncoder().encode("y".repeat(1 << 16)));
+        },
+      });
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      if (String(input) === result) return new Response(endless());
+      return new Response(JSON.stringify({ order: "0x01", state: "posted", task: { status: "graded", accepted: true }, result }));
+    }) as typeof fetch;
+    const view = (await desk(fetchImpl).get(`0x${"a".repeat(64)}`)) as { resultText: string; done: boolean };
+    expect(view.done).toBe(true);
+    expect(view.resultText.startsWith("y".repeat(20_000))).toBe(true);
+    expect(view.resultText).toContain(`Cut at 20,000 of more than ${BODY_LIMIT.toLocaleString("en-US")} UTF-16 units. The full result is at ${result}.`);
+    expect(pulled).toBeLessThanOrEqual(BODY_LIMIT + 3 * (1 << 16));
+
+    pulled = 0;
+    const flood = (async () => new Response(endless(), { status: 200 })) as typeof fetch;
+    expect(await desk(flood).get(`0x${"ab".repeat(32)}`)).toMatchObject({ done: false, retryAfterSeconds: 30, error: "The desk's reply could not be read." });
+    expect(pulled).toBeLessThanOrEqual(BODY_LIMIT + 3 * (1 << 16));
   });
 
   it("keeps the order when the result cannot be fetched", async () => {

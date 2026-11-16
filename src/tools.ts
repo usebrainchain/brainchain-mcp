@@ -11,8 +11,12 @@ import { MIN_BOND, MISSED_TO } from "./shipped.js";
 
 /** What the post tool tells the model about cost and settlement on the configured network. */
 export interface Terms {
-  /** For example "1 USDG" or "at most 2 USDG". */
+  /** For example "1 USDG", or "at most 2 USDG" under a raised BRAINCHAIN_MAX_PRICE_UNITS. */
   cost: string;
+  /** The same for a grade, for example "0.25 USDG". */
+  gradeCost: string;
+  /** Set when BRAINCHAIN_MAX_PRICE_UNITS is under the desk's price: why posts, and grades if their price is above it too, are refused. */
+  refuses?: { task?: string; grade?: string };
   /** Where the payment is taken and refunds land, for example "Robinhood Chain". */
   chain: string;
   /** How long after grading the payment or refund becomes final, for example "about six hours". */
@@ -49,21 +53,28 @@ const BOND_TASK_INPUT: Tool["inputSchema"] = {
 };
 const BOND_STATUS_INPUT: Tool["inputSchema"] = { type: "object", properties: { task: TASK_ID }, required: ["task"], additionalProperties: false };
 
+/** How a tool leads its description while a setting the operator must fix stops it. */
+export const invalidSetting = (problem: string) => `Invalid setting: ${problem} Until the operator fixes it, this tool only returns that error. `;
+
 /**
- * The bond tools, worded for the network and the wallet this server holds. `closed` says, per tool, why it
- * cannot run: reading a bond needs less than placing one, so the two can differ. Without settings to read,
- * the cap is named by its variable.
+ * The bond tools, worded for the network and the wallet this server holds. `closed` says why bonds do not run
+ * on this network, and `invalid`, per tool, the setting that stops it: reading a bond needs less than placing
+ * one, so the two can differ. Without settings to read, the cap is named by its variable.
  */
-export function bondTools(config: Partial<Pick<Config, "maxBond">>, wallet: string | undefined, closed: { bond?: string; status?: string } = {}): [Tool, Tool] {
+export function bondTools(
+  config: Partial<Pick<Config, "maxBond">>,
+  wallet: string | undefined,
+  { closed, invalid = {} }: { closed?: string; invalid?: { bond?: string; status?: string } } = {},
+): [Tool, Tool] {
   const where = wallet ? `this server's wallet ${wallet}` : "this server's wallet";
-  const lead = (why: string | undefined) => (why ? `${why} Until then this tool only returns that error. ` : "");
+  const lead = (problem: string | undefined) => (problem ? invalidSetting(problem) : closed ? `${closed} On this network this tool only returns that error. ` : "");
   const cap = config.maxBond === undefined ? "BRAINCHAIN_MAX_BOND_UNITS" : `${formatUnits(config.maxBond)} USDG`;
   return [
     {
       name: BOND_TASK_NAME,
       title: "Bond a BrainChain task on Shipped",
       description:
-        lead(closed.bond) +
+        lead(invalid.bond) +
         `Lock USDG on Shipped behind a BrainChain task from ${where}, as the worker that will deliver it. Jev must already have hired this wallet for the task. ` +
         `If the task is paid and its Proof is recorded by the bond's deadline, which is set after the task's and comes back in the reply, the bond less Shipped's 1% fee is credited to the wallet on Shipped's registry, where the worker CLI's \`bond claim\` collects it; if not, the bond goes to ${MISSED_TO}. ` +
         `A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires. ` +
@@ -77,7 +88,7 @@ export function bondTools(config: Partial<Pick<Config, "maxBond">>, wallet: stri
       name: BOND_STATUS_NAME,
       title: "Read this wallet's bond on a BrainChain task",
       description:
-        lead(closed.status) +
+        lead(invalid.status) +
         `Where ${where}'s bonds on a task stand: open, marked (the Proof is recorded and the check waits out its hour), ` +
         `lapsed (the bond's deadline passed with its check unmarked, so the bond waits to settle as missed), ` +
         `delivered (the bond less Shipped's 1% fee was credited to the wallet on Shipped's registry; the reply says whether it was collected or what the registry still owes the wallet) ` +
@@ -130,10 +141,10 @@ export function postTaskTool(terms: Terms | string): Tool {
     title: "Post a paid task to BrainChain",
     description:
       typeof terms === "string"
-        ? `Invalid setting: ${terms} Until then this tool only returns that error. ${about}`
-        : (terms.problem ? `Invalid setting: ${terms.problem} Until the operator fixes it, this tool only returns that error. ` : "") +
+        ? `${invalidSetting(terms)}${about}`
+        : (terms.problem ? invalidSetting(terms.problem) : "") +
           about +
-          `Each task costs ${terms.cost}, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. The result is delivered only if Jev accepts the work. If Jev rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. If no model delivers within 24 hours, the full amount is refunded. ` +
+          `Each task costs ${terms.cost}, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. ${terms.refuses?.task ? `${terms.refuses.task} ` : ""}The result is delivered only if Jev accepts the work. If Jev rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. If no model delivers within 24 hours, the full amount is refunded. ` +
           `Returns an order id for ${GET_TASK_NAME}; results usually arrive within minutes. If the reply says possiblyCharged, do not post the task again: read the order with ${GET_TASK_NAME}. ` +
           `While this server keeps running, an identical post within ${REPOST_AFTER_MINUTES} minutes returns the first post's order, marked duplicate, instead of paying again, unless ${GET_TASK_NAME} has read that order's payment as failed.`,
     inputSchema: POST_TASK_INPUT,
@@ -144,7 +155,7 @@ export function postTaskTool(terms: Terms | string): Tool {
 const GRADE_INPUT: Tool["inputSchema"] = {
   type: "object",
   properties: {
-    brief: { type: "string", minLength: 1, maxLength: 32000, description: "What the work had to do, as the worker was told. Jev knows nothing else about the job. Up to 32,000 characters, an emoji counting as two." },
+    brief: { type: "string", minLength: 1, maxLength: 32000, description: `What the work had to do, as the worker was told. Jev knows nothing else about the job. Up to 32,000 UTF-16 units: ${UNITS}.` },
     result: { type: "string", minLength: 1, description: "The delivered work as text, at most 100,000 bytes." },
     title: { type: "string", minLength: 1, maxLength: 120, description: "Optional: one line naming the job." },
     levels: {
@@ -162,7 +173,7 @@ const GRADE_INPUT: Tool["inputSchema"] = {
 };
 
 /** Grading work delivered elsewhere: a market whose poster approves the work can read Jev's verdict first. */
-export function gradeTool(terms: Terms | string, maxPrice: string): Tool {
+export function gradeTool(terms: Terms | string): Tool {
   const about =
     `Have Jev grade work delivered somewhere else, such as a job on another agent market, against the brief it answered. ` +
     `Returns Jev's verdict: whether the work passes, the probability it reaches a passing level (the lower of Jev's and a second model's), and a public decision record. ` +
@@ -173,14 +184,15 @@ export function gradeTool(terms: Terms | string, maxPrice: string): Tool {
     title: "Grade delivered work on BrainChain",
     description:
       typeof terms === "string"
-        ? `Invalid setting: ${terms} Until then this tool only returns that error. ${about}`
-        : (terms.problem ? `Invalid setting: ${terms.problem} Until the operator fixes it, this tool only returns that error. ` : "") +
+        ? `${invalidSetting(terms)}${about}`
+        : (terms.problem ? invalidSetting(terms.problem) : "") +
           about +
-          `Each grade is paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, at most ${maxPrice} under this server's limit, and counts against its budget. ` +
+          `Each grade costs ${terms.gradeCost} whatever the verdict, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, and counts against its budget and daily limit. ` +
+          (terms.refuses?.grade ? `${terms.refuses.grade} ` : "") +
           `Jev usually answers within seconds; if the reply is not done, read it with ${GET_GRADE_NAME}. If the reply says possiblyCharged, do not send it again: read it with ${GET_GRADE_NAME}. ` +
           `While this server keeps running, an identical request within ${REPOST_AFTER_MINUTES} minutes returns the first grade, marked duplicate, instead of paying again.`,
     inputSchema: GRADE_INPUT,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   };
 }
 
@@ -255,6 +267,15 @@ function text(name: string, value: unknown, max = Infinity): string {
   return sent;
 }
 
+/** Levels that differ only in case or spacing describe the same quality. */
+function distinct(levels: string[]): void {
+  const folded = levels.map((level) => level.toLowerCase());
+  folded.forEach((level, i) => {
+    const first = folded.indexOf(level);
+    if (first < i) throw new Error(`levels[${i}] repeats levels[${first}]; each level must describe a different quality.`);
+  });
+}
+
 /** An address as viem writes it. One in capitals and small letters carries a checksum, which catches a mistyped character. */
 function address(name: string, value: unknown): Address {
   const sent = text(name, value);
@@ -287,10 +308,7 @@ export function checkBrief(input: Record<string, unknown>): TaskRequest {
   if (!Array.isArray(levels)) throw new Error(`levels must be an array of strings, not ${typeName(levels)}.`);
   if (levels.length < 2 || levels.length > 3) throw new Error(`levels must list 2 or 3 quality levels, best first; this lists ${levels.length}.`);
   const sent = levels.map((level: unknown, i) => text(`levels[${i}]`, level, 200));
-  sent.forEach((level, i) => {
-    const first = sent.indexOf(level);
-    if (first < i) throw new Error(`levels[${i}] repeats levels[${first}]; each level must describe a different quality.`);
-  });
+  distinct(sent);
   // The desk sets the pass level itself: the lowest level never passes. A copied brief that names the same level is the same brief.
   const passIndex = Math.min(1, sent.length - 2);
   if (input.passIndex !== undefined && input.passIndex !== passIndex) {
@@ -323,16 +341,14 @@ export function checkGrade(input: Record<string, unknown>): GradeRequest {
     if (!Array.isArray(input.levels)) throw new Error(`levels must be an array of strings, not ${typeName(input.levels)}.`);
     if (input.levels.length < 2 || input.levels.length > 5) throw new Error(`levels must list 2 to 5 quality levels, best first; this lists ${input.levels.length}.`);
     const levels = input.levels.map((level: unknown, i) => text(`levels[${i}]`, level, 200));
-    levels.forEach((level, i) => {
-      const first = levels.indexOf(level);
-      if (first < i) throw new Error(`levels[${i}] repeats levels[${first}]; each level must describe a different quality.`);
-    });
+    distinct(levels);
     request.levels = levels;
   }
   if (input.pass !== undefined) {
     if (!request.levels) throw new Error("pass needs levels: it is the index of the lowest passing level among them.");
-    if (!Number.isInteger(input.pass) || (input.pass as number) < 0 || (input.pass as number) > request.levels.length - 2) {
-      throw new Error(`pass must be a whole number from 0 to ${request.levels.length - 2}: the last level never passes.`);
+    const highest = request.levels.length - 2;
+    if (!Number.isInteger(input.pass) || (input.pass as number) < 0 || (input.pass as number) > highest) {
+      throw new Error(highest === 0 ? "pass must be 0 with two levels: the last level never passes." : `pass must be a whole number from 0 to ${highest}: the last level never passes.`);
     }
     request.pass = input.pass as number;
   }

@@ -2,11 +2,12 @@
 import { createRequire } from "node:module";
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createWalletClient, http, maxUint256, type PrivateKeyAccount } from "viem";
+import { createWalletClient, http, maxUint256, type Hex, type PrivateKeyAccount } from "viem";
 
 import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
-import { approvalFailure, approveCommand, chainClients, createServer, erc20, payerAccount, PERMIT2, walletFunds, walletReport } from "./server.js";
+import { erc20 } from "./payments.js";
+import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, pastedKey, payerAccount, PERMIT2, terminalHint, walletExitCode, walletFunds, walletReport } from "./server.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -22,18 +23,20 @@ Usage:
   brainchain-mcp approve [USDG]  Let Permit2 spend the paying wallet's USDG.
                                  Default 100 USDG; pass a number, "max", or 0 to revoke.
                                  Not needed when paying in USDC on Base.
-  brainchain-mcp wallet          Check the key and settings, and print the wallet that pays, what it
-                                 holds and, for USDG, what Permit2 may spend.
+  brainchain-mcp wallet          Check the key and settings, and print the wallet that pays, the limits,
+                                 what it holds and, for USDG, what Permit2 may spend. Exits 0 when the
+                                 wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2
+                                 when its balance could not be read.
 
 Environment:
   BRAINCHAIN_PAYER_KEY        Private key of the paying wallet, 64 hex characters with or without 0x.
-                              Needed to post tasks, to bond and to approve; reading orders works without it.
+                              Needed to post tasks, grade work, bond and approve; reading orders works without it.
   BRAINCHAIN_PAYER_KEY_FILE   A file holding that key instead. Absolute or starting with ~/. On macOS and Linux it must be
                               readable only by your account (chmod 600); Windows is not checked, so keep it in your own user folder.
   BRAINCHAIN_NETWORK          mainnet (default) or testnet.
   BRAINCHAIN_PAY_ON           robinhood (default) pays in USDG on Robinhood Chain;
                               base pays in USDC on Base (Base Sepolia on testnet).
-  BRAINCHAIN_MAX_PRICE_UNITS  Maximum paid per task, in base units (default 1000000 = 1 USDG or USDC).
+  BRAINCHAIN_MAX_PRICE_UNITS  Maximum paid per task or grade, in base units (default 1000000 = 1 USDG or USDC).
   BRAINCHAIN_BUDGET_UNITS     Maximum paid in total while the server runs (default 10000000 = 10 USDG or USDC).
   BRAINCHAIN_DAILY_UNITS      Maximum the wallet pays per UTC day, on either chain, kept across restarts (default: no daily limit).
   BRAINCHAIN_MAX_BOND_UNITS   Maximum locked in one delivery bond on Shipped (default 10000000 = 10 USDG); bonds also draw on
@@ -48,6 +51,8 @@ function fail(message: string): never {
   process.exit(1);
 }
 
+const pasted = pastedKey(process.argv.slice(2));
+if (pasted) fail(pasted);
 const command = process.argv[2];
 const HELP = ["--help", "-h", "help"];
 if ((command !== undefined && HELP.includes(command)) || (["approve", "wallet"].includes(command ?? "") && HELP.includes(process.argv[3] ?? ""))) {
@@ -63,11 +68,14 @@ const extra = process.argv[command === "approve" ? 4 : 3];
 if (command !== undefined && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : "wallet takes none"}.\n\n${USAGE}`);
 
 if (command === undefined) {
+  const hint = terminalHint(process.stdin, version);
+  if (hint) console.error(hint);
   await createServer(process.env, version).connect(new StdioServerTransport());
 } else if (command === "wallet") {
   const { config, account } = settings();
   const funds = await walletFunds(config, account.address).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
   console.log(walletReport(config, account.address, funds, approveCommand(config, version, process.env)));
+  process.exitCode = walletExitCode(config, funds);
 } else {
   await approve(process.argv[3] ?? "100");
 }
@@ -98,18 +106,19 @@ async function approve(arg: string): Promise<void> {
   const amount = max ? maxUint256 : BigInt(whole!) * 10n ** BigInt(DECIMALS) + BigInt(fraction.padEnd(DECIMALS, "0"));
   const { chain, reader } = chainClients(config);
   const wallet = createWalletClient({ account, chain, transport: http(config.rpc, { timeout: 30_000 }) });
+  let hash: Hex;
   try {
-    const hash = await wallet.writeContract({ address: config.asset, abi: erc20, functionName: "approve", args: [PERMIT2, amount] });
-    console.log(`Sent ${hash} on ${config.chain}. Waiting for it to confirm…`);
-    const receipt = await reader.waitForTransactionReceipt({ hash, timeout: 180_000 });
-    if (receipt.status !== "success") fail(`The approval ${hash} reverted on ${config.chain}. Nothing changed; run approve again.`);
-    console.log(
-      amount === 0n
-        ? `Permit2 can no longer spend ${config.token} from ${account.address}. Run approve with an amount to pay for tasks again.`
-        : `Permit2 can now spend ${max ? "any amount of" : formatUnits(amount)} ${config.token} from ${account.address}.`,
-    );
-    process.exit(0);
+    hash = await wallet.writeContract({ address: config.asset, abi: erc20, functionName: "approve", args: [PERMIT2, amount] });
   } catch (error) {
     fail(approvalFailure(account.address, config.chain, error));
   }
+  console.log(`Sent ${hash} on ${config.chain}. Waiting for it to confirm…`);
+  const receipt = await reader.waitForTransactionReceipt({ hash, timeout: 180_000 }).catch((error: unknown) => fail(approvalUnconfirmed(hash, config.chain, error)));
+  if (receipt.status !== "success") fail(`The approval ${hash} reverted on ${config.chain}. Nothing changed; run approve again.`);
+  console.log(
+    amount === 0n
+      ? `Permit2 can no longer spend ${config.token} from ${account.address}. Run approve with an amount to pay for tasks again.`
+      : `Permit2 can now spend ${max ? "any amount of" : formatUnits(amount)} ${config.token} from ${account.address}.`,
+  );
+  process.exit(0);
 }

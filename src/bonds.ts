@@ -14,7 +14,6 @@ import {
   InternalRpcError,
   isAddress,
   keccak256,
-  parseAbi,
   parseEventLogs,
   RpcError,
   RpcRequestError,
@@ -25,14 +24,9 @@ import {
 
 import { formatUnits, type BondsConfig, type Config } from "./config.js";
 import type { Limits, Refusal } from "./limits.js";
-import { brief, firstLine, sentence } from "./payments.js";
-import { BOND_LEAD_SEC, BPS, bondTerms, CHECK_CONFIRM_SEC, CHECK_HOLD_SEC, DeedStatus, FEE_BPS, MIN_BOND, MISSED_TO, shippedAbi, taskBoardAbi, taskOfCheck, TaskStatus, type BondTerms } from "./shipped.js";
+import { brief, erc20, firstLine, sentence } from "./payments.js";
+import { BPS, bondTerms, CHECK_CONFIRM_SEC, CHECK_HOLD_SEC, DeedStatus, FEE_BPS, MIN_BOND, MISSED_TO, proofIndexAbi, shippedAbi, taskBoardAbi, taskOfCheck, TaskStatus, type BondTerms } from "./shipped.js";
 
-const erc20 = parseAbi([
-  "function balanceOf(address owner) view returns (uint256)",
-  "function allowance(address owner, address spender) view returns (uint256)",
-  "function approve(address spender, uint256 amount) returns (bool)",
-]);
 /** Gas the transactions take, measured on a fork of Robinhood Chain, with room. */
 const GAS = { approve: 60_000n, create: 1_100_000n };
 const DEED_BATCH = 200;
@@ -179,7 +173,7 @@ export function createBondChain(bonds: BondsConfig, account: PrivateKeyAccount, 
       return { deed: created.args.deedId, tx: hash };
     },
     bondsOn: (task) => read(bonds.chain, deedsOn(task)),
-    proofOf: (task, board = bonds.brainchain.board) => read(bonds.chain, client.readContract({ address: bonds.proofIndex!, abi: parseAbi(["function proofOf(address board, uint256 taskId) view returns (uint256)"]), functionName: "proofOf", args: [board, task] })),
+    proofOf: (task, board = bonds.brainchain.board) => read(bonds.chain, client.readContract({ address: bonds.proofIndex!, abi: proofIndexAbi, functionName: "proofOf", args: [board, task] })),
     owed: () => read(bonds.chain, client.readContract({ ...registry, functionName: "owed", args: [account.address, bonds.usdg] })),
     async payerOf(task) {
       let response: Response;
@@ -225,9 +219,9 @@ export function bondsClosed(config: Config): string | undefined {
   return undefined;
 }
 
-/** Shipped's own number and page for a deed; absent for a test bond or when the API cannot be reached. */
 export const SHIPPED_API = "https://api.shipped.bond";
 
+/** Shipped's own number and page for a deed; absent for a test bond or when the API cannot be reached. */
 export async function deedPage(deed: bigint, fetchImpl: typeof fetch = fetch): Promise<{ number: string; url: string } | undefined> {
   try {
     const response = await fetchImpl(`${SHIPPED_API}/v1/deeds/${deed}`, { signal: AbortSignal.timeout(5_000) });
@@ -287,13 +281,12 @@ export function createBonds(options: BondsOptions): Bonds {
     const t = await c.task(task);
     if (!t) throw new Error(`There is no task ${task} on BrainChain. Nothing was bonded.`);
     if (t.poster.toLowerCase() === c.account.toLowerCase()) throw new Error(`Task ${task} was posted by this wallet. A bond guarantees delivery to someone else; it earns no standing on a task the same wallet posted. Nothing was bonded.`);
-    const hiredHere = t.status === TaskStatus.Hired && t.model.toLowerCase().endsWith(c.account.slice(2).toLowerCase());
+    const hiredHere = t.status >= TaskStatus.Hired && t.model.toLowerCase().endsWith(c.account.slice(2).toLowerCase());
     if (!hiredHere) throw new Error(`Task ${task} is not hired to this wallet. Bond a task after Jev hires it for the task. Nothing was bonded.`);
+    if (t.status !== TaskStatus.Hired) throw new Error(`Task ${task} has moved past the stage where a bond can be placed: a bond goes on while the task is hired to this wallet, before the work is delivered. Nothing was bonded.`);
     const now = await c.now();
     if (t.deadline <= now) throw new Error(`Task ${task}'s deadline, ${iso(t.deadline)}, has passed. Nothing was bonded.`);
     if (amount < t.bounty) throw new Error(`The bond must be at least the task's bounty, ${formatUnits(t.bounty)} USDG; ${formatUnits(amount)} USDG is under it. Nothing was bonded.`);
-    if (amount < MIN_BOND) throw new Error(`The bond must be at least ${formatUnits(MIN_BOND)} USDG: under that, Shipped's fee and the gas take too much of it. Nothing was bonded.`);
-    if (amount > config.maxBond) throw new Error(`This server bonds at most ${formatUnits(config.maxBond)} USDG on one task. Raise BRAINCHAIN_MAX_BOND_UNITS and restart the server to allow more. Nothing was bonded.`);
     // Task ids restart with each board, so a bond on a retired board's task of this number is another task's.
     const existing = (await c.bondsOn(task)).find((b) => b.status !== DeedStatus.Settled && b.board.toLowerCase() === config.bonds!.brainchain.board.toLowerCase());
     if (existing) {
@@ -340,21 +333,32 @@ export function createBonds(options: BondsOptions): Bonds {
         next: "Follow it with brainchain_bond_status. A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires.",
       };
     } catch (error) {
-      await limits.give(hold);
+      // An amount that cannot be given back stays counted, the safe direction, and must not hide why the bond failed.
+      await limits.give(hold).catch(() => undefined);
       throw error;
     }
   }
 
-  /** One call at a time per task: two would both pass the open-bond check before either bond exists. */
+  /** A second call on a task is refused rather than queued: both would pass the open-bond check before either bond exists. */
   const placing = new Set<bigint>();
+  /**
+   * Bonds are placed one at a time. Each transaction takes its nonce from the node, so two sent together
+   * collide, and an approval sized to one bond would be overwritten by the next before it is spent.
+   */
+  let queue: Promise<unknown> = Promise.resolve();
 
   return {
     async bond(task, amount) {
       const c = connected();
+      // Checked before anything is read, so a wrong amount is named as such whatever the task.
+      if (amount < MIN_BOND) throw new Error(`The bond must be at least ${formatUnits(MIN_BOND)} USDG: under that, Shipped's fee and the gas take too much of it. Nothing was bonded.`);
+      if (amount > config.maxBond) throw new Error(`This server bonds at most ${formatUnits(config.maxBond)} USDG on one task. Raise BRAINCHAIN_MAX_BOND_UNITS and restart the server to allow more. Nothing was bonded.`);
       if (placing.has(task)) throw new Error(`This server is already placing a bond on task ${task}. Wait for that call's reply; this call bonded nothing.`);
       placing.add(task);
+      const turn = queue.then(() => place(c, task, amount));
+      queue = turn.catch(() => undefined);
       try {
-        return await place(c, task, amount);
+        return await turn;
       } catch (error) {
         // A bond that may have been sent answers instead of throwing, so whatever is thrown bonded nothing.
         const said = sentence(firstLine(error));
@@ -366,7 +370,14 @@ export function createBonds(options: BondsOptions): Bonds {
     async status(task) {
       const c = connected();
       const bonds = await c.bondsOn(task);
-      if (bonds.length === 0) return { task: task.toString(), wallet: c.account, bonds: [] };
+      if (bonds.length === 0) {
+        return {
+          task: task.toString(),
+          wallet: c.account,
+          bonds: [],
+          next: `This wallet has no bond on task ${task}. Check the task id; a bond is placed with brainchain_bond_task while BrainChain has the task hired to this wallet.`,
+        };
+      }
       const delivered = bonds.some((b) => b.status === DeedStatus.Settled && b.remainderBps === Number(BPS));
       // Only a bond still waiting for its Proof is worded by where the task stands.
       const [now, indexed, tasks, owed, pages] = await Promise.all([
@@ -388,5 +399,3 @@ export function createBonds(options: BondsOptions): Bonds {
     },
   };
 }
-
-export { BOND_LEAD_SEC };

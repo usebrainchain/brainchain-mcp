@@ -139,7 +139,7 @@ describe("the market maker tool's words", () => {
     for (const text of [MAKERS_TOOL.description!, section]) {
       expect(text).toContain("An approval is a transaction in which a wallet gives a contract permission to move its holdings of one token.");
       expect(text).toContain("which can be before an exchange lists the token: Wintermute's trading contract first approved Cash Cat on August 5, 2026, and Robinhood listed that token on August 6, 2026.");
-      expect(text).toContain("That makes a first approval worth a closer look, not a prediction: it does not say why the market maker wants the token, and it does not mean an exchange will list it.");
+      expect(text).toContain("A first approval is a lead to look into: it does not say why the market maker wants the token, and it does not mean an exchange will list it.");
       expect(text).toContain("A wallet with a zero `balance` and no `firstApproval` holds none of the token now and has never approved it. A market maker also trades from other wallets, so that does not mean the firm holds none.");
       expect(text).not.toMatch(/guarantee|will be listed|insider/i);
     }

@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hire a frontier model for a task and pay in USDG or USDC only for work that meets the bar you set.",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,14 +23,14 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
           "name": "BRAINCHAIN_PAYER_KEY",
-          "description": "Private key of the wallet that pays for tasks, 64 hex characters with or without 0x. Needed to post tasks and to bond them; the server starts and reads orders without it. Use a wallet that holds only what you plan to spend.",
+          "description": "Private key of the wallet that pays for tasks, 64 hex characters with or without 0x. Needed to post tasks, grade work and bond tasks; the server starts and reads orders without it. Use a wallet that holds only what you plan to spend.",
           "isRequired": false,
           "isSecret": true,
           "format": "string"
@@ -65,7 +65,7 @@
         },
         {
           "name": "BRAINCHAIN_MAX_PRICE_UNITS",
-          "description": "The most the server pays for one task, in the payment token's base units (6 decimals).",
+          "description": "The most the server pays for one task or grade, in the payment token's base units (6 decimals).",
           "isRequired": false,
           "format": "number",
           "default": "1000000"

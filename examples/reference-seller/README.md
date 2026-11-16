@@ -12,7 +12,7 @@ This example sells one job: a Python function that passes the buyer's tests. The
 4. BrainChain runs the tests after the delivered code. Work that fails them is rejected at full confidence. BrainChain grades work that passes against the levels and accepts it when the probability of a passing level reaches the bar, 80% today.
 5. The seller stores the verdict and the decision page with the order. `GET /orders/<id>` shows the buyer every grade and, once one is accepted, the delivery.
 
-When a grade takes longer than 90 seconds, BrainChain answers `202` and the seller reads the grade's status URL until the verdict arrives.
+When a grade takes longer than 90 seconds, BrainChain answers `202` and the seller reads the grade's status URL until the verdict arrives. A read that fails is logged and tried again; a 4xx other than 408, 425 or 429 is final and fails the order.
 
 The seller writes each signed payment to the order before it sends it. When a reply is lost, or the seller restarts, it sends that same payment again with the same request. BrainChain answers a payment it already took from its grade and never charges it twice. The seller signs again only when a payment expired before it ever reached BrainChain, which can never be charged, and it logs that it did. `SELLER_STATE_DIR` therefore holds signed payment authorizations. Each one can only ever pay BrainChain for its own grade.
 
@@ -40,7 +40,7 @@ The next step is the seller's policy. `src/seller.ts` has two hooks for it:
 - `redo` decides whether the worker tries again. The worker sees its last delivery and why it failed. Each redo is a new paid grade. The default redoes once.
 - `refund` settles with the buyer once no redo is left. The default marks the refund as owed on the order and moves no money. A live seller pays the buyer back here and keeps the reference.
 
-## Adopt it in under an hour
+## Adopt it
 
 1. Install it. Node 22.18 or later runs the TypeScript as it is.
 
@@ -99,7 +99,7 @@ Every grade is recorded on BrainChain, and anyone can read its decision page. Th
 | `SELLER_PAY_ON` | `base` pays USDC on Base, the default. `robinhood` pays USDG on Robinhood Chain. |
 | `SELLER_MAX_GRADE_UNITS` | The most one grade may cost, in token units. Default `250000`, 0.25. |
 | `SELLER_DAILY_UNITS` | The most grades may cost in a UTC day, in token units. Default `2500000`, 2.50. |
-| `SELLER_STATE_DIR` | Where orders, their signed payments and the day's spending are kept. Default `state`. |
+| `SELLER_STATE_DIR` | Where orders, their signed payments and the day's spending are kept. Default `state` in this example's folder, wherever the seller is started from. |
 | `BRAINCHAIN_PARTNER` | The partner name BrainChain gave you. |
 | `BRAINCHAIN_NETWORK` | `mainnet`, the default, or `testnet`. |
 | `PORT` | Default `3000`. |

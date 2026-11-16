@@ -5,8 +5,9 @@ import { describe, expect, it } from "vitest";
 import { formatUnits, resolveConfig } from "./config.js";
 import { CustodyError } from "./custody.js";
 import { MakerError, type MakerBoard } from "./makers.js";
-import type { Bonds } from "./bonds.js";
-import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
+import { bondsClosed, type Bonds } from "./bonds.js";
+import { PREMIUMS_TOOL } from "./premiums.js";
+import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_GRADE_TOOL, GET_TASK_NAME, GET_TASK_TOOL, gradeTool, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
 
 const desk: Desk = {
   post: async (task) => ({ order: "0x01", task }),
@@ -62,18 +63,29 @@ describe("bond tools", () => {
     expect(bond.description).not.toContain("Until then");
     expect(status.name).toBe(BOND_STATUS_NAME);
     expect(status.description).toMatch(/^Where this server's wallet 0xabc's bonds on a task stand: /);
-    const [closed, closedStatus] = bondTools({ maxBond: 10_000_000n }, undefined, { bond: "Delivery bonds are not open yet.", status: "Delivery bonds are not open yet." });
-    expect(closed.description!.startsWith("Delivery bonds are not open yet. Until then this tool only returns that error. ")).toBe(true);
+    const [closed, closedStatus] = bondTools({ maxBond: 10_000_000n }, undefined, { closed: "Delivery bonds are not open yet." });
+    expect(closed.description!.startsWith("Delivery bonds are not open yet. On this network this tool only returns that error. ")).toBe(true);
     expect(closed.description).toContain("from this server's wallet, as the worker");
-    expect(closedStatus.description).toMatch(/^Delivery bonds are not open yet\. Until then this tool only returns that error\. Where this server's wallet's bonds/);
+    expect(closedStatus.description).toMatch(/^Delivery bonds are not open yet\. On this network this tool only returns that error\. Where this server's wallet's bonds/);
+  });
+
+  it("says on testnet that bonds run on mainnet, with no condition left hanging", () => {
+    const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
+    for (const tool of bondTools(testnet, "0xabc", { closed: bondsClosed(testnet) })) {
+      expect(tool.description).toMatch(/^Delivery bonds run on Robinhood Chain against Shipped's registry, which BrainChain testnet has no counterpart of\. They are open with BRAINCHAIN_NETWORK=mainnet\. On this network this tool only returns that error\. /);
+      expect(tool.description).not.toContain("Until then");
+    }
   });
 
   it("leads each tool only with what stops that tool, and names the cap by its variable when no setting could be read", () => {
     // A state folder that cannot be used stops a bond from being placed, not from being read.
-    const [bond, status] = bondTools({ maxBond: 10_000_000n }, "0xabc", { bond: "Invalid setting: BRAINCHAIN_STATE_DIR is unusable." });
-    expect(bond.description).toMatch(/^Invalid setting: BRAINCHAIN_STATE_DIR is unusable\. Until then this tool only returns that error\. Lock USDG/);
+    const [bond, status] = bondTools({ maxBond: 10_000_000n }, "0xabc", { invalid: { bond: "BRAINCHAIN_STATE_DIR is unusable." } });
+    expect(bond.description).toMatch(/^Invalid setting: BRAINCHAIN_STATE_DIR is unusable\. Until the operator fixes it, this tool only returns that error\. Lock USDG/);
     expect(status.description).toMatch(/^Where this server's wallet 0xabc's bonds on a task stand: /);
-    const [unread] = bondTools({}, undefined, { bond: "Invalid setting: BRAINCHAIN_NETWORK must be mainnet or testnet." });
+    // A setting to fix comes before a closed network, since fixing it is what the operator can do now.
+    const [both] = bondTools({ maxBond: 10_000_000n }, "0xabc", { closed: "Delivery bonds are not open yet.", invalid: { bond: "BRAINCHAIN_STATE_DIR is unusable." } });
+    expect(both.description).toMatch(/^Invalid setting: BRAINCHAIN_STATE_DIR is unusable\. Until the operator fixes it/);
+    const [unread] = bondTools({}, undefined, { invalid: { bond: "BRAINCHAIN_NETWORK must be mainnet or testnet." } });
     expect(unread.description).toContain("at least the task's bounty and 2 USDG, at most BRAINCHAIN_MAX_BOND_UNITS per task");
     expect(unread.description).not.toContain("0 USDG");
   });
@@ -227,6 +239,7 @@ describe("callTool", () => {
       [{ ...task, levels: ["good", "\u200d"] }, "levels[1] is empty."],
       [{ ...task, levels: ["Accurate", " Accurate "] }, "levels[1] repeats levels[0]; each level must describe a different quality."],
       [{ ...task, levels: ["good", "ok", "good"] }, "levels[2] repeats levels[0]; each level must describe a different quality."],
+      [{ ...task, levels: ["Same", "same "] }, "levels[1] repeats levels[0]; each level must describe a different quality."],
       [{ ...task, brief: "漢".repeat(25_000) }, "The task is 75,061 bytes as JSON; the limit is 64,000. Shorten the brief."],
     ] as const) {
       const result = await callTool(desk, POST_TASK_NAME, input);
@@ -320,8 +333,42 @@ describe("post tool and config", () => {
     expect(postTaskTool(config.terms).description).toContain("1 test USDG");
   });
 
+  it("names the desk's prices, and says posts and grades are refused under a lower price limit", () => {
+    const tools = (env: Record<string, string>) => {
+      const { terms } = resolveConfig(env);
+      return [postTaskTool(terms).description!, gradeTool(terms).description!];
+    };
+    const [post, grade] = tools({});
+    expect(post).toContain("Each task costs 1 USDG, paid from this server's wallet on Robinhood Chain. The result");
+    expect(grade).toContain("Each grade costs 0.25 USDG whatever the verdict, paid from this server's wallet on Robinhood Chain, and counts against its budget and daily limit.");
+    for (const text of [post, grade]) expect(text).not.toContain("refused");
+
+    const [cheapPost, cheapGrade] = tools({ BRAINCHAIN_MAX_PRICE_UNITS: "500000" });
+    expect(cheapPost).toContain(
+      "Each task costs 1 USDG, paid from this server's wallet on Robinhood Chain. This server pays at most 0.5 USDG at a time (BRAINCHAIN_MAX_PRICE_UNITS), under that price, so posts are refused and nothing is charged until the operator raises it.",
+    );
+    expect(cheapPost).not.toContain("at most 0.5 USDG, paid");
+    expect(cheapGrade).toContain("Each grade costs 0.25 USDG whatever the verdict");
+    expect(cheapGrade).not.toContain("refused");
+
+    const [, cheaperGrade] = tools({ BRAINCHAIN_MAX_PRICE_UNITS: "100000", BRAINCHAIN_PAY_ON: "base" });
+    expect(cheaperGrade).toContain("Each grade costs 0.25 USDC whatever the verdict, paid from this server's wallet on Base, and counts against its budget and daily limit. This server pays at most 0.1 USDC at a time (BRAINCHAIN_MAX_PRICE_UNITS), under that price, so grades are refused");
+
+    // Under a raised ceiling the desk may have raised its prices too, so both are named up to the ceiling.
+    const [raisedPost, raisedGrade] = tools({ BRAINCHAIN_MAX_PRICE_UNITS: "2500000" });
+    expect(raisedPost).toContain("Each task costs at most 2.5 USDG");
+    expect(raisedGrade).toContain("Each grade costs at most 2.5 USDG");
+  });
+
+  it("marks every tool that spends as destructive and every free read as read-only", () => {
+    const { terms } = resolveConfig({});
+    const [bond, status] = bondTools({ maxBond: 10_000_000n }, "0xabc");
+    for (const tool of [postTaskTool(terms), gradeTool(terms), bond]) expect(tool.annotations).toEqual({ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
+    for (const tool of [GET_TASK_TOOL, GET_GRADE_TOOL, PREMIUMS_TOOL, status]) expect(tool.annotations).toEqual({ readOnlyHint: true, openWorldHint: true });
+  });
+
   it("lets single overrides win over the preset", () => {
-    const config = resolveConfig({ BRAINCHAIN_DESK_URL: "http://localhost:10000/", BRAINCHAIN_MAX_PRICE_UNITS: "2500000" });
+    const config = resolveConfig({ BRAINCHAIN_DESK_URL: "http://localhost:10000/", BRAINCHAIN_PAY_TO: "0x000000000000000000000000000000000000dEaD", BRAINCHAIN_MAX_PRICE_UNITS: "2500000" });
     expect(config.desk).toBe("http://localhost:10000");
     expect(config.terms.cost).toBe("at most 2.5 USDG");
   });

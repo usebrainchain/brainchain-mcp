@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
+import { MIN_BOND } from "./shipped.js";
 import type { Terms } from "./tools.js";
 
 const MAINNET_DESK = { desk: "https://brain.usebrainchain.com", payTo: "0x97D558417c3D61f1074422AD843e1Db1E565b952", finalAfter: "about six hours" } as const;
@@ -60,8 +61,7 @@ export interface BondsConfig {
   usdg: `0x${string}`;
   rpc: string;
   chain: string;
-  /** BrainChain itself, where the task is read. */
-  /** `retired` boards took bonds that can still be open, and task ids restart with each board. */
+  /** BrainChain itself, where the task is read. `retired` boards took bonds that can still be open, and task ids restart with each board. */
   brainchain: { rpc: string; chainId: number; board: `0x${string}`; retired?: `0x${string}`[] };
 }
 
@@ -88,8 +88,8 @@ export const MAX_TIMEOUT_SECONDS = 600;
  * recorded any order it charged.
  */
 export const REPOST_AFTER_MINUTES = 15;
-/** The desk's price for a task. A higher BRAINCHAIN_MAX_PRICE_UNITS is a ceiling, not what a task costs. */
-export const DEFAULT_MAX_PRICE = 1_000_000n;
+/** What the desk asks for a task and for a grade. A higher BRAINCHAIN_MAX_PRICE_UNITS is a ceiling, not what either costs. */
+export const PRICE = { task: 1_000_000n, grade: 250_000n } as const;
 const DEFAULT_BUDGET = 10_000_000n;
 const DEFAULT_MAX_BOND = 10_000_000n;
 
@@ -108,7 +108,7 @@ export interface Config {
   rpc: string;
   chain: string;
   token: string;
-  /** The most this server pays for one task, in the asset's smallest unit. */
+  /** The most this server pays for one task or grade, in the asset's smallest unit. */
   maxPrice: bigint;
   /** The most this server process pays in total, in the asset's smallest unit. */
   budget: bigint;
@@ -178,7 +178,22 @@ function envDesk(env: Record<string, string | undefined>, fallback: string): str
   return desk;
 }
 
-export function resolveConfig(env: Record<string, string | undefined>): Config {
+/** Settings only a payment reads: one the server cannot use stops the tools that pay, and the rest go on without it. */
+export const PAYMENT_SETTINGS = [
+  "BRAINCHAIN_MAX_PRICE_UNITS",
+  "BRAINCHAIN_BUDGET_UNITS",
+  "BRAINCHAIN_DAILY_UNITS",
+  "BRAINCHAIN_MAX_BOND_UNITS",
+  "BRAINCHAIN_STATE_DIR",
+  "BRAINCHAIN_PAY_TO",
+  "BRAINCHAIN_PAYMENT_NETWORK",
+  "BRAINCHAIN_PAYMENT_ASSET",
+  "BRAINCHAIN_PAYMENT_RPC",
+];
+
+/** With `payments: false` the PAYMENT_SETTINGS are left at the preset, for a server that only reads until they are fixed. */
+export function resolveConfig(given: Record<string, string | undefined>, { payments = true } = {}): Config {
+  const env = payments ? given : Object.fromEntries(Object.entries(given).filter(([name]) => !PAYMENT_SETTINGS.includes(name)));
   const name = (envString(env, "BRAINCHAIN_NETWORK") ?? "mainnet").toLowerCase();
   if (name !== "mainnet" && name !== "testnet") throw new Error("BRAINCHAIN_NETWORK must be mainnet or testnet.");
   const payOn = (envString(env, "BRAINCHAIN_PAY_ON") ?? "robinhood").toLowerCase();
@@ -188,19 +203,34 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
   const network = envString(env, "BRAINCHAIN_PAYMENT_NETWORK") ?? preset.network;
   const match = /^eip155:(\d+)$/.exec(network);
   if (!match) throw new Error("BRAINCHAIN_PAYMENT_NETWORK must look like eip155:<chain id>.");
-  const maxPrice = envUnits(env, "BRAINCHAIN_MAX_PRICE_UNITS", DEFAULT_MAX_PRICE);
+  const maxPrice = envUnits(env, "BRAINCHAIN_MAX_PRICE_UNITS", PRICE.task);
   const budget = envUnits(env, "BRAINCHAIN_BUDGET_UNITS", DEFAULT_BUDGET);
-  if (budget < maxPrice) throw new Error("BRAINCHAIN_BUDGET_UNITS must be at least BRAINCHAIN_MAX_PRICE_UNITS.");
+  const both = (name: string, units: bigint) =>
+    `${name} must be at least BRAINCHAIN_MAX_PRICE_UNITS: it is ${units} (${formatUnits(units)} ${preset.token}), and BRAINCHAIN_MAX_PRICE_UNITS is ${maxPrice} (${formatUnits(maxPrice)} ${preset.token}).`;
+  if (budget < maxPrice) throw new Error(both("BRAINCHAIN_BUDGET_UNITS", budget));
   const daily = envString(env, "BRAINCHAIN_DAILY_UNITS") === undefined ? undefined : envUnits(env, "BRAINCHAIN_DAILY_UNITS", 0n);
-  if (daily !== undefined && daily < maxPrice) throw new Error("BRAINCHAIN_DAILY_UNITS must be at least BRAINCHAIN_MAX_PRICE_UNITS.");
+  if (daily !== undefined && daily < maxPrice) throw new Error(both("BRAINCHAIN_DAILY_UNITS", daily));
   const maxBond = envUnits(env, "BRAINCHAIN_MAX_BOND_UNITS", DEFAULT_MAX_BOND);
+  if (maxBond < MIN_BOND) throw new Error(`BRAINCHAIN_MAX_BOND_UNITS must be at least ${MIN_BOND} (${formatUnits(MIN_BOND)} USDG), the smallest bond this server places.`);
   const bonds = BONDS[name];
+  const desk = envDesk(env, preset.desk);
+  // The preset's payee belongs to the preset's desk, so a desk of one's own must say where it is paid.
+  if (payments && new URL(desk).href !== new URL(preset.desk).href && envString(env, "BRAINCHAIN_PAY_TO") === undefined) {
+    throw new Error("BRAINCHAIN_DESK_URL names a desk other than the network's own, so set BRAINCHAIN_PAY_TO to the address that desk takes payment at: this server pays no other address.");
+  }
+  // Under a raised ceiling the desk may have raised its prices too, so a cost is named only up to the ceiling.
+  const cost = (price: bigint) => (maxPrice > PRICE.task ? `at most ${formatUnits(maxPrice)} ${preset.token}` : `${formatUnits(price)} ${preset.token}`);
+  const refused = (price: bigint, what: string) =>
+    maxPrice < price
+      ? `This server pays at most ${formatUnits(maxPrice)} ${preset.token} at a time (BRAINCHAIN_MAX_PRICE_UNITS), under that price, so ${what} are refused and nothing is charged until the operator raises it.`
+      : undefined;
+  const refuses = { task: refused(PRICE.task, "posts"), grade: refused(PRICE.grade, "grades") };
 
   return {
     name,
     payOn,
     permit2: preset.permit2,
-    desk: envDesk(env, preset.desk),
+    desk,
     network: network as `eip155:${number}`,
     chainId: Number(match[1]),
     asset: envAddress(env, "BRAINCHAIN_PAYMENT_ASSET", preset.asset),
@@ -215,7 +245,9 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
     maxBond,
     ...(bonds ? { bonds } : {}),
     terms: {
-      cost: maxPrice === DEFAULT_MAX_PRICE ? `1 ${preset.token}` : `at most ${formatUnits(maxPrice)} ${preset.token}`,
+      cost: cost(PRICE.task),
+      gradeCost: cost(PRICE.grade),
+      ...(refuses.task ? { refuses } : {}),
       chain: preset.chain,
       finalAfter: preset.finalAfter,
     },

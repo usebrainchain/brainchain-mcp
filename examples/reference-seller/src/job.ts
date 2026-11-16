@@ -56,7 +56,7 @@ export function prompt(order: OrderRequest, last?: { delivery: string; verdict?:
   return [...parts, `Your last delivery was not accepted. ${failure}\nIt was:\n${last.delivery}`].join("\n\n");
 }
 
-// BrainChain runs the tests after the delivery's python code blocks, so code that arrives bare is fenced.
+// BrainChain runs the tests after the delivery's Python code blocks, so code that arrives bare is fenced.
 export function deliverable(output: string): string {
   const text = output.trim();
   if (!text) throw new Error("The worker delivered nothing.");

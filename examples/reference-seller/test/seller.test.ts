@@ -58,9 +58,10 @@ const FRAMEWORKS: Record<"express" | "hono", (seller: Seller) => Promise<Client>
   },
 };
 
+// Last in, first out: a seller stops writing before the folder it writes to is removed.
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) await cleanup();
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
 async function setup(
@@ -85,6 +86,7 @@ async function setup(
   const client = await FRAMEWORKS[framework](seller);
   cleanups.push(async () => {
     await client.close();
+    await seller.flush();
     if (!given.dir) await rm(dir, { recursive: true, force: true });
   });
 
@@ -207,6 +209,7 @@ describe.each(["express", "hono"] as const)("a seller on %s", (framework) => {
 
   it("stores the signed payment before sending it, and after a lost reply sends that same header again on restart", async () => {
     const dir = await mkdtemp(join(tmpdir(), "reference-seller-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
     const brainchain = mockBrainChain({ origin: ORIGIN, ...LANE, price: 250_000n });
     let storedFirst = false;
     // BrainChain takes the payment and grades the work, and the reply never reaches the seller.
@@ -230,7 +233,6 @@ describe.each(["express", "hono"] as const)("a seller on %s", (framework) => {
     expect(brainchain.signed).toBe(1);
     expect(brainchain.paid).toHaveLength(1);
     expect(await second.spent()).toBe("250000");
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("sends the same header again when BrainChain does not answer", async () => {
@@ -249,6 +251,7 @@ describe.each(["express", "hono"] as const)("a seller on %s", (framework) => {
 
   it("signs once more, and says so, when the stored payment expired before it ever reached BrainChain", async () => {
     const dir = await mkdtemp(join(tmpdir(), "reference-seller-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
     const brainchain = mockBrainChain({ origin: ORIGIN, ...LANE, price: 250_000n, maxTimeoutSeconds: 2 });
     const dropped: typeof fetch = (input, init) => (new Request(input, init).headers.has("payment-signature") ? new Promise(() => {}) : brainchain.fetch(input, init));
     const first = await setup(framework, { brainchain, fetch: dropped, dir });
@@ -264,7 +267,6 @@ describe.each(["express", "hono"] as const)("a seller on %s", (framework) => {
     expect(await storedHeaders(dir)).toEqual([brainchain.payments[0]!.header]);
     expect(second.logged.filter((line) => line.includes("expired before it reached BrainChain"))).toHaveLength(1);
     expect(await second.spent()).toBe("250000");
-    await rm(dir, { recursive: true, force: true });
   });
 
   it("fails the order on a refused payment and counts nothing against the day", async () => {
@@ -356,5 +358,33 @@ describe.each(["express", "hono"] as const)("a seller on %s", (framework) => {
     expect(await order({ ...ORDER, pass: 2 })).toMatchObject({ status: 400, body: { error: expect.stringMatching(/^pass is the index/) } });
     expect((await client.request("/orders/nope")).status).toBe(404);
     expect(work).not.toHaveBeenCalled();
+  });
+});
+
+describe("reading a grade", () => {
+  const grade = `0x${"ab".repeat(32)}`;
+  const taken = { grade, status: `${ORIGIN}/x402/grades/${grade}`, units: "250000" };
+
+  it("tries a read that fails for now again, saying so, and stops at a refusal", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "reference-seller-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const answers: (() => Response)[] = [
+      () => {
+        throw new TypeError("fetch failed");
+      },
+      () => new Response("{}", { status: 503 }),
+      () => new Response("{}", { status: 429 }),
+      () => new Response(JSON.stringify({ error: "This wallet may not read that grade" }), { status: 403 }),
+    ];
+    const reads = vi.fn(async () => answers.shift()!());
+    const printed: string[] = [];
+    const judge = createJudge({ url: ORIGIN, ...LANE, token: "test USDC", maxUnits: 250_000n, dailyUnits: 2_500_000n, dir, key: KEY }, { fetch: reads as unknown as typeof fetch, pollMs: 1, log: (line) => printed.push(line) });
+    await expect(judge.read(taken)).rejects.toThrow(`BrainChain answered 403 when grade ${grade} was read: This wallet may not read that grade.`);
+    expect(reads).toHaveBeenCalledTimes(4);
+    expect(printed).toEqual([
+      `grade ${grade}: the read failed (fetch failed); reading it again in 0.001 s.`,
+      `grade ${grade}: the read failed (BrainChain answered 503); reading it again in 0.001 s.`,
+      `grade ${grade}: the read failed (BrainChain answered 429); reading it again in 0.001 s.`,
+    ]);
   });
 });

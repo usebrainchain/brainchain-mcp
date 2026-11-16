@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { InsufficientFundsError } from "viem";
+import { InsufficientFundsError, WaitForTransactionReceiptTimeoutError } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 
@@ -13,8 +13,8 @@ import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
 import { CUSTODY_NAME } from "./custody.js";
 import { MAKERS_NAME } from "./makers.js";
-import { guidance } from "./payments.js";
-import { approvalFailure, approveCommand, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
+import { gradeGuidance, guidance } from "./payments.js";
+import { approvalFailure, approvalUnconfirmed, approveCommand, createServer, INSTRUCTIONS, pastedKey, payerAccount, terminalHint, walletExitCode, walletReport, type ServerOptions } from "./server.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_GRADE_NAME, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
@@ -58,8 +58,9 @@ describe("the server", () => {
 
     const post = await client.callTool({ name: POST_TASK_NAME, arguments: task });
     expect(post.isError).toBe(true);
-    expect(text(post)).toMatch(/Set BRAINCHAIN_PAYER_KEY .* with or without 0x/);
-    expect(text(post)).toContain("Add BRAINCHAIN_PAYER_KEY to this server's env in your MCP client config");
+    expect(text(post)).toContain("No paying key is set: point BRAINCHAIN_PAYER_KEY_FILE at a file holding the private key of the wallet that pays");
+    expect(text(post)).toContain("add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config (in Claude Code, `claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp`)");
+    expect(text(post)).not.toMatch(/-e BRAINCHAIN_PAYER_KEY=/);
     expect(reads).toHaveLength(0);
 
     const get = await client.callTool({ name: GET_TASK_NAME, arguments: { order } });
@@ -68,14 +69,12 @@ describe("the server", () => {
     expect(reads).toEqual([`https://brain.testnet.usebrainchain.com/x402/tasks/${order}`]);
   });
 
-  it("reports a bad setting once at startup, in the post tool's description, and from both tools", async () => {
+  it("reports a setting it cannot read once at startup, in the post tool's description, and from every tool but the premiums", async () => {
     for (const [env, problem] of [
       [{ BRAINCHAIN_NETWORK: "devnet" }, "BRAINCHAIN_NETWORK must be mainnet or testnet."],
       [{ BRAINCHAIN_PAY_ON: "bse" }, "BRAINCHAIN_PAY_ON must be robinhood or base."],
-      [{ BRAINCHAIN_MAX_PRICE_UNITS: "abc" }, "BRAINCHAIN_MAX_PRICE_UNITS must be a positive whole number of base units."],
       [{ BRAINCHAIN_DESK_URL: "notaurl" }, "BRAINCHAIN_DESK_URL must be an http or https URL."],
-      [{ BRAINCHAIN_PAYMENT_RPC: "notaurl" }, "BRAINCHAIN_PAYMENT_RPC must be an http or https URL."],
-      [{ BRAINCHAIN_STATE_DIR: "~other" }, "BRAINCHAIN_STATE_DIR must be an absolute path or start with ~/."],
+      [{ BRAINCHAIN_DESK_URL: "notaurl", BRAINCHAIN_BUDGET_UNITS: "-5" }, "BRAINCHAIN_DESK_URL must be an http or https URL."],
     ] as const) {
       const logged: string[] = [];
       const client = await connect({ ...env, BRAINCHAIN_PAYER_KEY: KEY }, { log: (message) => logged.push(message) });
@@ -115,13 +114,60 @@ describe("the server", () => {
     }
   });
 
+  it("stops only the tools that pay for a setting only payments read, and keeps reading orders, grades and bonds", async () => {
+    for (const [env, problem] of [
+      [{ BRAINCHAIN_BUDGET_UNITS: "-5" }, "BRAINCHAIN_BUDGET_UNITS must be a positive whole number of base units."],
+      [{ BRAINCHAIN_MAX_PRICE_UNITS: "abc" }, "BRAINCHAIN_MAX_PRICE_UNITS must be a positive whole number of base units."],
+      [{ BRAINCHAIN_DAILY_UNITS: "1.5" }, "BRAINCHAIN_DAILY_UNITS must be a positive whole number of base units."],
+      [{ BRAINCHAIN_MAX_BOND_UNITS: "1" }, "BRAINCHAIN_MAX_BOND_UNITS must be at least 2000000"],
+      [{ BRAINCHAIN_STATE_DIR: "~other" }, "BRAINCHAIN_STATE_DIR must be an absolute path or start with ~/."],
+      [{ BRAINCHAIN_PAYMENT_RPC: "notaurl" }, "BRAINCHAIN_PAYMENT_RPC must be an http or https URL."],
+      [{ BRAINCHAIN_PAYMENT_NETWORK: "base" }, "BRAINCHAIN_PAYMENT_NETWORK must look like eip155:<chain id>."],
+      [{ BRAINCHAIN_PAYMENT_ASSET: "usdg" }, "BRAINCHAIN_PAYMENT_ASSET must be a 0x-prefixed, 40-character hex address."],
+      [{ BRAINCHAIN_PAY_TO: "0x12" }, "BRAINCHAIN_PAY_TO must be a 0x-prefixed, 40-character hex address."],
+      [{ BRAINCHAIN_DESK_URL: "http://127.0.0.1:4000" }, "BRAINCHAIN_DESK_URL names a desk other than the network's own, so set BRAINCHAIN_PAY_TO"],
+    ] as const) {
+      const asked: string[] = [];
+      const fetchImpl = (async (input: RequestInfo | URL) => {
+        asked.push(String(input));
+        return new Response(JSON.stringify({ order, state: "posted", task: { status: "hired" } }));
+      }) as typeof fetch;
+      const logged: string[] = [];
+      const client = await connect({ ...env, BRAINCHAIN_PAYER_KEY: KEY }, { fetch: fetchImpl, log: (message) => logged.push(message) });
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toContain(problem);
+
+      const { tools } = await client.listTools();
+      for (const name of [POST_TASK_NAME, GRADE_NAME, BOND_TASK_NAME]) {
+        expect(tools.find((tool) => tool.name === name)!.description).toMatch(/^Invalid setting: /);
+        expect(tools.find((tool) => tool.name === name)!.description).toContain(problem);
+      }
+      for (const name of [GET_TASK_NAME, GET_GRADE_NAME, BOND_STATUS_NAME, PREMIUMS_NAME]) expect(tools.find((tool) => tool.name === name)!.description).not.toContain("Invalid setting");
+
+      for (const call of [
+        { name: POST_TASK_NAME, arguments: task },
+        { name: GRADE_NAME, arguments: grade },
+        { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } },
+      ]) {
+        const result = await client.callTool(call);
+        expect(result.isError).toBe(true);
+        expect(text(result)).toContain(problem);
+      }
+      expect(asked).toEqual([]);
+      for (const call of [{ name: GET_TASK_NAME, arguments: { order } }, { name: GET_GRADE_NAME, arguments: { grade: order } }]) expect((await client.callTool(call)).isError).toBe(false);
+      // The reads go to the desk the settings name, a desk of one's own included.
+      const desk = "BRAINCHAIN_DESK_URL" in env ? env.BRAINCHAIN_DESK_URL : "https://brain.usebrainchain.com";
+      expect(asked).toEqual([`${desk}/x402/tasks/${order}`, `${desk}/x402/grades/${order}`]);
+    }
+  });
+
   it("names a placeholder the client passed through instead of a key", async () => {
     for (const placeholder of ["${env:BRAINCHAIN_PAYER_KEY}", "$BRAINCHAIN_PAYER_KEY", "${BRAINCHAIN_PAYER_KEY}"]) {
       const client = await connect({ BRAINCHAIN_PAYER_KEY: ` ${placeholder} ` });
       const result = await client.callTool({ name: POST_TASK_NAME, arguments: task });
       expect(result.isError).toBe(true);
       expect(text(result)).toContain(
-        `BRAINCHAIN_PAYER_KEY is not set: your MCP client passed the placeholder ${placeholder} through unexpanded, so the variable was not set when the client started. Add BRAINCHAIN_PAYER_KEY`,
+        `BRAINCHAIN_PAYER_KEY is not set: your MCP client passed the placeholder ${placeholder} through unexpanded, so the variable was not set when the client started. Keep the key in a file only your account can read`,
       );
     }
   });
@@ -209,6 +255,11 @@ describe("the server", () => {
         expect((await client.callTool({ name: GET_GRADE_NAME, arguments: { grade: order } })).isError).toBe(false);
         expect(asked).toHaveLength(2);
 
+        // The premiums, BitGo's additions and a market maker's holdings read public data and no setting, so each answers for itself.
+        for (const name of [PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME]) expect(tools.find((tool) => tool.name === name)!.description).not.toContain("Invalid setting");
+        expect(JSON.parse(text(await client.callTool({ name: CUSTODY_NAME, arguments: { days: 0 } })))).toEqual({ error: "days must be a whole number from 1 to 90. Leave it out to look back 30 days." });
+        expect(JSON.parse(text(await client.callTool({ name: MAKERS_NAME, arguments: {} })))).toEqual({ error: "token is required." });
+
         // Nor does reading a bond: its description names no problem, and on testnet it answers as it always does there.
         const status = tools.find((tool) => tool.name === BOND_STATUS_NAME)!.description!;
         expect(status).not.toContain("Invalid setting");
@@ -221,7 +272,8 @@ describe("the server", () => {
     }
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
     expect(readme).toContain("A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_bond_task` and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working.");
-    expect(readme).toContain("stops the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; `brainchain_bond_status`, `brainchain_get_task` and `brainchain_get_grade` read nothing that needs the folder and keep working.");
+    expect(readme).toContain("A setting only payments read stops just the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; the other six keep working.");
+    expect(readme).toContain("`BRAINCHAIN_STATE_DIR` (including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set)");
     expect(readme).not.toContain("the task and bond tools return the error");
   });
 
@@ -233,7 +285,7 @@ describe("the server", () => {
     expect(logged[0]).toContain("BRAINCHAIN_STATE_DIR is /proc/brainchain, which is a system folder");
     const { tools } = await client.listTools();
     const status = tools.find((tool) => tool.name === BOND_STATUS_NAME)!.description!;
-    expect(status).toMatch(/^Invalid setting: BRAINCHAIN_PAYER_KEY must be 64 hex characters, with or without 0x\. Until then this tool only returns that error\. Where /);
+    expect(status).toMatch(/^Invalid setting: BRAINCHAIN_PAYER_KEY must be 64 hex characters, with or without 0x\. Until the operator fixes it, this tool only returns that error\. Where /);
     expect(status).not.toContain("BRAINCHAIN_STATE_DIR");
     const read = text(await client.callTool({ name: BOND_STATUS_NAME, arguments: { task: "12" } }));
     expect(read).toContain("BRAINCHAIN_PAYER_KEY must be 64 hex characters");
@@ -241,6 +293,20 @@ describe("the server", () => {
     // The tools that pay name both.
     for (const call of [{ name: GRADE_NAME, arguments: grade }, { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } }]) {
       expect(text(await client.callTool(call))).toContain("BRAINCHAIN_STATE_DIR is /proc/brainchain");
+    }
+  });
+
+  it("answers an order or grade id the desk does not know as an error", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ error: "No order with that id." }), { status: 404 })) as typeof fetch;
+    const client = await connect({}, { fetch: fetchImpl });
+    for (const [name, args, said] of [
+      [GET_TASK_NAME, { order }, "The desk has no order with this id. Check the id: it must be one that brainchain_post_task returned."],
+      [GET_GRADE_NAME, { grade: order }, "The desk has no grade with this id. Check the id: it must be one that brainchain_grade returned."],
+    ] as const) {
+      const result = await client.callTool({ name, arguments: args });
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(text(result))).toEqual({ error: said });
+      expect(text(result)).not.toContain("never charged");
     }
   });
 
@@ -270,6 +336,16 @@ describe("the server", () => {
     expect(guidance({ network: config.network, state: "paid-out", task: { status: "paid", accepted: false } }, config)).toEqual({ done: true, next: "The model was paid." });
     expect(guidance({ network: config.network, state: "posted", task: { status: "paid", accepted: false } }, config)).toEqual({ done: true, next: "The model was paid." });
     expect(guidance({ network: config.network, state: "posted", task: { status: "graded", accepted: false } }, config).done).toBe(false);
+  });
+
+  it("shows sample replies in the README that match what the server says for them", () => {
+    const section = readFileSync(new URL("../README.md", import.meta.url), "utf8").split("\n### Sample replies\n")[1]!.split("\n## ")[0]!;
+    const [order, decided] = [...section.matchAll(/```json\n([\s\S]*?)\n```/g)].map(([, json]) => JSON.parse(json!) as Record<string, unknown>);
+    const { done, next, ...view } = order!;
+    expect(guidance({ ...view, resultText: "The result." }, resolveConfig({}))).toEqual({ done, next });
+    const { done: gradeDone, next: gradeNext, ...verdict } = decided!;
+    expect(gradeGuidance(verdict)).toEqual({ done: gradeDone, next: gradeNext });
+    expect(section).toContain("are examples");
   });
 
   it("tells an agent to leave the key alone", () => {
@@ -318,9 +394,35 @@ describe("payerAccount", () => {
   });
 
   it("refuses a missing, short or out-of-range key", () => {
-    expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "  " })).toThrow(/Set BRAINCHAIN_PAYER_KEY/);
+    expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "  " })).toThrow(/^No paying key is set: point BRAINCHAIN_PAYER_KEY_FILE at a file/);
     expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "0x1234" })).toThrow(/64 hex characters/);
     expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "0".repeat(64) })).toThrow(/not a valid private key/);
+  });
+});
+
+describe("terminalHint", () => {
+  it("says on one line, only in a terminal, that the server waits for an MCP client and how to add it to one", () => {
+    const hint = terminalHint({ isTTY: true }, "0.0.0-test")!;
+    expect(hint).toContain("brainchain-mcp 0.0.0-test speaks MCP on stdio and is waiting for a client");
+    expect(hint).toContain("claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.0.0-test");
+    expect(hint).not.toContain("\n");
+    for (const stdin of [{ isTTY: false }, {}]) expect(terminalHint(stdin, "0.0.0-test")).toBeUndefined();
+  });
+});
+
+describe("pastedKey", () => {
+  it("never repeats an argument that looks like a private key, and says the key is exposed", () => {
+    for (const args of [[KEY], ["wallet", `0x${KEY}`], ["approve", ` 0X${KEY.toUpperCase()} `], ["approve", "5", KEY], [`BRAINCHAIN_PAYER_KEY=0x${KEY}`], ["wallet 0x" + KEY]]) {
+      const said = pastedKey(args)!;
+      expect(said).toContain("looks like a private key");
+      expect(said).toContain("shell history");
+      expect(said).toContain("move the wallet's funds to a new key");
+      expect(said.toLowerCase()).not.toContain(KEY);
+    }
+  });
+
+  it("leaves other arguments alone", () => {
+    for (const args of [[], ["wallet"], ["approve", "max"], ["approve", "100.5"], [KEY.slice(1)], [`${KEY}0`], [`0x${"g".repeat(64)}`]]) expect(pastedKey(args)).toBeUndefined();
   });
 });
 
@@ -335,6 +437,19 @@ describe("approvalFailure", () => {
 
   it("passes on anything else, one line of it", () => {
     expect(approvalFailure(address, "Base", new Error("nonce too low\nmore detail"))).toBe("The approval failed: nonce too low");
+  });
+});
+
+describe("approvalUnconfirmed", () => {
+  const hash = `0x${"ab".repeat(32)}`;
+
+  it("names a sent approval that has not confirmed as one that may still go through, never as failed", () => {
+    expect(approvalUnconfirmed(hash, "Robinhood Chain", new WaitForTransactionReceiptTimeoutError({ hash: hash as `0x${string}` }))).toBe(
+      `The approval ${hash} was sent on Robinhood Chain and has not confirmed yet. It may still go through: look it up in a Robinhood Chain block explorer before you run approve again.`,
+    );
+    expect(approvalUnconfirmed(hash, "Base", new Error("HTTP request failed.\n\nStatus: 503"))).toBe(
+      `The approval ${hash} was sent on Base, and whether it confirmed could not be read (HTTP request failed). It may still go through: look it up in a Base block explorer before you run approve again.`,
+    );
   });
 });
 
@@ -378,11 +493,14 @@ describe("wallet", () => {
   const address = privateKeyToAccount(`0x${KEY}`).address;
   const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
   const approve = "BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.0.0-test approve";
+  // Bonds are closed on testnet, so their cap is left out.
+  const limits = "Limits: 1 test USDG per task or grade (BRAINCHAIN_MAX_PRICE_UNITS), 10 test USDG per server run (BRAINCHAIN_BUDGET_UNITS), no daily limit (BRAINCHAIN_DAILY_UNITS).";
 
   it("says what the wallet holds and what it still needs before a post can be paid", () => {
     expect(walletReport(testnet, address, { balance: 0n, allowance: 0n, eth: 0n }, approve)).toBe(
       [
         `${address} pays for tasks in test USDG on Robinhood Chain testnet.`,
+        limits,
         "It holds 0 test USDG. A task costs 1 test USDG, so send at least 1 test USDG to it on Robinhood Chain testnet before posting.",
         `Permit2 is not approved to spend enough of its test USDG for a task. Run \`${approve}\` once; it needs a little ETH on Robinhood Chain testnet, and the wallet holds 0 ETH there.`,
       ].join("\n"),
@@ -399,13 +517,28 @@ describe("wallet", () => {
     expect(walletReport(raised, address, { balance: 2_000_000n, allowance: 2_000_000n, eth: 0n }, approve)).toBe(
       [
         `${address} pays for tasks in test USDG on Robinhood Chain testnet.`,
+        limits.replace("1 test USDG per task", "5 test USDG per task"),
         "It holds 2 test USDG. A task costs at most 5 test USDG; send at least 3 test USDG to it on Robinhood Chain testnet to cover that.",
         `Permit2 is not approved to spend enough of its test USDG for a task that costs 5 (only 2). Run \`${approve}\` once; it needs a little ETH on Robinhood Chain testnet, and the wallet holds 0 ETH there.`,
       ].join("\n"),
     );
     expect(walletReport(raised, address, { balance: 5_000_000n, allowance: 5_000_000n, eth: 0n }, approve)).toBe(
-      `${address} pays for tasks in test USDG on Robinhood Chain testnet.\nIt holds 5 test USDG.\nPermit2 may spend up to 5 of its test USDG.`,
+      `${address} pays for tasks in test USDG on Robinhood Chain testnet.\n${limits.replace("1 test USDG per task", "5 test USDG per task")}\nIt holds 5 test USDG.\nPermit2 may spend up to 5 of its test USDG.`,
     );
+  });
+
+  it("names the desk's price under a lower price limit, and says posts will be refused", () => {
+    const capped = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_MAX_PRICE_UNITS: "500000" });
+    expect(walletReport(capped, address, { balance: 0n, allowance: 0n, eth: 0n }, approve)).toBe(
+      [
+        `${address} pays for tasks in test USDG on Robinhood Chain testnet.`,
+        limits.replace("1 test USDG per task", "0.5 test USDG per task"),
+        "BRAINCHAIN_MAX_PRICE_UNITS lets this server pay at most 0.5 test USDG at a time, under the 1 test USDG a task costs, so posts will be refused until it is raised.",
+        "It holds 0 test USDG. A task costs 1 test USDG, so send at least 1 test USDG to it on Robinhood Chain testnet before posting.",
+        `Permit2 is not approved to spend enough of its test USDG for a task. Run \`${approve}\` once; it needs a little ETH on Robinhood Chain testnet, and the wallet holds 0 ETH there.`,
+      ].join("\n"),
+    );
+    expect(walletReport(capped, address, new Error("HTTP request failed."), approve)).toContain("could not be read from Robinhood Chain testnet (HTTP request failed.). The key is fine.");
   });
 
   it("prints an approve command that finds a key kept in a file", () => {
@@ -417,9 +550,36 @@ describe("wallet", () => {
 
   it("names no approval for USDC, which pays by signature, and says when the chain could not be read", () => {
     const base = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "base" });
-    expect(walletReport(base, address, { balance: 3_000_000n, eth: 0n }, approve)).toBe(`${address} pays for tasks in test USDC on Base Sepolia.\nIt holds 3 test USDC.`);
+    expect(walletReport(base, address, { balance: 3_000_000n, eth: 0n }, approve)).toBe(`${address} pays for tasks in test USDC on Base Sepolia.\n${limits.replaceAll("USDG", "USDC")}\nIt holds 3 test USDC.`);
     expect(walletReport(testnet, address, new Error("HTTP request failed.\n\nURL: http://127.0.0.1:1"), approve)).toBe(
-      `${address} pays for tasks in test USDG on Robinhood Chain testnet.\nIts balance could not be read from Robinhood Chain testnet (HTTP request failed.). The key and settings are fine.`,
+      `${address} pays for tasks in test USDG on Robinhood Chain testnet.\n${limits}\nIts balance could not be read from Robinhood Chain testnet (HTTP request failed.). The key and settings are fine.`,
     );
+  });
+
+  it("lists every limit, the daily limit and the bond cap among them on mainnet", () => {
+    const mainnet = resolveConfig({ BRAINCHAIN_DAILY_UNITS: "5000000", BRAINCHAIN_MAX_BOND_UNITS: "3000000" });
+    expect(walletReport(mainnet, address, new Error("down"), approve).split("\n")[1]).toBe(
+      "Limits: 1 USDG per task or grade (BRAINCHAIN_MAX_PRICE_UNITS), 10 USDG per server run (BRAINCHAIN_BUDGET_UNITS), 5 per UTC day, USDG and USDC together (BRAINCHAIN_DAILY_UNITS), 3 USDG per bond (BRAINCHAIN_MAX_BOND_UNITS).",
+    );
+  });
+
+  it("exits 0 only when the wallet can pay for a task, 1 when it cannot, and 2 when its balance could not be read", () => {
+    const base = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "base" });
+    const raised = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_MAX_PRICE_UNITS: "5000000" });
+    const capped = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_MAX_PRICE_UNITS: "500000" });
+    for (const [config, funds, code] of [
+      [testnet, { balance: 1_000_000n, allowance: 1_000_000n, eth: 0n }, 0],
+      [testnet, { balance: 999_999n, allowance: 10_000_000n, eth: 0n }, 1],
+      [testnet, { balance: 10_000_000n, allowance: 0n, eth: 0n }, 1],
+      [base, { balance: 1_000_000n, eth: 0n }, 0],
+      [base, { balance: 0n, eth: 0n }, 1],
+      [raised, { balance: 2_000_000n, allowance: 2_000_000n, eth: 0n }, 1],
+      [raised, { balance: 5_000_000n, allowance: 5_000_000n, eth: 0n }, 0],
+      [capped, { balance: 10_000_000n, allowance: 10_000_000n, eth: 0n }, 1],
+      [testnet, new Error("down"), 2],
+      [capped, new Error("down"), 1],
+    ] as const) {
+      expect(walletExitCode(config, funds)).toBe(code);
+    }
   });
 });

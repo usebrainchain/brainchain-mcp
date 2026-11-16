@@ -47,6 +47,8 @@ export const DEFAULT_POLICY: Policy = {
 export interface Seller {
   order(request: OrderRequest): Promise<{ order: string } & Record<string, unknown>>;
   view(id: string): ({ order: string } & Record<string, unknown>) | undefined;
+  /** Resolves once every order record being written is on disk. Call it before the folder is removed or the process stops. */
+  flush(): Promise<void>;
 }
 
 /** What the buyer sees: the delivery only once BrainChain accepted it, and the decision page of every grade. */
@@ -81,7 +83,15 @@ export async function createSeller(options: {
   const { judge, work, policy = DEFAULT_POLICY, log = console.error, retryMs = 60_000 } = options;
   const dir = join(options.dir, "orders");
   const orders = new Map<string, Order>();
-  const save = (order: Order) => writeJson(join(dir, `${order.id}.json`), order);
+  // An order's state changes in memory first, so a reader can see it settled while its record is still being written.
+  const writing = new Set<Promise<void>>();
+  const save = (order: Order) => {
+    const write = writeJson(join(dir, `${order.id}.json`), order);
+    writing.add(write);
+    const done = () => void writing.delete(write);
+    write.then(done, done);
+    return write;
+  };
 
   async function deliver(order: Order, last?: Attempt): Promise<Attempt> {
     order.state = "working";
@@ -171,6 +181,10 @@ export async function createSeller(options: {
     view(id) {
       const order = orders.get(id);
       return order && view(order);
+    },
+    async flush() {
+      // A write that finishes can be followed at once by the next save of the same order.
+      while (writing.size > 0) await Promise.allSettled([...writing]);
     },
   };
 }

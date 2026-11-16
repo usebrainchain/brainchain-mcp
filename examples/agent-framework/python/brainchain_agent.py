@@ -18,16 +18,32 @@ from agent_framework import Agent, MCPStdioTool
 from agent_framework.openai import OpenAIChatCompletionClient
 
 INSTRUCTIONS = """You hand scoped work to BrainChain, which hires a worker and grades the result.
-Post the user's brief with brainchain_post_task. Then read the task with brainchain_get_task until it is done,
-calling wait with the seconds the reply asks for between reads. Report the accepted result, or why it was not accepted, and
-the decision page. Never post the same brief twice: a reply that says it may have been charged is read, not resent."""
+Post the user's brief with brainchain_post_task. Then read the task with brainchain_get_task, calling wait with the
+seconds the reply asks for between reads, until done is true or next says Jev did not accept the work.
+Accepted: report the result and the decision page. Not accepted: report that at once, with the order id. The refund is
+sent when the dispute window closes, hours later, and a read of the order after that gives its transaction.
+If wait says to stop, report where the task stands and its order id. Never post the same brief twice: a reply that
+says it may have been charged is read, not resent."""
+
+# Most tasks are graded within minutes. Past this the agent reports where the task stands.
+WAIT_BUDGET_SECONDS = 30 * 60
 
 
-async def wait(seconds: Annotated[int, "How long to wait, as brainchain_get_task's reply asks"]) -> str:
-    """Waits before the next read of a task, since a task takes minutes to be hired, delivered and graded."""
-    seconds = min(max(seconds, 5), 120)
-    await asyncio.sleep(seconds)
-    return f"Waited {seconds} seconds."
+def waiter(budget: int):
+    """The agent's wait tool, which stops after `budget` seconds in all, so every run ends with a report."""
+    left = budget
+
+    async def wait(seconds: Annotated[int, "How long to wait, as brainchain_get_task's reply asks"]) -> str:
+        """Waits before the next read of a task, which usually takes a few minutes to be graded."""
+        nonlocal left
+        if left <= 0:
+            return "Stop reading: report where the task stands and its order id, which brainchain_get_task can read later."
+        seconds = min(max(seconds, 5), 120, left)
+        await asyncio.sleep(seconds)
+        left -= seconds
+        return f"Waited {seconds} seconds."
+
+    return wait
 
 
 def server() -> MCPStdioTool:
@@ -35,7 +51,7 @@ def server() -> MCPStdioTool:
     return MCPStdioTool(
         name="brainchain",
         command="npx",
-        args=["-y", "brainchain-mcp@0.11.0"],
+        args=["-y", "brainchain-mcp@0.11.1"],
         env=settings,
         allowed_tools=["brainchain_post_task", "brainchain_get_task"],
         request_timeout=180,
@@ -58,7 +74,7 @@ async def main() -> None:
             instructions=INSTRUCTIONS,
             default_options={"max_tokens": 4000},
         ) as agent:
-            result = await agent.run(f"Post this brief to BrainChain and report the outcome:\n\n{brief}", tools=[brainchain, wait])
+            result = await agent.run(f"Post this brief to BrainChain and report the outcome:\n\n{brief}", tools=[brainchain, waiter(WAIT_BUDGET_SECONDS)])
             print(result.text)
 
 

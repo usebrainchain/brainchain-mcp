@@ -4,14 +4,14 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { decodeAbiParameters, decodeFunctionData, encodeFunctionData, keccak256, numberToHex, parseTransaction, type Address, type Hex } from "viem";
+import { decodeAbiParameters, decodeFunctionData, decodeFunctionResult, encodeFunctionData, keccak256, numberToHex, parseTransaction, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it, vi } from "vitest";
 
 import { bondsClosed, createBondChain, createBonds, type BondChain, type BondView, type TaskFacts } from "./bonds.js";
 import { resolveConfig } from "./config.js";
 import { createLimits } from "./limits.js";
-import { BOND_LEAD_SEC, bondTerms, DeedStatus, encodeCheckData, proofIndexAbi, Ruling, shippedAbi, taskOfCheck, TaskStatus } from "./shipped.js";
+import { BOND_LEAD_SEC, bondTerms, DeedStatus, encodeCheckData, proofIndexAbi, shippedAbi, taskBoardAbi, taskOfCheck, TaskStatus } from "./shipped.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
 const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -59,12 +59,47 @@ function setup(chain: BondChain, env: Record<string, string> = {}, fetchImpl: ty
 }
 
 describe("ShippedDeeds' enums", () => {
-  it("pins Ruling as the contract declares it: Conceded is 5 and CheckMet 7, and a state reads the settled split, never the ruling number", async () => {
-    expect(Ruling).toEqual({ None: 0, Accepted: 1, Rejected: 2, Partial: 3, Invalid: 4, Conceded: 5, Default: 6, CheckMet: 7 });
+  it("pins DeedStatus as the contract declares it, and a state reads the settled split, never the ruling number", async () => {
     expect(DeedStatus).toEqual({ None: 0, Open: 1, Ruled: 2, Appealed: 3, Settled: 4 });
     const { bonds } = setup(fakeChain({ bonds: [view({ status: DeedStatus.Settled, remainderBps: 10_000, settledAt: NOW }), view({ deed: 3n, status: DeedStatus.Settled, remainderBps: 0, settledAt: NOW })] }));
     const status = (await bonds.status(12n)) as { bonds: { state: string }[] };
     expect(status.bonds.map((b) => b.state)).toEqual(["delivered", "missed"]);
+  });
+});
+
+describe("TaskBoard.get", () => {
+  it("decodes a task as the 3.4.0 and 3.5.0 boards return it", () => {
+    // TaskBoard.get(3) on mainnet set 3.4.0, read on 2026-11-06.
+    const raw = `0x${[
+      "000000000000000000000000afb0c4ef895d4895040cdc6435b96d3ee8350c6e",
+      "00000000000000000000000000000000000000000000000000000000000f4240",
+      "000000000000000000000000000000000000000000000000000000006aeb2ac9",
+      "0000000000000000000000000000000000000000000000000000000000000006",
+      "0000000000000000000000000000000000000000000000000000000000000001",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "04a594d97f5e26979c668225d0951a16c41e8ac3058267339457faf261618c9c",
+      "a5853e75429e97891002d12055c509c9b6f44b0df3daac71eb059237da61b7b9",
+      "862f7c5782d923cccafea1e1a366bcb154cd31e56dd8786a7bcd4bd57be2c09b",
+      "000000000000000000000000000000000000000000000000000000006ae9d96e",
+      "000000000000000000000000000000000000000000000000000000006ae9d9bd",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000006ae9d94a",
+      "0000000000000000000000002b885bf37fffc6ef4abddb8e8e273834c643c3af",
+      "000000000000000000000000dfefbdbf680568e8dc44abbbd657c0701964cc8c",
+      "000000000000000000000000000000000000000000000000000000000000012c",
+      "00000000000000000000000000000000000000000000000000000000000005dc",
+      "0000000000000000000000000000000000000000000000000000000000001f40",
+      "0000000000000000000000000000000000000000000000000000000000001f40",
+      "0000000000000000000000000000000000000000000000000000000000005460",
+      "0000000000000000000000000000000000000000000000000000000000005460",
+      "0000000000000000000000000000000000000000000000000000000000005460",
+    ].join("")}` as const;
+    const task = decodeFunctionResult({ abi: taskBoardAbi, functionName: "get", data: raw });
+    expect(task.poster).toBe("0xafB0C4Ef895D4895040cdC6435B96D3EE8350c6E");
+    expect(task.bounty).toBe(1_000_000n);
+    expect(task.status).toBe(6);
+    expect(task.feeBps).toBe(300);
   });
 });
 
@@ -169,7 +204,10 @@ describe("bond", () => {
       [fakeChain({ task: task() }), USDG(1.5), "The bond must be at least 2 USDG"],
       [fakeChain({ task: task() }), USDG(11), "This server bonds at most 10 USDG on one task. Raise BRAINCHAIN_MAX_BOND_UNITS"],
       [fakeChain({ task: undefined }), USDG(5), "There is no task 12 on BrainChain."],
-      [fakeChain({ task: task({ status: 6 }) }), USDG(5), "Task 12 is not hired to this wallet"],
+      [fakeChain({ task: task({ status: TaskStatus.Open, model: `0x${"0".repeat(64)}` }) }), USDG(5), "Task 12 is not hired to this wallet. Bond a task after Jev hires it for the task."],
+      [fakeChain({ task: task({ model: `0x${"0".repeat(24)}${POSTER.slice(2)}` }) }), USDG(5), "Task 12 is not hired to this wallet."],
+      [fakeChain({ task: task({ status: TaskStatus.Paid }) }), USDG(5), "Task 12 has moved past the stage where a bond can be placed: a bond goes on while the task is hired to this wallet, before the work is delivered."],
+      [fakeChain({ task: task({ status: 3 }) }), USDG(5), "Task 12 has moved past the stage where a bond can be placed"],
       [fakeChain({ task: task({ deadline: NOW - 1n }) }), USDG(5), "deadline, 2027-01-15T07:59:59.000Z, has passed"],
       [fakeChain({ task: task(), bonds: [view()] }), USDG(5), "This wallet already has a bond open on task 12 (registry id 4). Nothing was bonded."],
     ] as const) {
@@ -177,6 +215,19 @@ describe("bond", () => {
       await expect(bonds.bond(12n, amount)).rejects.toThrow(error);
       expect(chain.create).not.toHaveBeenCalled();
       expect(limits.spent()).toBe(0n);
+    }
+  });
+
+  it("names an amount under the smallest bond or over the cap before reading anything, whatever the task", async () => {
+    for (const [amount, error] of [
+      [USDG(1), "The bond must be at least 2 USDG: under that, Shipped's fee and the gas take too much of it. Nothing was bonded."],
+      [USDG(1.999999), "The bond must be at least 2 USDG"],
+      [USDG(10.000001), "This server bonds at most 10 USDG on one task. Raise BRAINCHAIN_MAX_BOND_UNITS and restart the server to allow more. Nothing was bonded."],
+    ] as const) {
+      // A task this wallet was never hired for: the amount is still what is named.
+      const chain = fakeChain({ task: task({ status: TaskStatus.Open, model: `0x${"0".repeat(64)}` }) });
+      await expect(setup(chain).bonds.bond(1n, amount)).rejects.toThrow(error);
+      for (const read of Object.values(chain)) if (typeof read === "function") expect(read).not.toHaveBeenCalled();
     }
   });
 
@@ -196,6 +247,17 @@ describe("bond", () => {
       "A bond of 2 USDG is more than the 1 USDG left in this server's budget. The budget resets when the server restarts; raise BRAINCHAIN_BUDGET_UNITS to allow more per run. Nothing was bonded.",
     );
     expect(chain.create).toHaveBeenCalledOnce();
+  });
+
+  it("keeps why a bond failed when its amount cannot be given back, and leaves it counted", async () => {
+    const chain = fakeChain({ task: task(), usdg: USDG(4) });
+    const { config } = setup(chain);
+    const counted = createLimits(config, () => account);
+    const limits = { ...counted, give: vi.fn(async () => Promise.reject(new Error("EACCES: the daily record cannot be written"))) };
+    const bonds = createBonds({ config, signer: () => account, limits, connect: () => chain, fetch: offline });
+    await expect(bonds.bond(12n, USDG(5))).rejects.toThrow(`${account.address} holds 4 USDG on Robinhood Chain, under the 5 USDG to bond. Nothing was bonded.`);
+    expect(limits.give).toHaveBeenCalledOnce();
+    expect(counted.spent()).toBe(USDG(5));
   });
 
   it("refuses a bond over a limit with what was asked and what is left, in USDG whatever chain this server pays tasks on", async () => {
@@ -269,7 +331,7 @@ describe("bond", () => {
     expect(after.limits.spent()).toBe(0n);
   });
 
-  it("refuses a second bond on a task while the first is being placed, and sends one", async () => {
+  it("refuses a second bond on a task while the first is being placed, and places a bond on another task after it", async () => {
     let release = () => {};
     const gate = new Promise<void>((resolve) => (release = resolve));
     const chain = fakeChain({ task: task() });
@@ -280,16 +342,29 @@ describe("bond", () => {
     const { bonds, limits } = setup(chain);
     const first = bonds.bond(12n, USDG(2));
     await expect(bonds.bond(12n, USDG(2))).rejects.toThrow("This server is already placing a bond on task 12. Wait for that call's reply; this call bonded nothing.");
-    // Another task is not held up.
+    // Another task waits its turn: the two bonds would share the wallet's nonces and its allowance.
     const other = bonds.bond(13n, USDG(2));
+    await vi.waitFor(() => expect(chain.create).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect([chain.task.mock.calls.length, chain.approve.mock.calls.length]).toEqual([1, 1]);
     release();
     expect(await first).toMatchObject({ bond: "7", task: "12" });
     expect(await other).toMatchObject({ task: "13" });
-    expect(chain.create).toHaveBeenCalledTimes(2);
+    expect(chain.create.mock.calls.map(([terms]) => terms.title)).toEqual(["BrainChain task #12", "BrainChain task #13"]);
     expect(limits.spent()).toBe(USDG(4));
     // Once the first call has answered, the task is free for the chain's own open-bond check.
     await bonds.bond(12n, USDG(2));
     expect(chain.create).toHaveBeenCalledTimes(3);
+  });
+
+  it("places the next bond after one that failed", async () => {
+    const chain = fakeChain({ task: task() });
+    chain.create.mockRejectedValueOnce(new Error(`The bond ${TX} reverted. Nothing was bonded.`));
+    const { bonds, limits } = setup(chain);
+    const [failed, placed] = await Promise.allSettled([bonds.bond(12n, USDG(2)), bonds.bond(13n, USDG(2))]);
+    expect(failed).toMatchObject({ status: "rejected", reason: new Error(`The bond ${TX} reverted. Nothing was bonded.`) });
+    expect(placed).toMatchObject({ status: "fulfilled", value: { bond: "7", task: "13" } });
+    expect(limits.spent()).toBe(USDG(2));
   });
 
   it("refuses to bond when the desk names the payer for another task board", async () => {
@@ -357,7 +432,12 @@ describe("bond status", () => {
         next: `The Proof is in the index, but the bond's check holds no mark and Shipped sets none after the deadline. The bond settles after 2027-01-16T08:59:59.000Z to ${MISSED_TO}: ${POSTER}.`,
       },
     ]);
-    expect(await setup(fakeChain()).bonds.status(12n)).toEqual({ task: "12", wallet: account.address, bonds: [] });
+    expect(await setup(fakeChain()).bonds.status(12n)).toEqual({
+      task: "12",
+      wallet: account.address,
+      bonds: [],
+      next: "This wallet has no bond on task 12. Check the task id; a bond is placed with brainchain_bond_task while BrainChain has the task hired to this wallet.",
+    });
   });
 
   it("says a delivered bond was collected once the registry owes the wallet nothing, and never tells it to claim what is not there", async () => {

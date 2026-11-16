@@ -97,9 +97,9 @@ describe("reading a grade", () => {
     expect(view.next).toMatch(/does not accept the work at 42%/);
   });
 
-  it("says an unknown id was never charged", async () => {
-    const view = (await reader(new Response(JSON.stringify({ error: "No grade with that id." }), { status: 404 })).getGrade(id)) as Record<string, unknown>;
-    expect(view).toMatchObject({ done: true, error: "The desk has no grade with this id." });
+  it("refuses an id the desk does not know, without saying it was never charged", async () => {
+    const read = reader(new Response(JSON.stringify({ error: "No grade with that id." }), { status: 404 })).getGrade(id);
+    await expect(read).rejects.toThrow(/^The desk has no grade with this id\. Check the id: it must be one that brainchain_grade returned\.$/);
   });
 
   it("asks again later when the desk is busy", async () => {
@@ -121,7 +121,10 @@ describe("checkGrade", () => {
     expect(() => checkGrade({ ...request, levels: ["only one"] })).toThrow(/2 to 5 quality levels/);
     expect(() => checkGrade({ ...request, levels: ["Good", "Good"] })).toThrow(/repeats/);
     expect(() => checkGrade({ ...request, pass: 0 })).toThrow(/pass needs levels/);
-    expect(() => checkGrade({ ...request, levels: ["A", "B", "C"], pass: 2 })).toThrow(/from 0 to 1/);
+    expect(() => checkGrade({ ...request, levels: ["A", "B", "C"], pass: 2 })).toThrow("pass must be a whole number from 0 to 1: the last level never passes.");
+    expect(() => checkGrade({ ...request, levels: ["A", "B"], pass: 1 })).toThrow(/^pass must be 0 with two levels: the last level never passes\.$/);
+    expect(checkGrade({ ...request, levels: ["A", "B"], pass: 0 }).pass).toBe(0);
+    expect(() => checkGrade({ ...request, levels: ["Same", "same ", "Other"] })).toThrow("levels[1] repeats levels[0]; each level must describe a different quality.");
   });
 });
 
@@ -161,7 +164,7 @@ describe("a grade's money", () => {
     const d = desk(fetchImpl);
     const { grade } = (await d.grade(request)) as { grade: string };
     later();
-    expect(await d.get(grade)).toMatchObject({ done: true, next: "Read it with brainchain_get_grade." });
+    await expect(d.get(grade)).rejects.toThrow("This id is a grade, not a task's order. Read it with brainchain_get_grade.");
     expect(d.spent()).toBe(250_000n);
   });
 
@@ -170,9 +173,7 @@ describe("a grade's money", () => {
     const d = desk(fetchImpl);
     const { grade } = (await d.grade(request)) as { grade: string };
     later();
-    const read = (await d.getGrade(grade)) as Record<string, unknown>;
-    expect(read).toMatchObject({ grade, done: true });
-    expect(read.next).toMatch(/never charged, so you can send it again/);
+    await expect(d.getGrade(grade)).rejects.toThrow("The desk has no grade with this id. This server sent it more than 15 minutes ago, so it was never charged, and it can be sent again.");
     expect(d.spent()).toBe(0n);
   });
 

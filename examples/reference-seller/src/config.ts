@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import type { Address, Hex } from "viem";
 
 import type { JudgeConfig } from "./judge.ts";
@@ -64,7 +66,8 @@ export function loadSettings(env: Record<string, string | undefined>, dry: boole
       token: lane.token,
       maxUnits,
       dailyUnits,
-      dir: value("SELLER_STATE_DIR") ?? "state",
+      // Next to the example, not wherever it was started from: a run from another folder would find no orders and a fresh day.
+      dir: value("SELLER_STATE_DIR") ?? fileURLToPath(new URL("../state", import.meta.url)),
       ...(dry ? {} : { key: key as Hex }),
     },
     worker,
