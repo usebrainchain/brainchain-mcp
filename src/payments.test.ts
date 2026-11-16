@@ -215,6 +215,19 @@ describe("posting", () => {
     }
   });
 
+  it("answers by its deadline when the desk sends its headers and then stalls the body", async () => {
+    for (const status of [202, 502]) {
+      const { fetchImpl, seen } = fakeDesk(() => new Response(new ReadableStream({ start() {} }), { status }));
+      const d = createDesk({ config, signer, approveCommand: "npx -y brainchain-mcp approve", fetch: fetchImpl, postTimeoutMs: 300 });
+      const started = Date.now();
+      const reply = (await d.post(task)) as { order: string; possiblyCharged?: boolean };
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(reply.order).toBe(orderIdOf(seen[0]!));
+      expect(reply.possiblyCharged).toBe(status === 202 ? undefined : true);
+      expect(d.spent()).toBe(1_000_000n);
+    }
+  });
+
   it("releases the budget when the desk rejects the request", async () => {
     const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "brief must be 1 to 32,000 characters." }), { status: 400 }));
     const d = desk(fetchImpl);

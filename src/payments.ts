@@ -99,7 +99,12 @@ const RETRY_LATER = new Set([408, 425, 429]);
 
 /** Settles as `work` does, or rejects once `signal` aborts. */
 function until<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
-  return Promise.race([work, new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }))]);
+  const aborted = new Promise<never>((_, reject) => {
+    // A signal that has already aborted fires no event.
+    if (signal.aborted) reject(signal.reason);
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+  return Promise.race([work, aborted]);
 }
 
 /** Retry-After in seconds, from either form the header takes. */
@@ -353,13 +358,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
         body: JSON.stringify(body),
       });
     } catch (error) {
+      clearTimeout(timer);
       if (signed) return possiblyCharged(kind, receipt(orderIdOf(signed)), `The desk did not confirm the ${kind === "task" ? "order" : "grade"} (${firstLine(error)}).`);
       throw new Error(await explainUnsigned(kind, error));
-    } finally {
-      clearTimeout(timer);
     }
-
-    const reply = (await jsonObject(response)) ?? {};
+    // A desk or proxy can send its headers and then stall, so the deadline holds until the body is read.
+    const reply = (await until(deadline.signal, jsonObject(response)).catch(() => undefined)) ?? {};
+    clearTimeout(timer);
     const idOf = (fallback: string) => (kind === "task" ? (typeof reply.order === "string" ? reply.order : fallback) : typeof reply.grade === "string" ? reply.grade : fallback);
     if (response.ok) {
       if (!signed) {
