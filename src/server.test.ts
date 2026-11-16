@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
 import { guidance } from "./payments.js";
-import { approvalFailure, approvalUnconfirmed, approveCommand, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
+import { approvalFailure, approvalUnconfirmed, approveCommand, createServer, INSTRUCTIONS, pastedKey, payerAccount, walletReport, type ServerOptions } from "./server.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_GRADE_NAME, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
@@ -314,6 +314,22 @@ describe("payerAccount", () => {
     expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "  " })).toThrow(/Set BRAINCHAIN_PAYER_KEY/);
     expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "0x1234" })).toThrow(/64 hex characters/);
     expect(() => payerAccount({ BRAINCHAIN_PAYER_KEY: "0".repeat(64) })).toThrow(/not a valid private key/);
+  });
+});
+
+describe("pastedKey", () => {
+  it("never repeats an argument that looks like a private key, and says the key is exposed", () => {
+    for (const args of [[KEY], ["wallet", `0x${KEY}`], ["approve", ` 0X${KEY.toUpperCase()} `], ["approve", "5", KEY], [`BRAINCHAIN_PAYER_KEY=0x${KEY}`], ["wallet 0x" + KEY]]) {
+      const said = pastedKey(args)!;
+      expect(said).toContain("looks like a private key");
+      expect(said).toContain("shell history");
+      expect(said).toContain("move the wallet's funds to a new key");
+      expect(said.toLowerCase()).not.toContain(KEY);
+    }
+  });
+
+  it("leaves other arguments alone", () => {
+    for (const args of [[], ["wallet"], ["approve", "max"], ["approve", "100.5"], [KEY.slice(1)], [`${KEY}0`], [`0x${"g".repeat(64)}`]]) expect(pastedKey(args)).toBeUndefined();
   });
 });
 

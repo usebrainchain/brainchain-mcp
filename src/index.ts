@@ -7,7 +7,7 @@ import { createWalletClient, http, maxUint256, type Hex, type PrivateKeyAccount 
 import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
 import { erc20 } from "./payments.js";
-import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, payerAccount, PERMIT2, walletFunds, walletReport } from "./server.js";
+import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, pastedKey, payerAccount, PERMIT2, walletFunds, walletReport } from "./server.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -47,6 +47,8 @@ function fail(message: string): never {
   process.exit(1);
 }
 
+const pasted = pastedKey(process.argv.slice(2));
+if (pasted) fail(pasted);
 const command = process.argv[2];
 const HELP = ["--help", "-h", "help"];
 if ((command !== undefined && HELP.includes(command)) || (["approve", "wallet"].includes(command ?? "") && HELP.includes(process.argv[3] ?? ""))) {

@@ -70,6 +70,15 @@ export function payerAccount(env: Record<string, string | undefined>): PrivateKe
   }
 }
 
+/** A private key typed as an argument is never printed back: by now it is in the shell's history. */
+export function pastedKey(args: readonly string[]): string | undefined {
+  if (!args.some((arg) => /(^|[^0-9a-f])[0-9a-f]{64}($|[^0-9a-f])/i.test(arg))) return undefined;
+  return (
+    "An argument looks like a private key, so it is not printed here. It is now in your shell history, and may be in this terminal's scrollback or a session transcript: " +
+    "treat it as exposed, move the wallet's funds to a new key and stop using this one. brainchain-mcp reads its key from BRAINCHAIN_PAYER_KEY_FILE or BRAINCHAIN_PAYER_KEY, never from an argument."
+  );
+}
+
 /** What a failed `approve` should tell a person. viem says the cost "exceeds the balance"; nodes say "insufficient funds". */
 export function approvalFailure(address: string, chain: string, error: unknown): string {
   const message = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
