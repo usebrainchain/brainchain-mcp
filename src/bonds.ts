@@ -346,16 +346,23 @@ export function createBonds(options: BondsOptions): Bonds {
     }
   }
 
-  /** One call at a time per task: two would both pass the open-bond check before either bond exists. */
+  /** A second call on a task is refused rather than queued: both would pass the open-bond check before either bond exists. */
   const placing = new Set<bigint>();
+  /**
+   * Bonds are placed one at a time. Each transaction takes its nonce from the node, so two sent together
+   * collide, and an approval sized to one bond would be overwritten by the next before it is spent.
+   */
+  let queue: Promise<unknown> = Promise.resolve();
 
   return {
     async bond(task, amount) {
       const c = connected();
       if (placing.has(task)) throw new Error(`This server is already placing a bond on task ${task}. Wait for that call's reply; this call bonded nothing.`);
       placing.add(task);
+      const turn = queue.then(() => place(c, task, amount));
+      queue = turn.catch(() => undefined);
       try {
-        return await place(c, task, amount);
+        return await turn;
       } catch (error) {
         // A bond that may have been sent answers instead of throwing, so whatever is thrown bonded nothing.
         const said = sentence(firstLine(error));

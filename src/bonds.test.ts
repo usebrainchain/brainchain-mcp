@@ -280,7 +280,7 @@ describe("bond", () => {
     expect(after.limits.spent()).toBe(0n);
   });
 
-  it("refuses a second bond on a task while the first is being placed, and sends one", async () => {
+  it("refuses a second bond on a task while the first is being placed, and places a bond on another task after it", async () => {
     let release = () => {};
     const gate = new Promise<void>((resolve) => (release = resolve));
     const chain = fakeChain({ task: task() });
@@ -291,16 +291,29 @@ describe("bond", () => {
     const { bonds, limits } = setup(chain);
     const first = bonds.bond(12n, USDG(2));
     await expect(bonds.bond(12n, USDG(2))).rejects.toThrow("This server is already placing a bond on task 12. Wait for that call's reply; this call bonded nothing.");
-    // Another task is not held up.
+    // Another task waits its turn: the two bonds would share the wallet's nonces and its allowance.
     const other = bonds.bond(13n, USDG(2));
+    await vi.waitFor(() => expect(chain.create).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect([chain.task.mock.calls.length, chain.approve.mock.calls.length]).toEqual([1, 1]);
     release();
     expect(await first).toMatchObject({ bond: "7", task: "12" });
     expect(await other).toMatchObject({ task: "13" });
-    expect(chain.create).toHaveBeenCalledTimes(2);
+    expect(chain.create.mock.calls.map(([terms]) => terms.title)).toEqual(["BrainChain task #12", "BrainChain task #13"]);
     expect(limits.spent()).toBe(USDG(4));
     // Once the first call has answered, the task is free for the chain's own open-bond check.
     await bonds.bond(12n, USDG(2));
     expect(chain.create).toHaveBeenCalledTimes(3);
+  });
+
+  it("places the next bond after one that failed", async () => {
+    const chain = fakeChain({ task: task() });
+    chain.create.mockRejectedValueOnce(new Error(`The bond ${TX} reverted. Nothing was bonded.`));
+    const { bonds, limits } = setup(chain);
+    const [failed, placed] = await Promise.allSettled([bonds.bond(12n, USDG(2)), bonds.bond(13n, USDG(2))]);
+    expect(failed).toMatchObject({ status: "rejected", reason: new Error(`The bond ${TX} reverted. Nothing was bonded.`) });
+    expect(placed).toMatchObject({ status: "fulfilled", value: { bond: "7", task: "13" } });
+    expect(limits.spent()).toBe(USDG(2));
   });
 
   it("refuses to bond when the desk names the payer for another task board", async () => {
