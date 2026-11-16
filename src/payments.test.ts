@@ -255,8 +255,44 @@ describe("posting", () => {
       const refuse = (async () => new Response(JSON.stringify({ error }), { status: 400 })) as typeof fetch;
       await expect(desk(refuse).post(task)).rejects.toThrow(said);
     }
-    const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "insufficient_funds" }), { status: 402 }));
-    await expect(desk(fetchImpl).post(task)).rejects.toThrow("The desk refused the payment: insufficient_funds. Nothing was charged.");
+    const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "invalid_exact_evm_nonce_already_used" }), { status: 402 }));
+    await expect(desk(fetchImpl).post(task)).rejects.toThrow("The desk refused the payment: invalid_exact_evm_nonce_already_used. Nothing was charged.");
+  });
+
+  it("explains the desk's balance and allowance codes as the wallet's own figures would when the chain cannot be read", async () => {
+    const short = `The paying wallet holds less than the 1 test USDG a task costs on Robinhood Chain testnet. Nothing was charged. Send test USDG to ${signer.address} on Robinhood Chain testnet, then post again.`;
+    const unapproved = "Permit2 is not yet approved to spend this wallet's test USDG. Run `npx -y brainchain-mcp approve` once with the key this server uses; it needs a little ETH on Robinhood Chain testnet. Nothing was charged.";
+    const down = async () => Promise.reject(new Error("HTTP request failed.\n\nURL: http://127.0.0.1:47011"));
+    for (const [code, said] of [
+      ["permit2_insufficient_balance", short],
+      ["insufficient_funds", short],
+      ["invalid_exact_evm_insufficient_balance", short],
+      ["permit2_allowance_required", unapproved],
+      ["insufficient_allowance", unapproved],
+      ["invalid_exact_evm_payload_signature", "The desk refused the payment: invalid_exact_evm_payload_signature. Nothing was charged."],
+    ]) {
+      const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: code }), { status: 402 }));
+      for (const funds of [down, undefined]) {
+        const d = createDesk({ config, signer, approveCommand: "npx -y brainchain-mcp approve", fetch: fetchImpl, ...(funds ? { funds } : {}) });
+        await expect(d.post(task)).rejects.toThrow(said);
+        expect(d.spent()).toBe(0n);
+      }
+    }
+  });
+
+  it("names a grade's own price when the desk refuses one for the balance and its price cannot be read", async () => {
+    const grade = { brief: "Sort 3, 1 and 2.", result: "1, 2, 3" };
+    // The desk challenges the grade, then refuses the payment and answers nothing to a second look at its price.
+    let asked = 0;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      if (request.method === "GET") return noOrder();
+      if (request.headers.get("payment-signature")) return new Response(JSON.stringify({ error: "permit2_insufficient_balance" }), { status: 402 });
+      if (asked++ > 0) throw new TypeError("fetch failed");
+      return new Response("{}", { status: 402, headers: { "payment-required": challenge({ amount: "250000" }) } });
+    }) as typeof fetch;
+    const d = createDesk({ config, signer, approveCommand: "unused", fetch: fetchImpl, funds: async () => ({ balance: 100_000n, allowance: 0n }) });
+    await expect(d.grade(grade)).rejects.toThrow(`The paying wallet holds 0.1 test USDG on Robinhood Chain testnet; a grade costs 0.25. Nothing was charged. Send at least 0.15 test USDG to ${signer.address}`);
   });
 
   it("keeps the desk's reason when the amount cannot be given back, and leaves it counted", async () => {

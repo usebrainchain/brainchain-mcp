@@ -216,27 +216,28 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     return `The payment could not be prepared: ${sentence(message.replace(/^Failed to create payment payload: /, ""))} Nothing was charged.`;
   }
 
-  /** Explains a payment the desk refused, from the wallet's balance and Permit2 allowance where possible. */
+  /**
+   * Explains a payment the desk refused, from the wallet's balance and Permit2 allowance where they can be read,
+   * and from the desk's own code where they cannot.
+   */
   async function explainRefusal(kind: Kind, reason: unknown): Promise<string> {
-    const fallback =
-      typeof reason === "string" && reason.trim() ? `The desk refused the payment: ${sentence(reason)} Nothing was charged.` : "The desk refused the payment. Nothing was charged.";
-    if (!options.funds) return fallback;
-    try {
-      // One deadline for both reads, so a slow chain cannot hold the reply.
-      const deadline = AbortSignal.timeout(10_000);
-      const [{ balance, allowance }, quoted] = await until(deadline, Promise.all([options.funds(), quotedPrice(kind, deadline)]));
-      const needed = quoted ?? PRICE[kind];
-      if (balance < needed) {
-        const { address } = account();
-        return `The paying wallet holds ${formatUnits(balance)} ${config.token} on ${config.chain}; a ${kind} costs ${formatUnits(needed)}. Nothing was charged. Send at least ${formatUnits(needed - balance)} ${config.token} to ${address} on ${config.chain}, then ${kind === "task" ? "post again" : "send it again"}.`;
-      }
-      if (config.permit2 && allowance !== undefined && allowance < needed) {
-        return `Permit2 is not yet approved to spend this wallet's ${config.token}. Run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on ${config.chain}. Nothing was charged.`;
-      }
-    } catch {
-      // The chain read failed or ran out of time; the desk's own reason is the best explanation left.
+    const code = typeof reason === "string" ? reason.trim() : "";
+    // One deadline for both reads, so a slow chain cannot hold the reply, and either can fail without the other.
+    const deadline = AbortSignal.timeout(10_000);
+    const [funds, quoted] = await Promise.all([options.funds ? until(deadline, options.funds()).catch(() => undefined) : undefined, quotedPrice(kind, deadline)]);
+    const needed = quoted ?? PRICE[kind];
+    const again = kind === "task" ? "post again" : "send it again";
+    const unapproved = `Permit2 is not yet approved to spend this wallet's ${config.token}. Run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on ${config.chain}. Nothing was charged.`;
+    if (funds && funds.balance < needed) {
+      return `The paying wallet holds ${formatUnits(funds.balance)} ${config.token} on ${config.chain}; a ${kind} costs ${formatUnits(needed)}. Nothing was charged. Send at least ${formatUnits(needed - funds.balance)} ${config.token} to ${account().address} on ${config.chain}, then ${again}.`;
     }
-    return fallback;
+    if (funds && config.permit2 && funds.allowance !== undefined && funds.allowance < needed) return unapproved;
+    // The wallet's own figures win over the desk's code; without them the code says which it was.
+    if (!funds && /insufficient_(balance|funds)$/.test(code)) {
+      return `The paying wallet holds less than the ${formatUnits(needed)} ${config.token} a ${kind} costs on ${config.chain}. Nothing was charged. Send ${config.token} to ${account().address} on ${config.chain}, then ${again}.`;
+    }
+    if (!funds && config.permit2 && /allowance/.test(code)) return unapproved;
+    return code ? `The desk refused the payment: ${sentence(code)} Nothing was charged.` : "The desk refused the payment. Nothing was charged.";
   }
 
   function possiblyCharged(kind: Kind, receipt: Record<string, unknown>, cause: string): Record<string, unknown> {
