@@ -152,7 +152,7 @@ export function postTaskTool(terms: Terms | string): Tool {
 const GRADE_INPUT: Tool["inputSchema"] = {
   type: "object",
   properties: {
-    brief: { type: "string", minLength: 1, maxLength: 32000, description: "What the work had to do, as the worker was told. Jev knows nothing else about the job. Up to 32,000 characters, an emoji counting as two." },
+    brief: { type: "string", minLength: 1, maxLength: 32000, description: `What the work had to do, as the worker was told. Jev knows nothing else about the job. Up to 32,000 UTF-16 units: ${UNITS}.` },
     result: { type: "string", minLength: 1, description: "The delivered work as text, at most 100,000 bytes." },
     title: { type: "string", minLength: 1, maxLength: 120, description: "Optional: one line naming the job." },
     levels: {

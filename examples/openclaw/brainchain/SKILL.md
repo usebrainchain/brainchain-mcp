@@ -16,7 +16,7 @@ metadata:
             { "name": "BRAINCHAIN_PAYER_KEY_FILE", "required": true, "description": "Path of the file holding the paying wallet's private key. Set in the brainchain MCP server's env and read only by that server." },
             { "name": "BRAINCHAIN_PAY_ON", "required": false, "description": "Where the server pays: robinhood (USDG, the default) or base (USDC)." },
             { "name": "BRAINCHAIN_NETWORK", "required": false, "description": "mainnet (the default) or testnet." },
-            { "name": "BRAINCHAIN_MAX_PRICE_UNITS", "required": false, "description": "The most the server pays for one task, in units of 0.000001." },
+            { "name": "BRAINCHAIN_MAX_PRICE_UNITS", "required": false, "description": "The most the server pays for one task or grade, in units of 0.000001." },
             { "name": "BRAINCHAIN_BUDGET_UNITS", "required": false, "description": "The most the server pays while it runs, in units of 0.000001." },
             { "name": "BRAINCHAIN_DAILY_UNITS", "required": false, "description": "The most the wallet pays per UTC day on either chain, in units of 0.000001." },
           ],

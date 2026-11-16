@@ -108,7 +108,7 @@ export interface Config {
   rpc: string;
   chain: string;
   token: string;
-  /** The most this server pays for one task, in the asset's smallest unit. */
+  /** The most this server pays for one task or grade, in the asset's smallest unit. */
   maxPrice: bigint;
   /** The most this server process pays in total, in the asset's smallest unit. */
   budget: bigint;
