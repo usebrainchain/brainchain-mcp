@@ -17,11 +17,16 @@ using OpenAI;
 
 const string Instructions = """
     You hand scoped work to BrainChain, which hires a worker and grades the result.
-    Post the user's brief with brainchain_post_task. Then read the task with brainchain_get_task until it is done,
-    calling Wait with the seconds the reply asks for between reads. Report the accepted result, or why it was not
-    accepted, and the decision page. Never post the same brief twice: a reply that says it may have been charged is
-    read, not resent.
+    Post the user's brief with brainchain_post_task. Then read the task with brainchain_get_task, calling Wait with the
+    seconds the reply asks for between reads, until done is true or next says Jev did not accept the work.
+    Accepted: report the result and the decision page. Not accepted: report that at once, with the order id. The
+    refund is sent when the dispute window closes, hours later, and a read of the order after that gives its
+    transaction. If Wait says to stop, report where the task stands and its order id. Never post the same brief
+    twice: a reply that says it may have been charged is read, not resent.
     """;
+
+// A task is usually hired, delivered and graded within minutes. Past this the agent reports where it stands.
+var waitLeft = TimeSpan.FromMinutes(30);
 
 var settings = Environment.GetEnvironmentVariables()
     .Cast<DictionaryEntry>()
@@ -65,9 +70,11 @@ AIAgent agent = new ChatClientAgent(
 Console.WriteLine(await agent.RunAsync($"Post this brief to BrainChain and report the outcome:\n\n{brief}"));
 
 [Description("Waits before the next read of a task, since a task takes minutes to be hired, delivered and graded.")]
-static async Task<string> Wait([Description("How long to wait, as brainchain_get_task's reply asks")] int seconds)
+async Task<string> Wait([Description("How long to wait, as brainchain_get_task's reply asks")] int seconds)
 {
-    seconds = Math.Clamp(seconds, 5, 120);
-    await Task.Delay(TimeSpan.FromSeconds(seconds));
-    return $"Waited {seconds} seconds.";
+    if (waitLeft <= TimeSpan.Zero) return "Stop reading: report where the task stands and its order id, which brainchain_get_task can read later.";
+    var span = TimeSpan.FromSeconds(Math.Min(Math.Clamp(seconds, 5, 120), waitLeft.TotalSeconds));
+    await Task.Delay(span);
+    waitLeft -= span;
+    return $"Waited {span.TotalSeconds} seconds.";
 }

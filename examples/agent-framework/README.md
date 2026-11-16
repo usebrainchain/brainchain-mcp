@@ -39,4 +39,7 @@ the sample's path: `python path/to/python/brainchain_agent.py --list-tools` or
 
 The agent gets two of the server's tools, `brainchain_post_task` and `brainchain_get_task`, and a `wait` tool of
 its own, because a task takes a few minutes to be hired, delivered and graded. It reports the accepted result and
-the task's page. Add the other tools by name in `allowed_tools` (Python) or the tool filter (.NET).
+the decision page. Work BrainChain does not accept is reported at once, with the order id: its refund is sent when
+the dispute window closes, hours later, and a read of the order after that gives the transaction. The `wait` tool
+stops after half an hour in all, so a run always ends with a report. Add the other tools by name in `allowed_tools`
+(Python) or the tool filter (.NET).
