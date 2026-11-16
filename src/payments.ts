@@ -3,7 +3,7 @@ import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { keccak256, parseAbi, RpcRequestError, toBytes } from "viem";
 
-import { formatUnits, MAX_TIMEOUT_SECONDS, REPOST_AFTER_MINUTES, type Config } from "./config.js";
+import { formatUnits, MAX_TIMEOUT_SECONDS, PRICE, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { createLimits, type Hold, type Limits } from "./limits.js";
 import type { Desk, GradeRequest, TaskRequest } from "./tools.js";
 
@@ -225,7 +225,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       // One deadline for both reads, so a slow chain cannot hold the reply.
       const deadline = AbortSignal.timeout(10_000);
       const [{ balance, allowance }, quoted] = await until(deadline, Promise.all([options.funds(), quotedPrice(kind, deadline)]));
-      const needed = quoted ?? config.maxPrice;
+      const needed = quoted ?? PRICE[kind];
       if (balance < needed) {
         const { address } = account();
         return `The paying wallet holds ${formatUnits(balance)} ${config.token} on ${config.chain}; a ${kind} costs ${formatUnits(needed)}. Nothing was charged. Send at least ${formatUnits(needed - balance)} ${config.token} to ${address} on ${config.chain}, then ${kind === "task" ? "post again" : "send it again"}.`;

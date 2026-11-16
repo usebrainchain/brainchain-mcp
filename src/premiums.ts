@@ -32,6 +32,7 @@ export const PREMIUMS_TOOL: Tool = {
     "Prices are in USDG per token with each token's split multiplier applied. A stock that cannot be priced just now is listed under unpriced, with the reason. " +
     "Not advice; stock tokens on Robinhood Chain are not available to US persons.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  annotations: { readOnlyHint: true, openWorldHint: true },
 };
 
 export interface StockPremium {

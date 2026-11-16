@@ -23,7 +23,7 @@ describe("resolveConfig", () => {
       chain: "Base",
       permit2: false,
     });
-    expect(config.terms).toEqual({ cost: "1 USDC", chain: "Base", finalAfter: "about six hours" });
+    expect(config.terms).toEqual({ cost: "1 USDC", gradeCost: "0.25 USDC", chain: "Base", finalAfter: "about six hours" });
   });
 
   it("pairs testnet with Base Sepolia", () => {

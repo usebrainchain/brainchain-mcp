@@ -431,6 +431,19 @@ describe("wallet", () => {
     );
   });
 
+  it("names the desk's price under a lower price limit, and says posts will be refused", () => {
+    const capped = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_MAX_PRICE_UNITS: "500000" });
+    expect(walletReport(capped, address, { balance: 0n, allowance: 0n, eth: 0n }, approve)).toBe(
+      [
+        `${address} pays for tasks in test USDG on Robinhood Chain testnet.`,
+        "BRAINCHAIN_MAX_PRICE_UNITS lets this server pay at most 0.5 test USDG at a time, under the 1 test USDG a task costs, so posts will be refused until it is raised.",
+        "It holds 0 test USDG. A task costs 1 test USDG, so send at least 1 test USDG to it on Robinhood Chain testnet before posting.",
+        `Permit2 is not approved to spend enough of its test USDG for a task. Run \`${approve}\` once; it needs a little ETH on Robinhood Chain testnet, and the wallet holds 0 ETH there.`,
+      ].join("\n"),
+    );
+    expect(walletReport(capped, address, new Error("HTTP request failed."), approve)).toContain("could not be read from Robinhood Chain testnet (HTTP request failed.). The key is fine.");
+  });
+
   it("prints an approve command that finds a key kept in a file", () => {
     const fromFile = approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "~/.brainchain/payer.key" });
     expect(walletReport(testnet, address, { balance: 1_000_000n, allowance: 0n, eth: 0n }, fromFile)).toContain(

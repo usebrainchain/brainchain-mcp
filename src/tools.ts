@@ -8,8 +8,12 @@ import { MIN_BOND, MISSED_TO } from "./shipped.js";
 
 /** What the post tool tells the model about cost and settlement on the configured network. */
 export interface Terms {
-  /** For example "1 USDG" or "at most 2 USDG". */
+  /** For example "1 USDG", or "at most 2 USDG" under a raised BRAINCHAIN_MAX_PRICE_UNITS. */
   cost: string;
+  /** The same for a grade, for example "0.25 USDG". */
+  gradeCost: string;
+  /** Set when BRAINCHAIN_MAX_PRICE_UNITS is under the desk's price: why posts, and grades if their price is above it too, are refused. */
+  refuses?: { task?: string; grade?: string };
   /** Where the payment is taken and refunds land, for example "Robinhood Chain". */
   chain: string;
   /** How long after grading the payment or refund becomes final, for example "about six hours". */
@@ -130,7 +134,7 @@ export function postTaskTool(terms: Terms | string): Tool {
         ? `Invalid setting: ${terms} Until then this tool only returns that error. ${about}`
         : (terms.problem ? `Invalid setting: ${terms.problem} Until the operator fixes it, this tool only returns that error. ` : "") +
           about +
-          `Each task costs ${terms.cost}, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. The result is delivered only if Jev accepts the work. If Jev rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. If no model delivers within 24 hours, the full amount is refunded. ` +
+          `Each task costs ${terms.cost}, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. ${terms.refuses?.task ? `${terms.refuses.task} ` : ""}The result is delivered only if Jev accepts the work. If Jev rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. If no model delivers within 24 hours, the full amount is refunded. ` +
           `Returns an order id for ${GET_TASK_NAME}; results usually arrive within minutes. If the reply says possiblyCharged, do not post the task again: read the order with ${GET_TASK_NAME}. ` +
           `While this server keeps running, an identical post within ${REPOST_AFTER_MINUTES} minutes returns the first post's order, marked duplicate, instead of paying again, unless ${GET_TASK_NAME} has read that order's payment as failed.`,
     inputSchema: POST_TASK_INPUT,
@@ -159,7 +163,7 @@ const GRADE_INPUT: Tool["inputSchema"] = {
 };
 
 /** Grading work delivered elsewhere: a market whose poster approves the work can read Jev's verdict first. */
-export function gradeTool(terms: Terms | string, maxPrice: string): Tool {
+export function gradeTool(terms: Terms | string): Tool {
   const about =
     `Have Jev grade work delivered somewhere else, such as a job on another agent market, against the brief it answered. ` +
     `Returns Jev's verdict: whether the work passes, the probability it reaches a passing level (the lower of Jev's and a second model's), and a public decision record. ` +
@@ -173,11 +177,12 @@ export function gradeTool(terms: Terms | string, maxPrice: string): Tool {
         ? `Invalid setting: ${terms} Until then this tool only returns that error. ${about}`
         : (terms.problem ? `Invalid setting: ${terms.problem} Until the operator fixes it, this tool only returns that error. ` : "") +
           about +
-          `Each grade is paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, at most ${maxPrice} under this server's limit, and counts against its budget. ` +
+          `Each grade costs ${terms.gradeCost} whatever the verdict, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, and counts against its budget and daily limit. ` +
+          (terms.refuses?.grade ? `${terms.refuses.grade} ` : "") +
           `Jev usually answers within seconds; if the reply is not done, read it with ${GET_GRADE_NAME}. If the reply says possiblyCharged, do not send it again: read it with ${GET_GRADE_NAME}. ` +
           `While this server keeps running, an identical request within ${REPOST_AFTER_MINUTES} minutes returns the first grade, marked duplicate, instead of paying again.`,
     inputSchema: GRADE_INPUT,
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   };
 }
 

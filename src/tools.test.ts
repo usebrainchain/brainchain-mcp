@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 
 import { formatUnits, resolveConfig } from "./config.js";
 import type { Bonds } from "./bonds.js";
-import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
+import { PREMIUMS_TOOL } from "./premiums.js";
+import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_GRADE_TOOL, GET_TASK_NAME, GET_TASK_TOOL, gradeTool, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
 
 const desk: Desk = {
   post: async (task) => ({ order: "0x01", task }),
@@ -316,6 +317,40 @@ describe("post tool and config", () => {
     const config = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
     expect(config).toMatchObject({ desk: "https://brain.testnet.usebrainchain.com", network: "eip155:46630", chainId: 46630 });
     expect(postTaskTool(config.terms).description).toContain("1 test USDG");
+  });
+
+  it("names the desk's prices, and says posts and grades are refused under a lower price limit", () => {
+    const tools = (env: Record<string, string>) => {
+      const { terms } = resolveConfig(env);
+      return [postTaskTool(terms).description!, gradeTool(terms).description!];
+    };
+    const [post, grade] = tools({});
+    expect(post).toContain("Each task costs 1 USDG, paid from this server's wallet on Robinhood Chain. The result");
+    expect(grade).toContain("Each grade costs 0.25 USDG whatever the verdict, paid from this server's wallet on Robinhood Chain, and counts against its budget and daily limit.");
+    for (const text of [post, grade]) expect(text).not.toContain("refused");
+
+    const [cheapPost, cheapGrade] = tools({ BRAINCHAIN_MAX_PRICE_UNITS: "500000" });
+    expect(cheapPost).toContain(
+      "Each task costs 1 USDG, paid from this server's wallet on Robinhood Chain. This server pays at most 0.5 USDG at a time (BRAINCHAIN_MAX_PRICE_UNITS), under that price, so posts are refused and nothing is charged until the operator raises it.",
+    );
+    expect(cheapPost).not.toContain("at most 0.5 USDG, paid");
+    expect(cheapGrade).toContain("Each grade costs 0.25 USDG whatever the verdict");
+    expect(cheapGrade).not.toContain("refused");
+
+    const [, cheaperGrade] = tools({ BRAINCHAIN_MAX_PRICE_UNITS: "100000", BRAINCHAIN_PAY_ON: "base" });
+    expect(cheaperGrade).toContain("Each grade costs 0.25 USDC whatever the verdict, paid from this server's wallet on Base, and counts against its budget and daily limit. This server pays at most 0.1 USDC at a time (BRAINCHAIN_MAX_PRICE_UNITS), under that price, so grades are refused");
+
+    // Under a raised ceiling the desk may have raised its prices too, so both are named up to the ceiling.
+    const [raisedPost, raisedGrade] = tools({ BRAINCHAIN_MAX_PRICE_UNITS: "2500000" });
+    expect(raisedPost).toContain("Each task costs at most 2.5 USDG");
+    expect(raisedGrade).toContain("Each grade costs at most 2.5 USDG");
+  });
+
+  it("marks every tool that spends as destructive and every free read as read-only", () => {
+    const { terms } = resolveConfig({});
+    const [bond, status] = bondTools({ maxBond: 10_000_000n }, "0xabc");
+    for (const tool of [postTaskTool(terms), gradeTool(terms), bond]) expect(tool.annotations).toEqual({ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
+    for (const tool of [GET_TASK_TOOL, GET_GRADE_TOOL, PREMIUMS_TOOL, status]) expect(tool.annotations).toEqual({ readOnlyHint: true, openWorldHint: true });
   });
 
   it("lets single overrides win over the preset", () => {

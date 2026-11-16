@@ -88,8 +88,8 @@ export const MAX_TIMEOUT_SECONDS = 600;
  * recorded any order it charged.
  */
 export const REPOST_AFTER_MINUTES = 15;
-/** The desk's price for a task. A higher BRAINCHAIN_MAX_PRICE_UNITS is a ceiling, not what a task costs. */
-export const DEFAULT_MAX_PRICE = 1_000_000n;
+/** What the desk asks for a task and for a grade. A higher BRAINCHAIN_MAX_PRICE_UNITS is a ceiling, not what either costs. */
+export const PRICE = { task: 1_000_000n, grade: 250_000n } as const;
 const DEFAULT_BUDGET = 10_000_000n;
 const DEFAULT_MAX_BOND = 10_000_000n;
 
@@ -188,7 +188,7 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
   const network = envString(env, "BRAINCHAIN_PAYMENT_NETWORK") ?? preset.network;
   const match = /^eip155:(\d+)$/.exec(network);
   if (!match) throw new Error("BRAINCHAIN_PAYMENT_NETWORK must look like eip155:<chain id>.");
-  const maxPrice = envUnits(env, "BRAINCHAIN_MAX_PRICE_UNITS", DEFAULT_MAX_PRICE);
+  const maxPrice = envUnits(env, "BRAINCHAIN_MAX_PRICE_UNITS", PRICE.task);
   const budget = envUnits(env, "BRAINCHAIN_BUDGET_UNITS", DEFAULT_BUDGET);
   if (budget < maxPrice) throw new Error("BRAINCHAIN_BUDGET_UNITS must be at least BRAINCHAIN_MAX_PRICE_UNITS.");
   const daily = envString(env, "BRAINCHAIN_DAILY_UNITS") === undefined ? undefined : envUnits(env, "BRAINCHAIN_DAILY_UNITS", 0n);
@@ -196,6 +196,13 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
   const maxBond = envUnits(env, "BRAINCHAIN_MAX_BOND_UNITS", DEFAULT_MAX_BOND);
   if (maxBond < MIN_BOND) throw new Error(`BRAINCHAIN_MAX_BOND_UNITS must be at least ${MIN_BOND} (${formatUnits(MIN_BOND)} USDG), the smallest bond this server places.`);
   const bonds = BONDS[name];
+  // Under a raised ceiling the desk may have raised its prices too, so a cost is named only up to the ceiling.
+  const cost = (price: bigint) => (maxPrice > PRICE.task ? `at most ${formatUnits(maxPrice)} ${preset.token}` : `${formatUnits(price)} ${preset.token}`);
+  const refused = (price: bigint, what: string) =>
+    maxPrice < price
+      ? `This server pays at most ${formatUnits(maxPrice)} ${preset.token} at a time (BRAINCHAIN_MAX_PRICE_UNITS), under that price, so ${what} are refused and nothing is charged until the operator raises it.`
+      : undefined;
+  const refuses = { task: refused(PRICE.task, "posts"), grade: refused(PRICE.grade, "grades") };
 
   return {
     name,
@@ -216,7 +223,9 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
     maxBond,
     ...(bonds ? { bonds } : {}),
     terms: {
-      cost: maxPrice === DEFAULT_MAX_PRICE ? `1 ${preset.token}` : `at most ${formatUnits(maxPrice)} ${preset.token}`,
+      cost: cost(PRICE.task),
+      gradeCost: cost(PRICE.grade),
+      ...(refuses.task ? { refuses } : {}),
       chain: preset.chain,
       finalAfter: preset.finalAfter,
     },

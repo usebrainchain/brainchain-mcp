@@ -189,7 +189,7 @@ Results usually arrive within minutes. A post reply with `possiblyCharged` means
 | `BRAINCHAIN_PAYER_KEY` | none | The key itself, in place of `BRAINCHAIN_PAYER_KEY_FILE`. A shell inherits variables, so the file is safer. |
 | `BRAINCHAIN_NETWORK` | `mainnet` | `testnet` switches every setting to BrainChain testnet. |
 | `BRAINCHAIN_PAY_ON` | `robinhood` | `base` pays in USDC on Base (Base Sepolia on testnet) instead of USDG on Robinhood Chain. |
-| `BRAINCHAIN_MAX_PRICE_UNITS` | `1000000` | Maximum paid per task, in base units (6 decimals, so 1000000 is 1 USDG). |
+| `BRAINCHAIN_MAX_PRICE_UNITS` | `1000000` | Maximum paid per task or grade, in base units (6 decimals, so 1000000 is 1 USDG). Under `1000000` every post is refused, since a task costs 1 USDG, and under `250000` every grade. |
 | `BRAINCHAIN_MAX_BOND_UNITS` | `10000000` | Maximum locked in one delivery bond with `brainchain_bond_task`, in base units, at least `2000000` (2 USDG). Bonds also draw on the budget and the daily limit. |
 | `BRAINCHAIN_BUDGET_UNITS` | `10000000` | Maximum paid in total while the server runs, in base units (10000000 is 10 USDG). |
 | `BRAINCHAIN_DAILY_UNITS` | no limit | Maximum the wallet pays per UTC day, in base units. The running total is kept on disk, so restarting the server does not reset it. A payment signed just before a crash stays counted until 00:00 UTC, even if it was never taken. |

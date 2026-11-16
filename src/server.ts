@@ -7,7 +7,7 @@ import { createPublicClient, defineChain, formatEther, http, maxUint256, WaitFor
 import { privateKeyToAccount } from "viem/accounts";
 
 import { bondsClosed, createBonds, type Bonds } from "./bonds.js";
-import { DEFAULT_MAX_PRICE, expandHome, formatUnits, resolveConfig, type Config } from "./config.js";
+import { expandHome, formatUnits, PRICE, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
 import { createLimits } from "./limits.js";
 import { createDesk, erc20, firstLine } from "./payments.js";
@@ -124,19 +124,26 @@ export async function walletFunds(config: Config, address: `0x${string}`): Promi
 /** What `wallet` says: the wallet that pays, what it holds, and what it still needs before a post can be paid. */
 export function walletReport(config: Config, address: string, funds: WalletFunds | Error, approve: string): string {
   const lines = [`${address} pays for tasks in ${config.token} on ${config.chain}.`];
+  const under = config.maxPrice < PRICE.task;
+  if (under) {
+    lines.push(
+      `BRAINCHAIN_MAX_PRICE_UNITS lets this server pay at most ${formatUnits(config.maxPrice)} ${config.token} at a time, under the ${formatUnits(PRICE.task)} ${config.token} a task costs, so posts will be refused until it is raised.`,
+    );
+  }
   if (funds instanceof Error) {
-    lines.push(`Its balance could not be read from ${config.chain} (${messageOf(funds).split("\n")[0]}). The key and settings are fine.`);
+    lines.push(`Its balance could not be read from ${config.chain} (${messageOf(funds).split("\n")[0]}). ${under ? "The key is fine." : "The key and settings are fine."}`);
     return lines.join("\n");
   }
   const { balance, allowance, eth } = funds;
   // Under a raised ceiling the wallet may still hold the price, so it is told what covers the ceiling, not what posting needs.
-  const ceiling = config.maxPrice !== DEFAULT_MAX_PRICE;
-  const missing = `send at least ${formatUnits(config.maxPrice - balance)} ${config.token} to it on ${config.chain}`;
-  const short = balance >= config.maxPrice ? "" : ceiling ? ` A task costs ${config.terms.cost}; ${missing} to cover that.` : ` A task costs ${config.terms.cost}, so ${missing} before posting.`;
+  const ceiling = config.maxPrice > PRICE.task;
+  const need = ceiling ? config.maxPrice : PRICE.task;
+  const missing = `send at least ${formatUnits(need - balance)} ${config.token} to it on ${config.chain}`;
+  const short = balance >= need ? "" : ceiling ? ` A task costs ${config.terms.cost}; ${missing} to cover that.` : ` A task costs ${config.terms.cost}, so ${missing} before posting.`;
   lines.push(`It holds ${formatUnits(balance)} ${config.token}.${short}`);
   if (allowance !== undefined) {
     if (allowance >= maxUint256 / 2n) lines.push(`Permit2 may spend any amount of its ${config.token}.`);
-    else if (allowance >= config.maxPrice) lines.push(`Permit2 may spend up to ${formatUnits(allowance)} of its ${config.token}.`);
+    else if (allowance >= need) lines.push(`Permit2 may spend up to ${formatUnits(allowance)} of its ${config.token}.`);
     else {
       const only = allowance > 0n ? ` (only ${formatUnits(allowance)})` : "";
       lines.push(
@@ -187,7 +194,7 @@ function deskFor(
       terms: problem,
       bonds: { bond: refuse, status: refuse },
       bondTools: bondTools({}, undefined, { bond: `Invalid setting: ${problem}`, status: `Invalid setting: ${problem}` }),
-      gradeTool: gradeTool(problem, ""),
+      gradeTool: gradeTool(problem),
       refused: new Map([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, BOND_TASK_NAME, BOND_STATUS_NAME].map((name) => [name, problem])),
     };
   }
@@ -229,7 +236,7 @@ function deskFor(
   return {
     desk,
     terms,
-    gradeTool: gradeTool(terms, `${formatUnits(config.maxPrice)} ${config.token}`),
+    gradeTool: gradeTool(terms),
     bonds: createBonds({ config, signer: payer, limits }),
     bondTools: bondTools(config, account?.address, { bond: problem ? `Invalid setting: ${problem}` : closed, status: keyProblem ? `Invalid setting: ${keyProblem}` : closed }),
     refused,
