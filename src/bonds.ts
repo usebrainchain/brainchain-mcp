@@ -25,7 +25,7 @@ import {
 import { formatUnits, type BondsConfig, type Config } from "./config.js";
 import type { Limits, Refusal } from "./limits.js";
 import { brief, erc20, firstLine, sentence } from "./payments.js";
-import { BOND_LEAD_SEC, BPS, bondTerms, CHECK_CONFIRM_SEC, CHECK_HOLD_SEC, DeedStatus, FEE_BPS, MIN_BOND, MISSED_TO, proofIndexAbi, shippedAbi, taskBoardAbi, taskOfCheck, TaskStatus, type BondTerms } from "./shipped.js";
+import { BPS, bondTerms, CHECK_CONFIRM_SEC, CHECK_HOLD_SEC, DeedStatus, FEE_BPS, MIN_BOND, MISSED_TO, proofIndexAbi, shippedAbi, taskBoardAbi, taskOfCheck, TaskStatus, type BondTerms } from "./shipped.js";
 
 /** Gas the transactions take, measured on a fork of Robinhood Chain, with room. */
 const GAS = { approve: 60_000n, create: 1_100_000n };
@@ -392,4 +392,3 @@ export function createBonds(options: BondsOptions): Bonds {
   };
 }
 
-export { BOND_LEAD_SEC };

@@ -64,8 +64,8 @@ export interface PremiumBoard {
 
 export type ChainReader = Pick<PublicClient, "readContract" | "multicall">;
 
-export function chainReader(rpc = ROBINHOOD_RPC): ChainReader {
-  return createPublicClient({ transport: http(rpc) });
+export function chainReader(): ChainReader {
+  return createPublicClient({ transport: http(ROBINHOOD_RPC) });
 }
 
 /** The regular NYSE session, 09:30 to 16:00 New York time, Monday to Friday; exchange holidays are not known here. */

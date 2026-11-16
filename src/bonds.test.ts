@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import { bondsClosed, createBondChain, createBonds, type BondChain, type BondView, type TaskFacts } from "./bonds.js";
 import { resolveConfig } from "./config.js";
 import { createLimits } from "./limits.js";
-import { BOND_LEAD_SEC, bondTerms, DeedStatus, encodeCheckData, proofIndexAbi, Ruling, shippedAbi, taskOfCheck, TaskStatus } from "./shipped.js";
+import { BOND_LEAD_SEC, bondTerms, DeedStatus, encodeCheckData, proofIndexAbi, shippedAbi, taskOfCheck, TaskStatus } from "./shipped.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
 const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -59,8 +59,7 @@ function setup(chain: BondChain, env: Record<string, string> = {}, fetchImpl: ty
 }
 
 describe("ShippedDeeds' enums", () => {
-  it("pins Ruling as the contract declares it: Conceded is 5 and CheckMet 7, and a state reads the settled split, never the ruling number", async () => {
-    expect(Ruling).toEqual({ None: 0, Accepted: 1, Rejected: 2, Partial: 3, Invalid: 4, Conceded: 5, Default: 6, CheckMet: 7 });
+  it("pins DeedStatus as the contract declares it, and a state reads the settled split, never the ruling number", async () => {
     expect(DeedStatus).toEqual({ None: 0, Open: 1, Ruled: 2, Appealed: 3, Settled: 4 });
     const { bonds } = setup(fakeChain({ bonds: [view({ status: DeedStatus.Settled, remainderBps: 10_000, settledAt: NOW }), view({ deed: 3n, status: DeedStatus.Settled, remainderBps: 0, settledAt: NOW })] }));
     const status = (await bonds.status(12n)) as { bonds: { state: string }[] };

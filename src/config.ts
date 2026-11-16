@@ -61,8 +61,7 @@ export interface BondsConfig {
   usdg: `0x${string}`;
   rpc: string;
   chain: string;
-  /** BrainChain itself, where the task is read. */
-  /** `retired` boards took bonds that can still be open, and task ids restart with each board. */
+  /** BrainChain itself, where the task is read. `retired` boards took bonds that can still be open, and task ids restart with each board. */
   brainchain: { rpc: string; chainId: number; board: `0x${string}`; retired?: `0x${string}`[] };
 }
 

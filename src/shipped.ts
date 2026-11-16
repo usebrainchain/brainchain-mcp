@@ -24,9 +24,8 @@ export const taskBoardAbi = parseAbi([
   "function get(uint256 id) view returns ((address poster, uint128 bounty, uint64 deadline, uint8 status, bool accepted, bool disputed, bool disputedByModel, bytes32 model, bytes32 briefHash, bytes32 resultHash, uint64 submittedAt, uint64 gradedAt, uint64 disputedAt, uint64 postedAt, address payee, address feeRecipient, uint16 feeBps, uint16 hireThresholdBps, uint16 gradeThresholdBps, uint16 ruleThresholdBps, uint64 gradeWindow, uint64 disputeWindow, uint64 ruleWindow))",
 ]);
 
-/** ShippedDeeds.Status and Ruling, as the contract declares them. */
+/** ShippedDeeds.Status, as the contract declares it. */
 export const DeedStatus = { None: 0, Open: 1, Ruled: 2, Appealed: 3, Settled: 4 } as const;
-export const Ruling = { None: 0, Accepted: 1, Rejected: 2, Partial: 3, Invalid: 4, Conceded: 5, Default: 6, CheckMet: 7 } as const;
 /** TaskBoard.Status. */
 export const TaskStatus = { Open: 1, Hired: 2, Paid: 6, Refunded: 7 } as const;
 export const BPS = 10_000n;
