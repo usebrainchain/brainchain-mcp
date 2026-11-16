@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
 import { CUSTODY_NAME } from "./custody.js";
+import { MAKERS_NAME } from "./makers.js";
 import { guidance } from "./payments.js";
 import { approvalFailure, approveCommand, createServer, INSTRUCTIONS, payerAccount, walletReport, type ServerOptions } from "./server.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_GRADE_NAME, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, POST_TASK_NAME } from "./tools.js";
@@ -53,7 +54,7 @@ describe("the server", () => {
     expect(client.getServerVersion()).toMatchObject({ name: "brainchain", title: "BrainChain" });
     expect(client.getInstructions()).toBe(INSTRUCTIONS);
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, PREMIUMS_NAME, CUSTODY_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]);
+    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]);
 
     const post = await client.callTool({ name: POST_TASK_NAME, arguments: task });
     expect(post.isError).toBe(true);
@@ -82,7 +83,7 @@ describe("the server", () => {
       expect(logged[0]).toContain(problem);
 
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(8);
+      expect(tools).toHaveLength(9);
       const description = tools.find((tool) => tool.name === POST_TASK_NAME)!.description!;
       expect(description.startsWith(`Invalid setting: ${problem}`)).toBe(true);
       expect(description).not.toMatch(/USDG|USDC/);
@@ -105,9 +106,11 @@ describe("the server", () => {
         // The setting comes first: a call that is wrong as well hears of the setting alone.
         expect(JSON.parse(text(await client.callTool({ name: call.name, arguments: {} })))).toEqual(JSON.parse(text(result)));
       }
-      // The tool that reads BitGo's lists needs no setting, so it answers for itself: here, about what it was sent.
+      // The tools that read BitGo's lists and a market maker's wallet need no setting, so each answers for itself: here, about what it was sent.
       const custody = await client.callTool({ name: CUSTODY_NAME, arguments: { days: 0 } });
       expect(JSON.parse(text(custody))).toEqual({ error: "days must be a whole number from 1 to 90. Leave it out to look back 30 days." });
+      const makers = await client.callTool({ name: MAKERS_NAME, arguments: {} });
+      expect(JSON.parse(text(makers))).toEqual({ error: "token is required." });
       expect(logged).toHaveLength(1);
     }
   });

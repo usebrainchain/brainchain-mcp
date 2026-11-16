@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { formatUnits, resolveConfig } from "./config.js";
 import { CustodyError } from "./custody.js";
+import { MakerError, type MakerBoard } from "./makers.js";
 import type { Bonds } from "./bonds.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_TASK_NAME, GET_TASK_TOOL, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
 
@@ -407,6 +408,67 @@ describe("custody additions", () => {
       [new CustodyError("GitHub allows 60 unauthenticated API requests an hour from one IP address, and this address has used them up. Try again after 12:17 UTC."), "GitHub allows 60 unauthenticated API requests an hour from one IP address, and this address has used them up. Try again after 12:17 UTC."],
     ] as const) {
       const result = await call({}, async () => Promise.reject(error));
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: said });
+    }
+  });
+});
+
+describe("market maker holdings", () => {
+  const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
+  const WALLET = "0xB97e4298c7F5f55360d207a6196125376675B3eA";
+  const board: MakerBoard = { chain: "Robinhood Chain", token: { contract: CASHCAT, decimals: 18, totalSupply: "1000000000" }, readAt: "2026-11-16T14:40:50.000Z", wallets: [] };
+  const call = (args: unknown, makers: (token: string, wallet?: string) => Promise<MakerBoard>) => callTool(desk, "brainchain_market_maker_holdings", args, undefined, undefined, undefined, undefined, makers);
+
+  it("serves the board without a desk or a key, for the wallets it knows unless given another", async () => {
+    const asked: [string, string | undefined][] = [];
+    const read = async (token: string, wallet?: string) => (asked.push([token, wallet]), board);
+    for (const args of [{ token: CASHCAT }, { token: CASHCAT.toLowerCase() }, { token: ` ${CASHCAT}\n` }, { token: CASHCAT.toUpperCase().replace("0X", "0x") }, { token: CASHCAT, wallet: WALLET.toLowerCase() }]) {
+      const result = await call(args, read);
+      expect(result.isError).toBe(false);
+      expect(body(result)).toEqual(board);
+    }
+    expect(asked).toEqual([[CASHCAT, undefined], [CASHCAT, undefined], [CASHCAT, undefined], [CASHCAT, undefined], [CASHCAT, WALLET]]);
+  });
+
+  it("refuses what is not an address, and fields it does not take, before reading anything", async () => {
+    let reads = 0;
+    const read = async () => (reads++, board);
+    const shape = (name: string) => `${name} must be an address on Robinhood Chain: 0x followed by 40 hex characters.`;
+    const checksum = (name: string) => `The capital and small letters in ${name} do not match its checksum, which usually means a character was mistyped. Compare it with the source you copied it from. If the two match, send the address in lowercase.`;
+    for (const [args, said] of [
+      [{}, "token is required."],
+      [undefined, "token is required."],
+      [{ token: 4663 }, "token must be a string, not a number."],
+      [{ token: " " }, "token is empty."],
+      [{ token: "cashcat" }, shape("token")],
+      [{ token: "hoodeth:cashcat" }, shape("token")],
+      [{ token: CASHCAT.slice(0, -1) }, shape("token")],
+      [{ token: `${CASHCAT}0` }, shape("token")],
+      [{ token: CASHCAT.replace("0x", "") }, shape("token")],
+      [{ token: CASHCAT.replace("bfC", "bFc") }, checksum("token")],
+      [{ token: CASHCAT, wallet: "wintermute" }, shape("wallet")],
+      [{ token: CASHCAT, wallet: null }, "wallet must be a string, not null."],
+      [{ token: CASHCAT, wallet: WALLET.replace("B97e", "b97E") }, checksum("wallet")],
+      [{ token: CASHCAT, days: 30 }, "Unknown field: days. This tool takes only token, wallet."],
+    ] as const) {
+      const result = await call(args, read);
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: said });
+    }
+    expect(reads).toBe(0);
+  });
+
+  it("answers a failed read in one line, and passes on what is already written for the reader", async () => {
+    const dump = Object.assign(new Error('HTTP request failed.\n\nStatus: 429\nURL: https://rpc.mainnet.chain.robinhood.com/\nRequest body: {"method":"eth_getLogs"}'), { status: 429 });
+    const missing = new MakerError(`There is no contract at ${CASHCAT} on Robinhood Chain. Otherwise check the address.`);
+    for (const [error, said] of [
+      [dump, "Robinhood Chain could not be read just now: HTTP 429. Try again in a minute."],
+      [new Error("The request took too long to respond.\n\nURL: https://rpc.example"), "Robinhood Chain could not be read just now: The request took too long to respond. Try again in a minute."],
+      [missing, missing.message],
+      [new MakerError("Robinhood Chain is taking too long to read. Try again in a minute."), "Robinhood Chain is taking too long to read. Try again in a minute."],
+    ] as const) {
+      const result = await call({ token: CASHCAT }, async () => Promise.reject(error));
       expect(result.isError).toBe(true);
       expect(body(result)).toEqual({ error: said });
     }

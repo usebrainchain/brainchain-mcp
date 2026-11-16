@@ -116,8 +116,8 @@ describe("the custody tool's words", () => {
   it("are counted with the tools that only read", () => {
     expect(CUSTODY_TOOL.annotations).toEqual({ readOnlyHint: true, openWorldHint: true });
     expect(readme).toContain(`- \`${CUSTODY_NAME}\` `);
-    expect(readme).toContain("The other five only read.");
-    expect(readme).toContain("stops every tool but `brainchain_stock_premiums` and `brainchain_custody_additions`");
+    expect(readme).toContain("The other six only read.");
+    expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions` and ");
   });
 });
 
@@ -661,23 +661,25 @@ describe("bitGoReader", () => {
 });
 
 describe("within", () => {
+  const SLOW = new CustodyError("BitGo's code on GitHub is taking too long to read. Try again in a minute.");
+
   it("answers with the work when it is done in time, and with a timeout message when it is not", async () => {
-    await expect(within(50, Promise.resolve("read"))).resolves.toBe("read");
-    await expect(within(50, Promise.reject(new Error("refused")))).rejects.toThrow("refused");
-    await expect(within(5, new Promise(() => {}))).rejects.toStrictEqual(new CustodyError("BitGo's code on GitHub is taking too long to read. Try again in a minute."));
+    await expect(within(50, Promise.resolve("read"), SLOW)).resolves.toBe("read");
+    await expect(within(50, Promise.reject(new Error("refused")), SLOW)).rejects.toThrow("refused");
+    await expect(within(5, new Promise(() => {}), SLOW)).rejects.toBe(SLOW);
   });
 
   it("lets late work finish without an unhandled rejection, and leaves no timer running", async () => {
     let failLate!: (error: Error) => void;
     const late = new Promise<never>((_, reject) => (failLate = reject));
-    await expect(within(5, late)).rejects.toBeInstanceOf(CustodyError);
+    await expect(within(5, late, SLOW)).rejects.toBe(SLOW);
     failLate(new Error("too late to matter"));
     await new Promise((resolve) => setTimeout(resolve, 5));
 
     vi.useFakeTimers();
     try {
-      await within(45_000, Promise.resolve(1));
-      await within(45_000, Promise.reject(new Error("refused"))).catch(() => {});
+      await within(45_000, Promise.resolve(1), SLOW);
+      await within(45_000, Promise.reject(new Error("refused")), SLOW).catch(() => {});
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();

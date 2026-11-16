@@ -113,7 +113,7 @@ const MENTION = /'hoodeth:([^']*)'/g;
 const DETAILS = /\s*,\s*(?:'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)")\s*,\s*(\d{1,2})\s*,\s*'(0x[0-9a-fA-F]{40})'/y;
 
 /** Text from BitGo's code as one short line. An agent reads it as data, so nothing in it may pass for layout, and it is cut between characters. */
-const line = (text: string, max: number) => [...text.replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\s]+/gu, " ").trim()].slice(0, max).join("").trim();
+export const line = (text: string, max: number) => [...text.replace(/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\s]+/gu, " ").trim()].slice(0, max).join("").trim();
 
 /** A string literal's text as JavaScript reads it, as far as a name needs: a quote, a backslash, a character by its code. */
 const unescaped = (literal: string) =>
@@ -336,14 +336,14 @@ export function bitGoReader(fetchImpl: typeof fetch = fetch, clock: () => number
   };
 }
 
-/** `work`, or a `CustodyError` once it has run for `ms`. The work is left to finish: what it reads is kept for the next call. */
-export async function within<T>(ms: number, work: Promise<T>): Promise<T> {
+/** `work`, or the error `late` once it has run for `ms`. The work is left to finish: what it reads is kept for the next call. */
+export async function within<T>(ms: number, work: Promise<T>, late: Error): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
-  const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new CustodyError("BitGo's code on GitHub is taking too long to read. Try again in a minute.")), ms);
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(late), ms);
   });
   try {
-    return await Promise.race([work, late]);
+    return await Promise.race([work, expired]);
   } finally {
     clearTimeout(timer);
   }
@@ -353,5 +353,5 @@ let reader: BitGoReader | undefined;
 
 export function readCustodyAdditions(days: number): Promise<CustodyBoard> {
   reader ??= bitGoReader();
-  return within(ANSWER_MS, custodyAdditions(reader, days));
+  return within(ANSWER_MS, custodyAdditions(reader, days), new CustodyError("BitGo's code on GitHub is taking too long to read. Try again in a minute."));
 }
