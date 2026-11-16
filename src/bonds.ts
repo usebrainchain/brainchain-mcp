@@ -219,9 +219,9 @@ export function bondsClosed(config: Config): string | undefined {
   return undefined;
 }
 
-/** Shipped's own number and page for a deed; absent for a test bond or when the API cannot be reached. */
 export const SHIPPED_API = "https://api.shipped.bond";
 
+/** Shipped's own number and page for a deed; absent for a test bond or when the API cannot be reached. */
 export async function deedPage(deed: bigint, fetchImpl: typeof fetch = fetch): Promise<{ number: string; url: string } | undefined> {
   try {
     const response = await fetchImpl(`${SHIPPED_API}/v1/deeds/${deed}`, { signal: AbortSignal.timeout(5_000) });
@@ -399,4 +399,3 @@ export function createBonds(options: BondsOptions): Bonds {
     },
   };
 }
-

@@ -43,7 +43,7 @@ function stateDirMessage(dir: string, error: unknown): string {
 /** Why the daily limit's record cannot be kept in `dir`, creating the folder if it is missing; undefined when it can. */
 export function stateDirProblem(dir: string): string | undefined {
   const full = resolve(dir);
-  // kernel folders accept odd writes or block on them; no record belongs there
+  // Kernel folders accept odd writes or block on them; no record belongs there.
   if (/^\/(proc|sys|dev)(\/|$)/.test(full)) return `BRAINCHAIN_STATE_DIR is ${dir}, which is a system folder, so the daily limit's record cannot be kept there. Set it to a folder this account can write, then restart the server.`;
   let existing = full;
   while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);

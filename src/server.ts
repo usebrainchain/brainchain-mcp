@@ -138,7 +138,6 @@ export function walletExitCode(config: Config, funds: WalletFunds | Error): 0 | 
   return funds.balance < need || (funds.allowance !== undefined && funds.allowance < need) ? 1 : 0;
 }
 
-/** The limits this server pays within, each with the variable that sets it. */
 function limitsLine(config: Config): string {
   const limits = [
     `${formatUnits(config.maxPrice)} ${config.token} per task or grade (BRAINCHAIN_MAX_PRICE_UNITS)`,
