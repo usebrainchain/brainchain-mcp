@@ -175,28 +175,45 @@ export function approveCommand(config: Config, version: string, env: Record<stri
   return [...settings.map(([name, value]) => `${name}=${name === "BRAINCHAIN_NETWORK" ? value : shellWord(value)}`), run].join(" ");
 }
 
+interface Wiring {
+  desk: Desk;
+  terms: Terms | string;
+  bonds: Bonds;
+  bondTools: [Tool, Tool];
+  gradeTool: Tool;
+  refused: Map<string, string>;
+}
+
+/** A setting the server cannot read at all: every tool but the premiums answers with it. */
+function unreadable(problem: string): Wiring {
+  const refuse = async (): Promise<never> => {
+    throw new Error(problem);
+  };
+  return {
+    desk: { post: refuse, get: refuse, grade: refuse, getGrade: refuse },
+    terms: problem,
+    bonds: { bond: refuse, status: refuse },
+    bondTools: bondTools({}, undefined, { bond: `Invalid setting: ${problem}`, status: `Invalid setting: ${problem}` }),
+    gradeTool: gradeTool(problem),
+    refused: new Map([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, BOND_TASK_NAME, BOND_STATUS_NAME].map((name) => [name, problem])),
+  };
+}
+
 /** A missing key or a bad setting is reported when a tool needs it, so the server always starts and lists its tools. */
-function deskFor(
-  env: Record<string, string | undefined>,
-  version: string,
-  fetchImpl?: typeof fetch,
-): { desk: Desk; terms: Terms | string; bonds: Bonds; bondTools: [Tool, Tool]; gradeTool: Tool; refused: Map<string, string> } {
+function deskFor(env: Record<string, string | undefined>, version: string, fetchImpl?: typeof fetch): Wiring {
+  const fix = (error: unknown) => `${messageOf(error)} Fix it in this server's environment and restart the server.`;
   let config: Config;
+  let paymentProblem: string | undefined;
   try {
     config = resolveConfig(env);
   } catch (error) {
-    const problem = `${messageOf(error)} Fix it in this server's environment and restart the server.`;
-    const refuse = async (): Promise<never> => {
-      throw new Error(problem);
-    };
-    return {
-      desk: { post: refuse, get: refuse, grade: refuse, getGrade: refuse },
-      terms: problem,
-      bonds: { bond: refuse, status: refuse },
-      bondTools: bondTools({}, undefined, { bond: `Invalid setting: ${problem}`, status: `Invalid setting: ${problem}` }),
-      gradeTool: gradeTool(problem),
-      refused: new Map([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, BOND_TASK_NAME, BOND_STATUS_NAME].map((name) => [name, problem])),
-    };
+    // A setting only payments read stops the tools that pay, and orders, grades and bonds are still read.
+    paymentProblem = fix(error);
+    try {
+      config = resolveConfig(env, { payments: false });
+    } catch (unread) {
+      return unreadable(fix(unread));
+    }
   }
 
   let account: PrivateKeyAccount | undefined;
@@ -208,7 +225,7 @@ function deskFor(
     if (env.BRAINCHAIN_PAYER_KEY?.trim() || env.BRAINCHAIN_PAYER_KEY_FILE?.trim()) keyProblem = messageOf(error);
   }
   // Said at start, not at the first post: with a daily limit set, no payment can be signed without its record.
-  const problem = [keyProblem, config.daily === undefined ? undefined : stateDirProblem(config.stateDir)].filter(Boolean).join(" ");
+  const problem = [paymentProblem, keyProblem, config.daily === undefined ? undefined : stateDirProblem(config.stateDir)].filter(Boolean).join(" ");
   const payer = () => {
     try {
       return (account ??= payerAccount(env));
@@ -226,8 +243,9 @@ function deskFor(
     funds: async () => walletFunds(config, payer().address),
   });
   // What the descriptions promise for a setting that cannot be used: a tool the setting stops answers with it
-  // and touches nothing else. A refused state folder could still take a write, or hang on one, so it stops
-  // the tools that pay. Reading a bond needs the key and no record, so only a key problem stops that.
+  // and touches nothing else. A setting only payments read stops the tools that pay, and so does a refused
+  // state folder, which could still take a write or hang on one. Reading a bond needs the key and no record,
+  // so only a key problem stops that.
   const closed = bondsClosed(config);
   const refused = new Map<string, string>();
   if (problem) for (const name of [POST_TASK_NAME, GRADE_NAME, BOND_TASK_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);

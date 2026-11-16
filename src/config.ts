@@ -178,7 +178,22 @@ function envDesk(env: Record<string, string | undefined>, fallback: string): str
   return desk;
 }
 
-export function resolveConfig(env: Record<string, string | undefined>): Config {
+/** Settings only a payment reads: one the server cannot use stops the tools that pay, and the rest go on without it. */
+export const PAYMENT_SETTINGS = [
+  "BRAINCHAIN_MAX_PRICE_UNITS",
+  "BRAINCHAIN_BUDGET_UNITS",
+  "BRAINCHAIN_DAILY_UNITS",
+  "BRAINCHAIN_MAX_BOND_UNITS",
+  "BRAINCHAIN_STATE_DIR",
+  "BRAINCHAIN_PAY_TO",
+  "BRAINCHAIN_PAYMENT_NETWORK",
+  "BRAINCHAIN_PAYMENT_ASSET",
+  "BRAINCHAIN_PAYMENT_RPC",
+];
+
+/** With `payments: false` the PAYMENT_SETTINGS are left at the preset, for a server that only reads until they are fixed. */
+export function resolveConfig(given: Record<string, string | undefined>, { payments = true } = {}): Config {
+  const env = payments ? given : Object.fromEntries(Object.entries(given).filter(([name]) => !PAYMENT_SETTINGS.includes(name)));
   const name = (envString(env, "BRAINCHAIN_NETWORK") ?? "mainnet").toLowerCase();
   if (name !== "mainnet" && name !== "testnet") throw new Error("BRAINCHAIN_NETWORK must be mainnet or testnet.");
   const payOn = (envString(env, "BRAINCHAIN_PAY_ON") ?? "robinhood").toLowerCase();
@@ -196,6 +211,11 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
   const maxBond = envUnits(env, "BRAINCHAIN_MAX_BOND_UNITS", DEFAULT_MAX_BOND);
   if (maxBond < MIN_BOND) throw new Error(`BRAINCHAIN_MAX_BOND_UNITS must be at least ${MIN_BOND} (${formatUnits(MIN_BOND)} USDG), the smallest bond this server places.`);
   const bonds = BONDS[name];
+  const desk = envDesk(env, preset.desk);
+  // The preset's payee belongs to the preset's desk, so a desk of one's own must say where it is paid.
+  if (payments && new URL(desk).href !== new URL(preset.desk).href && envString(env, "BRAINCHAIN_PAY_TO") === undefined) {
+    throw new Error("BRAINCHAIN_DESK_URL names a desk other than the network's own, so set BRAINCHAIN_PAY_TO to the address that desk takes payment at: this server pays no other address.");
+  }
   // Under a raised ceiling the desk may have raised its prices too, so a cost is named only up to the ceiling.
   const cost = (price: bigint) => (maxPrice > PRICE.task ? `at most ${formatUnits(maxPrice)} ${preset.token}` : `${formatUnits(price)} ${preset.token}`);
   const refused = (price: bigint, what: string) =>
@@ -208,7 +228,7 @@ export function resolveConfig(env: Record<string, string | undefined>): Config {
     name,
     payOn,
     permit2: preset.permit2,
-    desk: envDesk(env, preset.desk),
+    desk,
     network: network as `eip155:${number}`,
     chainId: Number(match[1]),
     asset: envAddress(env, "BRAINCHAIN_PAYMENT_ASSET", preset.asset),

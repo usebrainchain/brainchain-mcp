@@ -63,16 +63,33 @@ describe("resolveConfig", () => {
         expect(() => resolveConfig({ [name]: value })).toThrow(new RegExp(`^${name} must be an http or https URL\\.$`));
       }
     }
-    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "http://localhost:8080/" }).desk).toBe("http://localhost:8080");
+    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "http://localhost:8080/", BRAINCHAIN_PAY_TO: "0x000000000000000000000000000000000000dEaD" }).desk).toBe("http://localhost:8080");
   });
 
   it("sends payments to a desk over https, or plain http only on this machine", () => {
     expect(() => resolveConfig({ BRAINCHAIN_DESK_URL: "http://desk.example.com" })).toThrow(
       /^BRAINCHAIN_DESK_URL must be an https URL, or http on localhost or 127\.0\.0\.1\.$/,
     );
-    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "http://127.0.0.1:8080" }).desk).toBe("http://127.0.0.1:8080");
-    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "http://[::1]:8080" }).desk).toBe("http://[::1]:8080");
-    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "https://desk.example.com//" }).desk).toBe("https://desk.example.com");
+    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "http://127.0.0.1:8080", BRAINCHAIN_PAY_TO: "0x000000000000000000000000000000000000dEaD" }).desk).toBe("http://127.0.0.1:8080");
+    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "http://[::1]:8080", BRAINCHAIN_PAY_TO: "0x000000000000000000000000000000000000dEaD" }).desk).toBe("http://[::1]:8080");
+    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "https://desk.example.com//", BRAINCHAIN_PAY_TO: "0x000000000000000000000000000000000000dEaD" }).desk).toBe("https://desk.example.com");
+  });
+
+  it("needs a payee for a desk other than the network's own", () => {
+    const own = "BRAINCHAIN_DESK_URL names a desk other than the network's own, so set BRAINCHAIN_PAY_TO to the address that desk takes payment at: this server pays no other address.";
+    expect(() => resolveConfig({ BRAINCHAIN_DESK_URL: "http://localhost:8080" })).toThrow(own);
+    expect(() => resolveConfig({ BRAINCHAIN_DESK_URL: "https://brain.testnet.usebrainchain.com" })).toThrow(own);
+    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "https://Brain.usebrainchain.com/" }).desk).toBe("https://Brain.usebrainchain.com");
+    expect(resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_DESK_URL: "https://brain.testnet.usebrainchain.com" }).payTo).toBe(resolveConfig({ BRAINCHAIN_NETWORK: "testnet" }).payTo);
+    // A server that only reads goes to that desk all the same.
+    expect(resolveConfig({ BRAINCHAIN_DESK_URL: "http://localhost:8080" }, { payments: false }).desk).toBe("http://localhost:8080");
+  });
+
+  it("leaves the settings only payments read at the preset for a server that only reads", () => {
+    const env = { BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_BUDGET_UNITS: "-5", BRAINCHAIN_PAYMENT_RPC: "notaurl", BRAINCHAIN_STATE_DIR: "state", BRAINCHAIN_PAY_TO: "0x12" };
+    expect(() => resolveConfig(env)).toThrow();
+    expect(resolveConfig(env, { payments: false })).toEqual(resolveConfig({ BRAINCHAIN_NETWORK: "testnet" }));
+    expect(() => resolveConfig({ ...env, BRAINCHAIN_PAY_ON: "solana" }, { payments: false })).toThrow("BRAINCHAIN_PAY_ON must be robinhood or base.");
   });
 
   it("refuses a bond cap under the smallest bond, which would refuse every bond", () => {

@@ -67,14 +67,12 @@ describe("the server", () => {
     expect(reads).toEqual([`https://brain.testnet.usebrainchain.com/x402/tasks/${order}`]);
   });
 
-  it("reports a bad setting once at startup, in the post tool's description, and from both tools", async () => {
+  it("reports a setting it cannot read once at startup, in the post tool's description, and from every tool but the premiums", async () => {
     for (const [env, problem] of [
       [{ BRAINCHAIN_NETWORK: "devnet" }, "BRAINCHAIN_NETWORK must be mainnet or testnet."],
       [{ BRAINCHAIN_PAY_ON: "bse" }, "BRAINCHAIN_PAY_ON must be robinhood or base."],
-      [{ BRAINCHAIN_MAX_PRICE_UNITS: "abc" }, "BRAINCHAIN_MAX_PRICE_UNITS must be a positive whole number of base units."],
       [{ BRAINCHAIN_DESK_URL: "notaurl" }, "BRAINCHAIN_DESK_URL must be an http or https URL."],
-      [{ BRAINCHAIN_PAYMENT_RPC: "notaurl" }, "BRAINCHAIN_PAYMENT_RPC must be an http or https URL."],
-      [{ BRAINCHAIN_STATE_DIR: "~other" }, "BRAINCHAIN_STATE_DIR must be an absolute path or start with ~/."],
+      [{ BRAINCHAIN_DESK_URL: "notaurl", BRAINCHAIN_BUDGET_UNITS: "-5" }, "BRAINCHAIN_DESK_URL must be an http or https URL."],
     ] as const) {
       const logged: string[] = [];
       const client = await connect({ ...env, BRAINCHAIN_PAYER_KEY: KEY }, { log: (message) => logged.push(message) });
@@ -106,6 +104,53 @@ describe("the server", () => {
         expect(JSON.parse(text(await client.callTool({ name: call.name, arguments: {} })))).toEqual(JSON.parse(text(result)));
       }
       expect(logged).toHaveLength(1);
+    }
+  });
+
+  it("stops only the tools that pay for a setting only payments read, and keeps reading orders, grades and bonds", async () => {
+    for (const [env, problem] of [
+      [{ BRAINCHAIN_BUDGET_UNITS: "-5" }, "BRAINCHAIN_BUDGET_UNITS must be a positive whole number of base units."],
+      [{ BRAINCHAIN_MAX_PRICE_UNITS: "abc" }, "BRAINCHAIN_MAX_PRICE_UNITS must be a positive whole number of base units."],
+      [{ BRAINCHAIN_DAILY_UNITS: "1.5" }, "BRAINCHAIN_DAILY_UNITS must be a positive whole number of base units."],
+      [{ BRAINCHAIN_MAX_BOND_UNITS: "1" }, "BRAINCHAIN_MAX_BOND_UNITS must be at least 2000000"],
+      [{ BRAINCHAIN_STATE_DIR: "~other" }, "BRAINCHAIN_STATE_DIR must be an absolute path or start with ~/."],
+      [{ BRAINCHAIN_PAYMENT_RPC: "notaurl" }, "BRAINCHAIN_PAYMENT_RPC must be an http or https URL."],
+      [{ BRAINCHAIN_PAYMENT_NETWORK: "base" }, "BRAINCHAIN_PAYMENT_NETWORK must look like eip155:<chain id>."],
+      [{ BRAINCHAIN_PAYMENT_ASSET: "usdg" }, "BRAINCHAIN_PAYMENT_ASSET must be a 0x-prefixed, 40-character hex address."],
+      [{ BRAINCHAIN_PAY_TO: "0x12" }, "BRAINCHAIN_PAY_TO must be a 0x-prefixed, 40-character hex address."],
+      [{ BRAINCHAIN_DESK_URL: "http://127.0.0.1:4000" }, "BRAINCHAIN_DESK_URL names a desk other than the network's own, so set BRAINCHAIN_PAY_TO"],
+    ] as const) {
+      const asked: string[] = [];
+      const fetchImpl = (async (input: RequestInfo | URL) => {
+        asked.push(String(input));
+        return new Response(JSON.stringify({ order, state: "posted", task: { status: "hired" } }));
+      }) as typeof fetch;
+      const logged: string[] = [];
+      const client = await connect({ ...env, BRAINCHAIN_PAYER_KEY: KEY }, { fetch: fetchImpl, log: (message) => logged.push(message) });
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toContain(problem);
+
+      const { tools } = await client.listTools();
+      for (const name of [POST_TASK_NAME, GRADE_NAME, BOND_TASK_NAME]) {
+        expect(tools.find((tool) => tool.name === name)!.description).toMatch(/^Invalid setting: /);
+        expect(tools.find((tool) => tool.name === name)!.description).toContain(problem);
+      }
+      for (const name of [GET_TASK_NAME, GET_GRADE_NAME, BOND_STATUS_NAME, PREMIUMS_NAME]) expect(tools.find((tool) => tool.name === name)!.description).not.toContain("Invalid setting");
+
+      for (const call of [
+        { name: POST_TASK_NAME, arguments: task },
+        { name: GRADE_NAME, arguments: grade },
+        { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } },
+      ]) {
+        const result = await client.callTool(call);
+        expect(result.isError).toBe(true);
+        expect(text(result)).toContain(problem);
+      }
+      expect(asked).toEqual([]);
+      for (const call of [{ name: GET_TASK_NAME, arguments: { order } }, { name: GET_GRADE_NAME, arguments: { grade: order } }]) expect((await client.callTool(call)).isError).toBe(false);
+      // The reads go to the desk the settings name, a desk of one's own included.
+      const desk = "BRAINCHAIN_DESK_URL" in env ? env.BRAINCHAIN_DESK_URL : "https://brain.usebrainchain.com";
+      expect(asked).toEqual([`${desk}/x402/tasks/${order}`, `${desk}/x402/grades/${order}`]);
     }
   });
 
@@ -215,7 +260,8 @@ describe("the server", () => {
     }
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
     expect(readme).toContain("A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_bond_task` and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working.");
-    expect(readme).toContain("stops the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; `brainchain_bond_status`, `brainchain_get_task` and `brainchain_get_grade` read nothing that needs the folder and keep working.");
+    expect(readme).toContain("A setting only payments read stops just the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; the other four keep working.");
+    expect(readme).toContain("`BRAINCHAIN_STATE_DIR`, including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set");
     expect(readme).not.toContain("the task and bond tools return the error");
   });
 

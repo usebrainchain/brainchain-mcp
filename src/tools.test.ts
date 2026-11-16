@@ -354,7 +354,7 @@ describe("post tool and config", () => {
   });
 
   it("lets single overrides win over the preset", () => {
-    const config = resolveConfig({ BRAINCHAIN_DESK_URL: "http://localhost:10000/", BRAINCHAIN_MAX_PRICE_UNITS: "2500000" });
+    const config = resolveConfig({ BRAINCHAIN_DESK_URL: "http://localhost:10000/", BRAINCHAIN_PAY_TO: "0x000000000000000000000000000000000000dEaD", BRAINCHAIN_MAX_PRICE_UNITS: "2500000" });
     expect(config.desk).toBe("http://localhost:10000");
     expect(config.terms.cost).toBe("at most 2.5 USDG");
   });
