@@ -287,8 +287,6 @@ export function createBonds(options: BondsOptions): Bonds {
     const now = await c.now();
     if (t.deadline <= now) throw new Error(`Task ${task}'s deadline, ${iso(t.deadline)}, has passed. Nothing was bonded.`);
     if (amount < t.bounty) throw new Error(`The bond must be at least the task's bounty, ${formatUnits(t.bounty)} USDG; ${formatUnits(amount)} USDG is under it. Nothing was bonded.`);
-    if (amount < MIN_BOND) throw new Error(`The bond must be at least ${formatUnits(MIN_BOND)} USDG: under that, Shipped's fee and the gas take too much of it. Nothing was bonded.`);
-    if (amount > config.maxBond) throw new Error(`This server bonds at most ${formatUnits(config.maxBond)} USDG on one task. Raise BRAINCHAIN_MAX_BOND_UNITS and restart the server to allow more. Nothing was bonded.`);
     // Task ids restart with each board, so a bond on a retired board's task of this number is another task's.
     const existing = (await c.bondsOn(task)).find((b) => b.status !== DeedStatus.Settled && b.board.toLowerCase() === config.bonds!.brainchain.board.toLowerCase());
     if (existing) {
@@ -352,6 +350,9 @@ export function createBonds(options: BondsOptions): Bonds {
   return {
     async bond(task, amount) {
       const c = connected();
+      // Checked before anything is read, so a wrong amount is named as such whatever the task.
+      if (amount < MIN_BOND) throw new Error(`The bond must be at least ${formatUnits(MIN_BOND)} USDG: under that, Shipped's fee and the gas take too much of it. Nothing was bonded.`);
+      if (amount > config.maxBond) throw new Error(`This server bonds at most ${formatUnits(config.maxBond)} USDG on one task. Raise BRAINCHAIN_MAX_BOND_UNITS and restart the server to allow more. Nothing was bonded.`);
       if (placing.has(task)) throw new Error(`This server is already placing a bond on task ${task}. Wait for that call's reply; this call bonded nothing.`);
       placing.add(task);
       const turn = queue.then(() => place(c, task, amount));

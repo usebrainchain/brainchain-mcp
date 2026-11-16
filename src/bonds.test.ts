@@ -182,6 +182,19 @@ describe("bond", () => {
     }
   });
 
+  it("names an amount under the smallest bond or over the cap before reading anything, whatever the task", async () => {
+    for (const [amount, error] of [
+      [USDG(1), "The bond must be at least 2 USDG: under that, Shipped's fee and the gas take too much of it. Nothing was bonded."],
+      [USDG(1.999999), "The bond must be at least 2 USDG"],
+      [USDG(10.000001), "This server bonds at most 10 USDG on one task. Raise BRAINCHAIN_MAX_BOND_UNITS and restart the server to allow more. Nothing was bonded."],
+    ] as const) {
+      // A task this wallet was never hired for: the amount is still what is named.
+      const chain = fakeChain({ task: task({ status: TaskStatus.Open, model: `0x${"0".repeat(64)}` }) });
+      await expect(setup(chain).bonds.bond(1n, amount)).rejects.toThrow(error);
+      for (const read of Object.values(chain)) if (typeof read === "function") expect(read).not.toHaveBeenCalled();
+    }
+  });
+
   it("gives the budget back when the wallet cannot pay, and holds it against the next post", async () => {
     const short = fakeChain({ task: task(), usdg: USDG(4) });
     const { bonds, limits } = setup(short);
