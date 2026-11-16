@@ -6,7 +6,7 @@ export const PREMIUMS_NAME = "brainchain_stock_premiums";
 /** The desks' mandate on Robinhood Chain: it lists each stock token's deepest USDG pool and Chainlink feed. */
 export const MANDATE = "0xA76916D1b75a82776779fb9d7EB156A4E4a55099" as Address;
 export const ROBINHOOD_RPC = "https://rpc.mainnet.chain.robinhood.com";
-const MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11" as Address;
+export const MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11" as Address;
 const USDG = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
 
 const mandateAbi = parseAbi([
