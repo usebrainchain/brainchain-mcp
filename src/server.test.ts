@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { PREMIUMS_NAME } from "./premiums.js";
 import { resolveConfig } from "./config.js";
 import { guidance } from "./payments.js";
-import { approvalFailure, approvalUnconfirmed, approveCommand, createServer, INSTRUCTIONS, pastedKey, payerAccount, walletReport, type ServerOptions } from "./server.js";
+import { approvalFailure, approvalUnconfirmed, approveCommand, createServer, INSTRUCTIONS, pastedKey, payerAccount, walletExitCode, walletReport, type ServerOptions } from "./server.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_GRADE_NAME, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
@@ -461,11 +461,14 @@ describe("wallet", () => {
   const address = privateKeyToAccount(`0x${KEY}`).address;
   const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
   const approve = "BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.0.0-test approve";
+  // Bonds are closed on testnet, so their cap is left out.
+  const limits = "Limits: 1 test USDG per task or grade (BRAINCHAIN_MAX_PRICE_UNITS), 10 test USDG per server run (BRAINCHAIN_BUDGET_UNITS), no daily limit (BRAINCHAIN_DAILY_UNITS).";
 
   it("says what the wallet holds and what it still needs before a post can be paid", () => {
     expect(walletReport(testnet, address, { balance: 0n, allowance: 0n, eth: 0n }, approve)).toBe(
       [
         `${address} pays for tasks in test USDG on Robinhood Chain testnet.`,
+        limits,
         "It holds 0 test USDG. A task costs 1 test USDG, so send at least 1 test USDG to it on Robinhood Chain testnet before posting.",
         `Permit2 is not approved to spend enough of its test USDG for a task. Run \`${approve}\` once; it needs a little ETH on Robinhood Chain testnet, and the wallet holds 0 ETH there.`,
       ].join("\n"),
@@ -482,12 +485,13 @@ describe("wallet", () => {
     expect(walletReport(raised, address, { balance: 2_000_000n, allowance: 2_000_000n, eth: 0n }, approve)).toBe(
       [
         `${address} pays for tasks in test USDG on Robinhood Chain testnet.`,
+        limits.replace("1 test USDG per task", "5 test USDG per task"),
         "It holds 2 test USDG. A task costs at most 5 test USDG; send at least 3 test USDG to it on Robinhood Chain testnet to cover that.",
         `Permit2 is not approved to spend enough of its test USDG for a task that costs 5 (only 2). Run \`${approve}\` once; it needs a little ETH on Robinhood Chain testnet, and the wallet holds 0 ETH there.`,
       ].join("\n"),
     );
     expect(walletReport(raised, address, { balance: 5_000_000n, allowance: 5_000_000n, eth: 0n }, approve)).toBe(
-      `${address} pays for tasks in test USDG on Robinhood Chain testnet.\nIt holds 5 test USDG.\nPermit2 may spend up to 5 of its test USDG.`,
+      `${address} pays for tasks in test USDG on Robinhood Chain testnet.\n${limits.replace("1 test USDG per task", "5 test USDG per task")}\nIt holds 5 test USDG.\nPermit2 may spend up to 5 of its test USDG.`,
     );
   });
 
@@ -496,6 +500,7 @@ describe("wallet", () => {
     expect(walletReport(capped, address, { balance: 0n, allowance: 0n, eth: 0n }, approve)).toBe(
       [
         `${address} pays for tasks in test USDG on Robinhood Chain testnet.`,
+        limits.replace("1 test USDG per task", "0.5 test USDG per task"),
         "BRAINCHAIN_MAX_PRICE_UNITS lets this server pay at most 0.5 test USDG at a time, under the 1 test USDG a task costs, so posts will be refused until it is raised.",
         "It holds 0 test USDG. A task costs 1 test USDG, so send at least 1 test USDG to it on Robinhood Chain testnet before posting.",
         `Permit2 is not approved to spend enough of its test USDG for a task. Run \`${approve}\` once; it needs a little ETH on Robinhood Chain testnet, and the wallet holds 0 ETH there.`,
@@ -513,9 +518,36 @@ describe("wallet", () => {
 
   it("names no approval for USDC, which pays by signature, and says when the chain could not be read", () => {
     const base = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "base" });
-    expect(walletReport(base, address, { balance: 3_000_000n, eth: 0n }, approve)).toBe(`${address} pays for tasks in test USDC on Base Sepolia.\nIt holds 3 test USDC.`);
+    expect(walletReport(base, address, { balance: 3_000_000n, eth: 0n }, approve)).toBe(`${address} pays for tasks in test USDC on Base Sepolia.\n${limits.replaceAll("USDG", "USDC")}\nIt holds 3 test USDC.`);
     expect(walletReport(testnet, address, new Error("HTTP request failed.\n\nURL: http://127.0.0.1:1"), approve)).toBe(
-      `${address} pays for tasks in test USDG on Robinhood Chain testnet.\nIts balance could not be read from Robinhood Chain testnet (HTTP request failed.). The key and settings are fine.`,
+      `${address} pays for tasks in test USDG on Robinhood Chain testnet.\n${limits}\nIts balance could not be read from Robinhood Chain testnet (HTTP request failed.). The key and settings are fine.`,
     );
+  });
+
+  it("lists every limit, the daily limit and the bond cap among them on mainnet", () => {
+    const mainnet = resolveConfig({ BRAINCHAIN_DAILY_UNITS: "5000000", BRAINCHAIN_MAX_BOND_UNITS: "3000000" });
+    expect(walletReport(mainnet, address, new Error("down"), approve).split("\n")[1]).toBe(
+      "Limits: 1 USDG per task or grade (BRAINCHAIN_MAX_PRICE_UNITS), 10 USDG per server run (BRAINCHAIN_BUDGET_UNITS), 5 per UTC day, USDG and USDC together (BRAINCHAIN_DAILY_UNITS), 3 USDG per bond (BRAINCHAIN_MAX_BOND_UNITS).",
+    );
+  });
+
+  it("exits 0 only when the wallet can pay for a task, 1 when it cannot, and 2 when its balance could not be read", () => {
+    const base = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "base" });
+    const raised = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_MAX_PRICE_UNITS: "5000000" });
+    const capped = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_MAX_PRICE_UNITS: "500000" });
+    for (const [config, funds, code] of [
+      [testnet, { balance: 1_000_000n, allowance: 1_000_000n, eth: 0n }, 0],
+      [testnet, { balance: 999_999n, allowance: 10_000_000n, eth: 0n }, 1],
+      [testnet, { balance: 10_000_000n, allowance: 0n, eth: 0n }, 1],
+      [base, { balance: 1_000_000n, eth: 0n }, 0],
+      [base, { balance: 0n, eth: 0n }, 1],
+      [raised, { balance: 2_000_000n, allowance: 2_000_000n, eth: 0n }, 1],
+      [raised, { balance: 5_000_000n, allowance: 5_000_000n, eth: 0n }, 0],
+      [capped, { balance: 10_000_000n, allowance: 10_000_000n, eth: 0n }, 1],
+      [testnet, new Error("down"), 2],
+      [capped, new Error("down"), 1],
+    ] as const) {
+      expect(walletExitCode(config, funds)).toBe(code);
+    }
   });
 });

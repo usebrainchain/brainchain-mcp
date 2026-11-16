@@ -121,9 +121,31 @@ export async function walletFunds(config: Config, address: `0x${string}`): Promi
   return { balance, ...(allowance === undefined ? {} : { allowance }), eth };
 }
 
-/** What `wallet` says: the wallet that pays, what it holds, and what it still needs before a post can be paid. */
+/** What a post needs the wallet to hold and Permit2 to spend: the desk's price, or under a raised ceiling the ceiling, since the price may have risen with it. */
+const postNeeds = (config: Config) => (config.maxPrice > PRICE.task ? config.maxPrice : PRICE.task);
+
+/** What `wallet` exits with: 0 when the wallet can pay for a task, 1 when it cannot, 2 when its balance could not be read. */
+export function walletExitCode(config: Config, funds: WalletFunds | Error): 0 | 1 | 2 {
+  if (config.maxPrice < PRICE.task) return 1;
+  if (funds instanceof Error) return 2;
+  const need = postNeeds(config);
+  return funds.balance < need || (funds.allowance !== undefined && funds.allowance < need) ? 1 : 0;
+}
+
+/** The limits this server pays within, each with the variable that sets it. */
+function limitsLine(config: Config): string {
+  const limits = [
+    `${formatUnits(config.maxPrice)} ${config.token} per task or grade (BRAINCHAIN_MAX_PRICE_UNITS)`,
+    `${formatUnits(config.budget)} ${config.token} per server run (BRAINCHAIN_BUDGET_UNITS)`,
+    `${config.daily === undefined ? "no daily limit" : `${formatUnits(config.daily)} per UTC day, USDG and USDC together`} (BRAINCHAIN_DAILY_UNITS)`,
+    ...(config.bonds ? [`${formatUnits(config.maxBond)} USDG per bond (BRAINCHAIN_MAX_BOND_UNITS)`] : []),
+  ];
+  return `Limits: ${limits.join(", ")}.`;
+}
+
+/** What `wallet` says: the wallet that pays, the limits it pays within, what it holds, and what it still needs before a post can be paid. */
 export function walletReport(config: Config, address: string, funds: WalletFunds | Error, approve: string): string {
-  const lines = [`${address} pays for tasks in ${config.token} on ${config.chain}.`];
+  const lines = [`${address} pays for tasks in ${config.token} on ${config.chain}.`, limitsLine(config)];
   const under = config.maxPrice < PRICE.task;
   if (under) {
     lines.push(
@@ -137,7 +159,7 @@ export function walletReport(config: Config, address: string, funds: WalletFunds
   const { balance, allowance, eth } = funds;
   // Under a raised ceiling the wallet may still hold the price, so it is told what covers the ceiling, not what posting needs.
   const ceiling = config.maxPrice > PRICE.task;
-  const need = ceiling ? config.maxPrice : PRICE.task;
+  const need = postNeeds(config);
   const missing = `send at least ${formatUnits(need - balance)} ${config.token} to it on ${config.chain}`;
   const short = balance >= need ? "" : ceiling ? ` A task costs ${config.terms.cost}; ${missing} to cover that.` : ` A task costs ${config.terms.cost}, so ${missing} before posting.`;
   lines.push(`It holds ${formatUnits(balance)} ${config.token}.${short}`);

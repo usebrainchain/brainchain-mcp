@@ -7,7 +7,7 @@ import { createWalletClient, http, maxUint256, type Hex, type PrivateKeyAccount 
 import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
 import { erc20 } from "./payments.js";
-import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, pastedKey, payerAccount, PERMIT2, walletFunds, walletReport } from "./server.js";
+import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, pastedKey, payerAccount, PERMIT2, walletExitCode, walletFunds, walletReport } from "./server.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -21,8 +21,10 @@ Usage:
   brainchain-mcp approve [USDG]  Let Permit2 spend the paying wallet's USDG.
                                  Default 100 USDG; pass a number, "max", or 0 to revoke.
                                  Not needed when paying in USDC on Base.
-  brainchain-mcp wallet          Check the key and settings, and print the wallet that pays, what it
-                                 holds and, for USDG, what Permit2 may spend.
+  brainchain-mcp wallet          Check the key and settings, and print the wallet that pays, the limits,
+                                 what it holds and, for USDG, what Permit2 may spend. Exits 0 when the
+                                 wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2
+                                 when its balance could not be read.
 
 Environment:
   BRAINCHAIN_PAYER_KEY        Private key of the paying wallet, 64 hex characters with or without 0x.
@@ -69,6 +71,7 @@ if (command === undefined) {
   const { config, account } = settings();
   const funds = await walletFunds(config, account.address).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
   console.log(walletReport(config, account.address, funds, approveCommand(config, version, process.env)));
+  process.exitCode = walletExitCode(config, funds);
 } else {
   await approve(process.argv[3] ?? "100");
 }
