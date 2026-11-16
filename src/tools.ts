@@ -1,7 +1,10 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import { getAddress, isAddress, type Address } from "viem";
 
 import type { Bonds } from "./bonds.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
+import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DEFAULT_DAYS, MAX_DAYS, readCustodyAdditions, type CustodyBoard } from "./custody.js";
+import { MakerError, MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
 import { brief, canonicalStringify, RESULT_LIMIT } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL, readPremiums, type PremiumBoard } from "./premiums.js";
 import { MIN_BOND, MISSED_TO } from "./shipped.js";
@@ -252,6 +255,18 @@ function text(name: string, value: unknown, max = Infinity): string {
   return sent;
 }
 
+/** An address as viem writes it. One in capitals and small letters carries a checksum, which catches a mistyped character. */
+function address(name: string, value: unknown): Address {
+  const sent = text(name, value);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(sent)) throw new Error(`${name} must be an address on Robinhood Chain: 0x followed by 40 hex characters.`);
+  // An address with no small letters carries no checksum, as one with no capitals does.
+  const plain = /[a-f]/.test(sent) ? sent : sent.toLowerCase();
+  if (!isAddress(plain)) {
+    throw new Error(`The capital and small letters in ${name} do not match its checksum, which usually means a character was mistyped. Compare it with the source you copied it from. If the two match, send the address in lowercase.`);
+  }
+  return getAddress(plain);
+}
+
 function refuseUnknownFields(input: Record<string, unknown>, schema: Tool["inputSchema"]): void {
   const known = Object.keys(schema.properties ?? {});
   const unknown = Object.keys(input).filter((key) => !known.includes(key));
@@ -344,6 +359,8 @@ export async function callTool(
   premiums: () => Promise<PremiumBoard> = readPremiums,
   bonds?: Bonds,
   refused: ReadonlyMap<string, string> = new Map(),
+  custody: (days: number) => Promise<CustodyBoard> = readCustodyAdditions,
+  makers: (token: Address, wallet?: Address) => Promise<MakerBoard> = readMakerHoldings,
 ): Promise<CallToolResult> {
   const input = (args ?? {}) as Record<string, unknown>;
   const refusal = refused.get(name);
@@ -383,6 +400,26 @@ export async function callTool(
     if (name === PREMIUMS_NAME) {
       refuseUnknownFields(input, PREMIUMS_TOOL.inputSchema);
       const board = await premiums().catch((error: unknown) => {
+        throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
+      });
+      return reply(board);
+    }
+    if (name === CUSTODY_NAME) {
+      refuseUnknownFields(input, CUSTODY_TOOL.inputSchema);
+      const days = input.days === undefined ? DEFAULT_DAYS : input.days;
+      if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > MAX_DAYS) throw new Error(`days must be a whole number from 1 to ${MAX_DAYS}. Leave it out to look back ${DEFAULT_DAYS} days.`);
+      const board = await custody(days).catch((error: unknown) => {
+        if (error instanceof CustodyError) throw error;
+        throw new Error(`BitGo's code on GitHub could not be read just now: ${brief(error)} Try again in a minute.`);
+      });
+      return reply(board);
+    }
+    if (name === MAKERS_NAME) {
+      refuseUnknownFields(input, MAKERS_TOOL.inputSchema);
+      const token = address("token", input.token);
+      const wallet = input.wallet === undefined ? undefined : address("wallet", input.wallet);
+      const board = await makers(token, wallet).catch((error: unknown) => {
+        if (error instanceof MakerError) throw error;
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
       });
       return reply(board);
