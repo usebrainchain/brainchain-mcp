@@ -305,8 +305,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     let signed: { payload: unknown } | undefined;
     let hold: Hold | undefined;
     const unreserve = async () => {
-      if (hold) await limits.give(hold);
+      const given = hold;
       hold = undefined;
+      // An amount that cannot be given back stays counted, the safe direction, and must not hide why the payment stopped.
+      if (given) await limits.give(given).catch(() => undefined);
     };
     const price = () => `${formatUnits(hold?.amount ?? 0n)} ${config.token}`;
     const receipt = (id: string) => {

@@ -10,6 +10,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it, vi } from "vitest";
 
 import { REPOST_AFTER_MINUTES, resolveConfig } from "./config.js";
+import { createLimits } from "./limits.js";
 import { BODY_LIMIT, canonicalStringify, createDesk, guidance, orderIdOf, paidOn } from "./payments.js";
 import { callTool, checkBrief, POST_TASK_NAME, type Desk } from "./tools.js";
 
@@ -256,6 +257,21 @@ describe("posting", () => {
     }
     const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "insufficient_funds" }), { status: 402 }));
     await expect(desk(fetchImpl).post(task)).rejects.toThrow("The desk refused the payment: insufficient_funds. Nothing was charged.");
+  });
+
+  it("keeps the desk's reason when the amount cannot be given back, and leaves it counted", async () => {
+    for (const [status, said] of [
+      [400, "brief refused. Nothing was charged."],
+      [402, "The desk refused the payment: brief refused. Nothing was charged."],
+    ] as const) {
+      const counted = createLimits(config, () => signer);
+      const limits = { ...counted, give: vi.fn(async () => Promise.reject(new Error("EACCES: the daily record cannot be written"))) };
+      const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "brief refused" }), { status }));
+      const d = createDesk({ config, signer, approveCommand: "npx -y brainchain-mcp approve", fetch: fetchImpl, limits });
+      await expect(d.post(task)).rejects.toThrow(said);
+      expect(limits.give).toHaveBeenCalledOnce();
+      expect(d.spent()).toBe(1_000_000n);
+    }
   });
 
   it("refuses a desk that answers without asking for payment", async () => {

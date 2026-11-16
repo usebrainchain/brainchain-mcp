@@ -340,7 +340,8 @@ export function createBonds(options: BondsOptions): Bonds {
         next: "Follow it with brainchain_bond_status. A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires.",
       };
     } catch (error) {
-      await limits.give(hold);
+      // An amount that cannot be given back stays counted, the safe direction, and must not hide why the bond failed.
+      await limits.give(hold).catch(() => undefined);
       throw error;
     }
   }

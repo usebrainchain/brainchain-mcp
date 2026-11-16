@@ -198,6 +198,17 @@ describe("bond", () => {
     expect(chain.create).toHaveBeenCalledOnce();
   });
 
+  it("keeps why a bond failed when its amount cannot be given back, and leaves it counted", async () => {
+    const chain = fakeChain({ task: task(), usdg: USDG(4) });
+    const { config } = setup(chain);
+    const counted = createLimits(config, () => account);
+    const limits = { ...counted, give: vi.fn(async () => Promise.reject(new Error("EACCES: the daily record cannot be written"))) };
+    const bonds = createBonds({ config, signer: () => account, limits, connect: () => chain, fetch: offline });
+    await expect(bonds.bond(12n, USDG(5))).rejects.toThrow(`${account.address} holds 4 USDG on Robinhood Chain, under the 5 USDG to bond. Nothing was bonded.`);
+    expect(limits.give).toHaveBeenCalledOnce();
+    expect(counted.spent()).toBe(USDG(5));
+  });
+
   it("refuses a bond over a limit with what was asked and what is left, in USDG whatever chain this server pays tasks on", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
     const onBase = { BRAINCHAIN_PAY_ON: "base", BRAINCHAIN_BUDGET_UNITS: "3000000" };
