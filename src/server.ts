@@ -193,7 +193,6 @@ function deskFor(
       throw new Error(`${messageOf(error)} ${KEY_HELP}`);
     }
   };
-  const { reader } = chainClients(config);
   const limits = createLimits(config, payer);
   const desk = createDesk({
     config,
@@ -201,14 +200,7 @@ function deskFor(
     approveCommand: approveCommand(config, version, env),
     fetch: fetchImpl,
     limits,
-    funds: async () => {
-      const { address } = payer();
-      const [balance, allowance] = await Promise.all([
-        reader.readContract({ address: config.asset, abi: erc20, functionName: "balanceOf", args: [address] }),
-        config.permit2 ? reader.readContract({ address: config.asset, abi: erc20, functionName: "allowance", args: [address, PERMIT2] }) : undefined,
-      ]);
-      return { balance, allowance };
-    },
+    funds: async () => walletFunds(config, payer().address),
   });
   // What the descriptions promise for a setting that cannot be used: a tool the setting stops answers with it
   // and touches nothing else. A refused state folder could still take a write, or hang on one, so it stops
