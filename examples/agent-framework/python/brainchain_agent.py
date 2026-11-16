@@ -25,7 +25,7 @@ sent when the dispute window closes, hours later, and a read of the order after 
 If wait says to stop, report where the task stands and its order id. Never post the same brief twice: a reply that
 says it may have been charged is read, not resent."""
 
-# A task is usually hired, delivered and graded within minutes. Past this the agent reports where it stands.
+# Most tasks are graded within minutes. Past this the agent reports where the task stands.
 WAIT_BUDGET_SECONDS = 30 * 60
 
 
@@ -34,7 +34,7 @@ def waiter(budget: int):
     left = budget
 
     async def wait(seconds: Annotated[int, "How long to wait, as brainchain_get_task's reply asks"]) -> str:
-        """Waits before the next read of a task, since a task takes minutes to be hired, delivered and graded."""
+        """Waits before the next read of a task, which usually takes a few minutes to be graded."""
         nonlocal left
         if left <= 0:
             return "Stop reading: report where the task stands and its order id, which brainchain_get_task can read later."

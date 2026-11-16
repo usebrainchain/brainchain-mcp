@@ -40,7 +40,7 @@ The next step is the seller's policy. `src/seller.ts` has two hooks for it:
 - `redo` decides whether the worker tries again. The worker sees its last delivery and why it failed. Each redo is a new paid grade. The default redoes once.
 - `refund` settles with the buyer once no redo is left. The default marks the refund as owed on the order and moves no money. A live seller pays the buyer back here and keeps the reference.
 
-## Adopt it in under an hour
+## Adopt it
 
 1. Install it. Node 22.18 or later runs the TypeScript as it is.
 

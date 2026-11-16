@@ -25,7 +25,7 @@ const string Instructions = """
     twice: a reply that says it may have been charged is read, not resent.
     """;
 
-// A task is usually hired, delivered and graded within minutes. Past this the agent reports where it stands.
+// Most tasks are graded within minutes. Past this the agent reports where the task stands.
 var waitLeft = TimeSpan.FromMinutes(30);
 
 var settings = Environment.GetEnvironmentVariables()
@@ -69,7 +69,7 @@ AIAgent agent = new ChatClientAgent(
 
 Console.WriteLine(await agent.RunAsync($"Post this brief to BrainChain and report the outcome:\n\n{brief}"));
 
-[Description("Waits before the next read of a task, since a task takes minutes to be hired, delivered and graded.")]
+[Description("Waits before the next read of a task, which usually takes a few minutes to be graded.")]
 async Task<string> Wait([Description("How long to wait, as brainchain_get_task's reply asks")] int seconds)
 {
     if (waitLeft <= TimeSpan.Zero) return "Stop reading: report where the task stands and its order id, which brainchain_get_task can read later.";
