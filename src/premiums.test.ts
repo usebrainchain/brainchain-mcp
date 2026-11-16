@@ -110,6 +110,19 @@ describe("stockPremiums", () => {
     }
   });
 
+  it("signs the premium as rounded, so one that rounds to nothing reads +0.00", async () => {
+    // Against 232.830643 in the pool: 0.006 above it is -0.0026%, 0.0233 above it -0.01%, 2.3283 below it +1.01%.
+    for (const [answer, premiumPct] of [
+      [23283664300n, "+0.00"],
+      [23285394300n, "-0.01"],
+      [23050234300n, "+1.01"],
+      [spy.answer, "+0.00"],
+    ] as const) {
+      const [stock] = (await stockPremiums(readerOf([{ ...spy, answer }]), new Date("2026-11-04T21:20:00Z"))).stocks;
+      expect(stock).toMatchObject({ poolPrice: "232.83", premiumPct });
+    }
+  });
+
   it("knows the regular session in New York time, winter and summer", () => {
     expect(usMarketOpen(new Date("2026-11-04T14:29:00Z"))).toBe(false);
     expect(usMarketOpen(new Date("2026-11-04T14:30:00Z"))).toBe(true);

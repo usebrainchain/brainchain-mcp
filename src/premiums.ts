@@ -134,7 +134,8 @@ export async function stockPremiums(reader: ChainReader, now = new Date()): Prom
     }
     const spot = spotFromSlot0(slot0[0], token0);
     const feed = (round[1] * multiplier) / 10n ** 20n;
-    const bps = feed === 0n ? 0 : Number(((spot - feed) * 1_000_000n) / feed) / 100;
+    // Rounded to whole basis points before the sign is read, so a premium that rounds to nothing never prints as -0.00.
+    const bps = feed === 0n ? 0 : Math.round(Number(((spot - feed) * 1_000_000n) / feed) / 100);
     const updatedAt = Number(round[3]);
     stocks.push({
       symbol: symbol!,
@@ -142,7 +143,7 @@ export async function stockPremiums(reader: ChainReader, now = new Date()): Prom
       pool: v.pool,
       poolPrice: usd(spot),
       chainlinkPrice: usd(feed),
-      premiumPct: `${bps >= 0 ? "+" : ""}${(bps / 100).toFixed(2)}`,
+      premiumPct: `${bps >= 0 ? "+" : "-"}${(Math.abs(bps) / 100).toFixed(2)}`,
       feedUpdatedAt: new Date(updatedAt * 1000).toISOString(),
       feedAgeSeconds: Math.max(0, at - updatedAt),
     });
