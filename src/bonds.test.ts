@@ -4,14 +4,14 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { decodeAbiParameters, decodeFunctionData, encodeFunctionData, keccak256, numberToHex, parseTransaction, type Address, type Hex } from "viem";
+import { decodeAbiParameters, decodeFunctionData, decodeFunctionResult, encodeFunctionData, keccak256, numberToHex, parseTransaction, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it, vi } from "vitest";
 
 import { bondsClosed, createBondChain, createBonds, type BondChain, type BondView, type TaskFacts } from "./bonds.js";
 import { resolveConfig } from "./config.js";
 import { createLimits } from "./limits.js";
-import { BOND_LEAD_SEC, bondTerms, DeedStatus, encodeCheckData, proofIndexAbi, shippedAbi, taskOfCheck, TaskStatus } from "./shipped.js";
+import { BOND_LEAD_SEC, bondTerms, DeedStatus, encodeCheckData, proofIndexAbi, shippedAbi, taskBoardAbi, taskOfCheck, TaskStatus } from "./shipped.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
 const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -64,6 +64,42 @@ describe("ShippedDeeds' enums", () => {
     const { bonds } = setup(fakeChain({ bonds: [view({ status: DeedStatus.Settled, remainderBps: 10_000, settledAt: NOW }), view({ deed: 3n, status: DeedStatus.Settled, remainderBps: 0, settledAt: NOW })] }));
     const status = (await bonds.status(12n)) as { bonds: { state: string }[] };
     expect(status.bonds.map((b) => b.state)).toEqual(["delivered", "missed"]);
+  });
+});
+
+describe("TaskBoard.get", () => {
+  it("decodes a task as the 3.4.0 and 3.5.0 boards return it", () => {
+    // TaskBoard.get(3) on mainnet set 3.4.0, read on 2026-11-06.
+    const raw = `0x${[
+      "000000000000000000000000afb0c4ef895d4895040cdc6435b96d3ee8350c6e",
+      "00000000000000000000000000000000000000000000000000000000000f4240",
+      "000000000000000000000000000000000000000000000000000000006aeb2ac9",
+      "0000000000000000000000000000000000000000000000000000000000000006",
+      "0000000000000000000000000000000000000000000000000000000000000001",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "04a594d97f5e26979c668225d0951a16c41e8ac3058267339457faf261618c9c",
+      "a5853e75429e97891002d12055c509c9b6f44b0df3daac71eb059237da61b7b9",
+      "862f7c5782d923cccafea1e1a366bcb154cd31e56dd8786a7bcd4bd57be2c09b",
+      "000000000000000000000000000000000000000000000000000000006ae9d96e",
+      "000000000000000000000000000000000000000000000000000000006ae9d9bd",
+      "0000000000000000000000000000000000000000000000000000000000000000",
+      "000000000000000000000000000000000000000000000000000000006ae9d94a",
+      "0000000000000000000000002b885bf37fffc6ef4abddb8e8e273834c643c3af",
+      "000000000000000000000000dfefbdbf680568e8dc44abbbd657c0701964cc8c",
+      "000000000000000000000000000000000000000000000000000000000000012c",
+      "00000000000000000000000000000000000000000000000000000000000005dc",
+      "0000000000000000000000000000000000000000000000000000000000001f40",
+      "0000000000000000000000000000000000000000000000000000000000001f40",
+      "0000000000000000000000000000000000000000000000000000000000005460",
+      "0000000000000000000000000000000000000000000000000000000000005460",
+      "0000000000000000000000000000000000000000000000000000000000005460",
+    ].join("")}` as const;
+    const task = decodeFunctionResult({ abi: taskBoardAbi, functionName: "get", data: raw });
+    expect(task.poster).toBe("0xafB0C4Ef895D4895040cdC6435B96D3EE8350c6E");
+    expect(task.bounty).toBe(1_000_000n);
+    expect(task.status).toBe(6);
+    expect(task.feeBps).toBe(300);
   });
 });
 
