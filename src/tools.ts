@@ -4,10 +4,13 @@ import { getAddress, isAddress, type Address } from "viem";
 import type { Bonds } from "./bonds.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DEFAULT_DAYS, MAX_DAYS, readCustodyAdditions, type CustodyBoard } from "./custody.js";
-import { MakerError, MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
+import { ChainError } from "./history.js";
+import { MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
 import { brief, canonicalStringify, RESULT_LIMIT } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL, readPremiums, type PremiumBoard } from "./premiums.js";
+import { READINESS_NAME, READINESS_TOOL, readTokenReadiness, type ReadinessBoard } from "./readiness.js";
 import { MIN_BOND, MISSED_TO } from "./shipped.js";
+import { readTokenSightings, SIGHTINGS_NAME, SIGHTINGS_TOOL, SightingsError, type SightingsBoard } from "./sightings.js";
 
 /** What the post tool tells the model about cost and settlement on the configured network. */
 export interface Terms {
@@ -367,6 +370,16 @@ function orderReply(view: unknown): CallToolResult {
   return result;
 }
 
+/** How the tools that read public sources get their answers. A test passes its own in place of any of them. */
+export interface Readers {
+  custody(days: number): Promise<CustodyBoard>;
+  makers(token: Address, wallet?: Address): Promise<MakerBoard>;
+  readiness(token: Address): Promise<ReadinessBoard>;
+  sightings(token: Address): Promise<SightingsBoard>;
+}
+
+const READERS: Readers = { custody: readCustodyAdditions, makers: readMakerHoldings, readiness: readTokenReadiness, sightings: readTokenSightings };
+
 /** `refused` names the tools that a setting keeps from running, each with the error it answers whatever it is sent. */
 export async function callTool(
   desk: Desk,
@@ -375,9 +388,9 @@ export async function callTool(
   premiums: () => Promise<PremiumBoard> = readPremiums,
   bonds?: Bonds,
   refused: ReadonlyMap<string, string> = new Map(),
-  custody: (days: number) => Promise<CustodyBoard> = readCustodyAdditions,
-  makers: (token: Address, wallet?: Address) => Promise<MakerBoard> = readMakerHoldings,
+  readers: Partial<Readers> = {},
 ): Promise<CallToolResult> {
+  const { custody, makers, readiness, sightings } = { ...READERS, ...readers };
   const input = (args ?? {}) as Record<string, unknown>;
   const refusal = refused.get(name);
   if (refusal !== undefined) return reply({ error: refusal }, true);
@@ -435,8 +448,24 @@ export async function callTool(
       const token = address("token", input.token);
       const wallet = input.wallet === undefined ? undefined : address("wallet", input.wallet);
       const board = await makers(token, wallet).catch((error: unknown) => {
-        if (error instanceof MakerError) throw error;
+        if (error instanceof ChainError) throw error;
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
+      });
+      return reply(board);
+    }
+    if (name === READINESS_NAME) {
+      refuseUnknownFields(input, READINESS_TOOL.inputSchema);
+      const board = await readiness(address("token", input.token)).catch((error: unknown) => {
+        if (error instanceof ChainError) throw error;
+        throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
+      });
+      return reply(board);
+    }
+    if (name === SIGHTINGS_NAME) {
+      refuseUnknownFields(input, SIGHTINGS_TOOL.inputSchema);
+      const board = await sightings(address("token", input.token)).catch((error: unknown) => {
+        if (error instanceof SightingsError) throw error;
+        throw new Error(`The lists could not be read just now: ${brief(error)} Try again in a minute.`);
       });
       return reply(board);
     }
