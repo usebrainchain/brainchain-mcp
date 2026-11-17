@@ -207,8 +207,8 @@ describe("the market maker tool's words", () => {
     expect(MAKERS_TOOL.inputSchema).toMatchObject({ required: ["token"], additionalProperties: false });
     expect(Object.keys(MAKERS_TOOL.inputSchema.properties!)).toEqual(["token", "wallet"]);
     expect(readme).toContain(`- \`${MAKERS_NAME}\` `);
-    expect(readme).toContain("The other seven only read.");
-    expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings` and `brainchain_token_readiness`.");
+    expect(readme).toContain("The other eight only read.");
+    expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness` and `brainchain_token_sightings`.");
   });
 });
 

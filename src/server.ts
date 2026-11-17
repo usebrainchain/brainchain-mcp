@@ -15,6 +15,7 @@ import { MAKERS_NAME, MAKERS_TOOL } from "./makers.js";
 import { createDesk, erc20, firstLine } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL } from "./premiums.js";
 import { READINESS_NAME, READINESS_TOOL } from "./readiness.js";
+import { SIGHTINGS_NAME, SIGHTINGS_TOOL } from "./sightings.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_GRADE_NAME, GET_GRADE_TOOL, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, gradeTool, POST_TASK_NAME, postTaskTool, type Desk, type Terms } from "./tools.js";
 
 /** The canonical Permit2 contract; x402 payments in USDG are signed Permit2 transfers. */
@@ -33,7 +34,7 @@ export const INSTRUCTIONS =
 const KEY_HELP =
   `Keep the key in a file only your account can read (chmod 600) and add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config ` +
   `(in Claude Code, \`claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp\`), then restart the server. ` +
-  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME} and ${READINESS_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
+  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME} and ${SIGHTINGS_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -300,7 +301,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
   const { desk, terms, bonds, bondTools: bondToolList, gradeTool: gradeToolDef, refused } = deskFor(env, version, options.fetch);
   const problem = typeof terms === "string" ? terms : terms.problem;
   if (problem) (options.log ?? console.error)(`brainchain-mcp has an invalid setting: ${problem}`);
-  const tools = [postTaskTool(terms), GET_TASK_TOOL, gradeToolDef, GET_GRADE_TOOL, PREMIUMS_TOOL, CUSTODY_TOOL, MAKERS_TOOL, READINESS_TOOL, ...bondToolList];
+  const tools = [postTaskTool(terms), GET_TASK_TOOL, gradeToolDef, GET_GRADE_TOOL, PREMIUMS_TOOL, CUSTODY_TOOL, MAKERS_TOOL, READINESS_TOOL, SIGHTINGS_TOOL, ...bondToolList];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, (request) => callTool(desk, request.params.name, request.params.arguments, undefined, bonds, refused));

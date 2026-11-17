@@ -8,6 +8,7 @@ import { ChainError, STILL_READING } from "./history.js";
 import type { MakerBoard } from "./makers.js";
 import { bondsClosed, type Bonds } from "./bonds.js";
 import { PREMIUMS_TOOL } from "./premiums.js";
+import { SightingsError } from "./sightings.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_GRADE_TOOL, GET_TASK_NAME, GET_TASK_TOOL, gradeTool, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
 
 const desk: Desk = {
@@ -558,6 +559,40 @@ describe("token readiness", () => {
     for (const [error, said] of [
       [Object.assign(new Error("HTTP request failed.\n\nStatus: 429"), { status: 429 }), "Robinhood Chain could not be read just now: HTTP 429. Try again in a minute."],
       [slow, slow.message],
+    ] as const) {
+      const result = await call({ token: CASHCAT }, async () => Promise.reject(error));
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: said });
+    }
+  });
+});
+
+describe("token sightings", () => {
+  const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
+  const board = { chain: "Robinhood Chain" as const, token: { contract: CASHCAT as `0x${string}` }, readAt: "2026-11-16T22:00:00.000Z", lists: [], exchanges: [], robinhood: [], unread: [] };
+  const call = (args: unknown, sightings: (token: string) => Promise<typeof board>) => callTool(desk, "brainchain_token_sightings", args, undefined, undefined, undefined, { sightings });
+
+  it("serves the board without a desk or a key, and refuses what is not an address before reading anything", async () => {
+    const asked: string[] = [];
+    const read = async (token: string) => (asked.push(token), board);
+    expect(body(await call({ token: CASHCAT.toLowerCase() }, read))).toEqual(board);
+    for (const [args, said] of [
+      [{}, "token is required."],
+      [{ token: "CASHCAT" }, "token must be an address on Robinhood Chain: 0x followed by 40 hex characters."],
+      [{ token: CASHCAT, symbol: "CASHCAT" }, "Unknown field: symbol. This tool takes only token."],
+    ] as const) {
+      const result = await call(args, read);
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: said });
+    }
+    expect(asked).toEqual([CASHCAT]);
+  });
+
+  it("answers a failed read in one line, and passes on what is already written for the reader", async () => {
+    const none = new SightingsError("None of the lists could be read just now. Try again in a minute.");
+    for (const [error, said] of [
+      [new TypeError("fetch failed"), "The lists could not be read just now: fetch failed. Try again in a minute."],
+      [none, none.message],
     ] as const) {
       const result = await call({ token: CASHCAT }, async () => Promise.reject(error));
       expect(result.isError).toBe(true);

@@ -10,6 +10,7 @@ import { brief, canonicalStringify, RESULT_LIMIT } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL, readPremiums, type PremiumBoard } from "./premiums.js";
 import { READINESS_NAME, READINESS_TOOL, readTokenReadiness, type ReadinessBoard } from "./readiness.js";
 import { MIN_BOND, MISSED_TO } from "./shipped.js";
+import { readTokenSightings, SIGHTINGS_NAME, SIGHTINGS_TOOL, SightingsError, type SightingsBoard } from "./sightings.js";
 
 /** What the post tool tells the model about cost and settlement on the configured network. */
 export interface Terms {
@@ -374,9 +375,10 @@ export interface Readers {
   custody(days: number): Promise<CustodyBoard>;
   makers(token: Address, wallet?: Address): Promise<MakerBoard>;
   readiness(token: Address): Promise<ReadinessBoard>;
+  sightings(token: Address): Promise<SightingsBoard>;
 }
 
-const READERS: Readers = { custody: readCustodyAdditions, makers: readMakerHoldings, readiness: readTokenReadiness };
+const READERS: Readers = { custody: readCustodyAdditions, makers: readMakerHoldings, readiness: readTokenReadiness, sightings: readTokenSightings };
 
 /** `refused` names the tools that a setting keeps from running, each with the error it answers whatever it is sent. */
 export async function callTool(
@@ -388,7 +390,7 @@ export async function callTool(
   refused: ReadonlyMap<string, string> = new Map(),
   readers: Partial<Readers> = {},
 ): Promise<CallToolResult> {
-  const { custody, makers, readiness } = { ...READERS, ...readers };
+  const { custody, makers, readiness, sightings } = { ...READERS, ...readers };
   const input = (args ?? {}) as Record<string, unknown>;
   const refusal = refused.get(name);
   if (refusal !== undefined) return reply({ error: refusal }, true);
@@ -456,6 +458,14 @@ export async function callTool(
       const board = await readiness(address("token", input.token)).catch((error: unknown) => {
         if (error instanceof ChainError) throw error;
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
+      });
+      return reply(board);
+    }
+    if (name === SIGHTINGS_NAME) {
+      refuseUnknownFields(input, SIGHTINGS_TOOL.inputSchema);
+      const board = await sightings(address("token", input.token)).catch((error: unknown) => {
+        if (error instanceof SightingsError) throw error;
+        throw new Error(`The lists could not be read just now: ${brief(error)} Try again in a minute.`);
       });
       return reply(board);
     }

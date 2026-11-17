@@ -16,7 +16,8 @@ const USAGE = `brainchain-mcp ${version}
 MCP server that pays for tasks on BrainChain, reads their graded results and bonds tasks the wallet will deliver as a worker.
 It also reads what stock tokens cost on Robinhood Chain, lists the Robinhood Chain tokens that BitGo, a custodian for
 exchanges and funds, has recently started to support, reads how much of a token on that chain a market maker's
-trading wallets hold, and reads how far along a token is: deployed, first minted, first pool created.
+trading wallets hold, reads how far along a token is (deployed, first minted, first pool created), and reads which
+lists and exchanges already carry it.
 
 Usage:
   brainchain-mcp                 Start the server on stdio (what MCP clients run).
