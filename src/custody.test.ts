@@ -10,10 +10,12 @@ import {
   CustodyError,
   KEEP_MS,
   listChanges,
+  listedTokens,
   MAX_DAYS,
   MAX_KEPT,
   MAX_PAGES,
   MOVED,
+  named,
   PAGE,
   REFUSED_MS,
   TOKEN_LISTS,
@@ -110,13 +112,15 @@ describe("the custody tool's words", () => {
     expect(KEEP_MS).toBe(600_000);
     expect(CUSTODY_TOOL.description).toContain("Looks back 30 days, or `days` from 1 to 90.");
     expect(row).toContain("(1 to 90, 30 when left out)");
+    for (const text of [CUSTODY_TOOL.description!, row]) expect(text).toContain("pass its `readAt` as `since`: a time in ISO 8601, at most 90 days back, used in place of `days` when both are given.");
+    expect(Object.keys(CUSTODY_TOOL.inputSchema.properties!)).toEqual(["days", "since"]);
     expect((CUSTODY_TOOL.inputSchema.properties as { days: { minimum: number; maximum: number } }).days).toMatchObject({ minimum: 1, maximum: MAX_DAYS });
   });
 
   it("are counted with the tools that only read", () => {
     expect(CUSTODY_TOOL.annotations).toEqual({ readOnlyHint: true, openWorldHint: true });
     expect(readme).toContain(`- \`${CUSTODY_NAME}\` `);
-    expect(readme).toContain("The other eight only read.");
+    expect(readme).toContain("The other nine only read.");
     expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, ");
   });
 });
@@ -259,6 +263,20 @@ describe("custodyAdditions", () => {
     expect(byDay(await custodyAdditions(reader, 30, NOW))).toEqual([["2026-08-06", "hoodeth:today"], ["2026-07-08", "hoodeth:edge"]]);
     expect(byDay(await custodyAdditions(reader, 90, NOW))).toEqual([["2026-08-06", "hoodeth:today"], ["2026-07-08", "hoodeth:edge"], ["2026-07-07", "hoodeth:before"], ["2026-05-09", "hoodeth:quarter"]]);
     expect(byDay(await custodyAdditions(reader, 1, NOW))).toEqual([["2026-08-06", "hoodeth:today"]]);
+  });
+
+  it("starts the period at a given time, to the millisecond, and says so in `since`", async () => {
+    const { reader } = master(OPENING, [
+      { at: "2026-07-07T23:59:59.999Z", lists: { [EDITED]: ["usdg", "before"], [GENERATED]: [] } },
+      { at: "2026-07-08T00:00:00Z", lists: { [EDITED]: ["usdg", "before", "edge"], [GENERATED]: [] } },
+      { at: "2026-08-06T12:00:00Z", lists: { [EDITED]: ["usdg", "before", "edge", "today"], [GENERATED]: [] } },
+    ]);
+    const board = await custodyAdditions(reader, new Date("2026-07-08T00:00:00Z"), NOW);
+    expect(board.since).toBe("2026-07-08T00:00:00.000Z");
+    expect(byDay(board)).toEqual([["2026-08-06", "hoodeth:today"], ["2026-07-08", "hoodeth:edge"]]);
+    expect(byDay(await custodyAdditions(reader, new Date("2026-07-08T00:00:00.001Z"), NOW))).toEqual([["2026-08-06", "hoodeth:today"]]);
+    // A time is the same period as the days it stands for.
+    expect(await custodyAdditions(reader, new Date(NOW.getTime() - 30 * 86_400_000), NOW)).toEqual(await custodyAdditions(reader, 30, NOW));
   });
 
   it("dates a token by when it reached master, not by its commit", async () => {
@@ -415,6 +433,50 @@ describe("custodyAdditions", () => {
     await expect(custodyAdditions(naming(tokenListOf(["usdg"]), { tokens: new Map(), mentioned: new Set(["cashcat"]) }), 30, NOW)).rejects.toStrictEqual(new CustodyError(MOVED));
     // The generated list also holds entries for other chains, and one of those may point at a Robinhood Chain token the other list holds.
     await expect(custodyAdditions(naming(tokenListOf(["usdg", "cashcat"]), { tokens: new Map(), mentioned: new Set(["cashcat"]) }), 30, NOW)).resolves.toMatchObject({ additions: [] });
+  });
+});
+
+describe("listedTokens", () => {
+  it("gives every token on both lists at master's newest commit, from one page of changes", async () => {
+    const { reader, reads } = master(OPENING, [
+      { at: "2026-06-01T00:00:00Z", lists: { [EDITED]: ["usdg", "cashcat"], [GENERATED]: [] } },
+      { at: "2026-08-01T00:00:00Z", lists: { [EDITED]: ["usdg", "cashcat"], [GENERATED]: ["ansemcat"] } },
+    ]);
+    expect(await listedTokens(reader)).toEqual([answered("usdg"), answered("cashcat"), answered("ansemcat")]);
+    expect(reads.sort()).toEqual(["changes 1", "edited 2", "generated 2"]);
+  });
+
+  it("says BitGo moved when master has no changes or the lists hold nothing", async () => {
+    await expect(listedTokens({ changes: async () => ({ changes: [], readAt: 0 }), list: async () => tokenListOf(["usdg"]) })).rejects.toStrictEqual(new CustodyError(MOVED));
+    await expect(listedTokens(master({ [EDITED]: [], [GENERATED]: [] }, [{ at: "2026-08-01T00:00:00Z", lists: { [EDITED]: [], [GENERATED]: [] } }]).reader)).rejects.toStrictEqual(new CustodyError(MOVED));
+  });
+});
+
+describe("named", () => {
+  const tokens = [
+    { id: "hoodeth:rlusd", name: "Ripple USD" },
+    { id: "hoodeth:tsla", name: "Tesla • Robinhood" },
+    { id: "hoodeth:cashcat", name: "Cash Cat" },
+    { id: "hoodeth:cat", name: "CASHCAT" },
+    { id: "hoodeth:deed" },
+  ];
+  const ids = (asked: string) => named(tokens, asked).map(({ id }) => id);
+
+  it("matches BitGo's id, with or without hoodeth:, and BitGo's name, in any case and spacing", () => {
+    expect(ids("RLUSD")).toEqual(["hoodeth:rlusd"]);
+    expect(ids("$rlusd")).toEqual(["hoodeth:rlusd"]);
+    expect(ids("HOODETH:RLUSD")).toEqual(["hoodeth:rlusd"]);
+    expect(ids(" ripple\tusd ")).toEqual(["hoodeth:rlusd"]);
+    expect(ids("ＴＳＬＡ")).toEqual(["hoodeth:tsla"]);
+    expect(ids("deed")).toEqual(["hoodeth:deed"]);
+  });
+
+  it("matches whole words only, and every token that goes by them", () => {
+    expect(ids("Tesla")).toEqual([]);
+    expect(ids("rlus")).toEqual([]);
+    expect(ids("cashcat")).toEqual(["hoodeth:cashcat", "hoodeth:cat"]);
+    expect(ids("")).toEqual([]);
+    expect(ids("$")).toEqual([]);
   });
 });
 

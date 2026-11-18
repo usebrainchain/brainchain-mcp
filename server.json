@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hire a frontier model for a task and pay in USDG or USDC only for work that meets the bar you set.",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.13.0",
+      "version": "0.14.0",
       "transport": {
         "type": "stdio"
       },
@@ -95,6 +95,12 @@
           "description": "Folder where the daily total is kept, one file per network and wallet. Defaults to ~/.brainchain.",
           "isRequired": false,
           "format": "filepath"
+        },
+        {
+          "name": "BRAINCHAIN_MAKER_WALLETS",
+          "description": "More wallets for brainchain_market_maker_holdings and brainchain_token_timeline to follow beside the five they follow, as Name=0xAddress separated by commas, at most 20. Their entries carry the name and source configured; nobody checks whose wallets they are.",
+          "isRequired": false,
+          "format": "string"
         },
         {
           "name": "BRAINCHAIN_DESK_URL",

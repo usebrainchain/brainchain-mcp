@@ -1,7 +1,7 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { Address } from "viem";
 
-import { within } from "./custody.js";
+import { BY_SYMBOL, TOKEN_INPUT, within } from "./custody.js";
 import { label } from "./history.js";
 
 export const SIGHTINGS_NAME = "brainchain_token_sightings";
@@ -28,6 +28,7 @@ export const SIGHTINGS_TOOL: Tool = {
     "A token picks up these listings one at a time as it reaches a wider market: Cash Cat entered Trust Wallet's and MetaMask's lists on July 8, 2026, four weeks before Robinhood listed it on August 6. " +
     "On its own a sighting says little: most tokens on these lists are never listed by Robinhood. " +
     "Pass the token's contract address as `token`; the `contract` of an entry from brainchain_custody_additions works. " +
+    BY_SYMBOL +
     "`lists` has an entry for Trust Wallet, MetaMask, LI.FI and CoinGecko, each with its `source` and `listed`. " +
     "Trust Wallet and MetaMask keep one file for each token in their public code. When the token is listed, their entries add `link`, a link to that file, and `since`, the date of the file's first commit. `since` is left out when that date could not be read. " +
     "Trust Wallet also keeps a file for a token it warns about or has dropped: its entry then has `listed` false and a `status` of `spam` or `abandoned`. " +
@@ -46,7 +47,7 @@ export const SIGHTINGS_TOOL: Tool = {
   annotations: { readOnlyHint: true, openWorldHint: true },
   inputSchema: {
     type: "object",
-    properties: { token: { type: "string", description: "The token's contract address on Robinhood Chain: 0x followed by 40 hex characters." } },
+    properties: { token: TOKEN_INPUT },
     required: ["token"],
     additionalProperties: false,
   },

@@ -21,7 +21,7 @@ export const REFUSED_MS = 60_000;
 const REQUEST_MS = 15_000;
 const ANSWER_MS = 45_000;
 const PARALLEL = 6;
-const DAY_MS = 86_400_000;
+export const DAY_MS = 86_400_000;
 
 export const CUSTODY_TOOL: Tool = {
   name: CUSTODY_NAME,
@@ -31,7 +31,9 @@ export const CUSTODY_TOOL: Tool = {
     "BitGo is a custodian for exchanges, funds and trading firms, and a token shows up in BitGo's code while BitGo is getting ready to hold it, which can be before an exchange lists it: " +
     "BitGo merged the commit that added Cash Cat on July 28, 2026, and Robinhood listed that token on August 6, 2026. " +
     "That makes an entry worth a closer look, not a prediction: it does not say which client asked BitGo to support the token or why, and it does not mean an exchange will list it. " +
-    "Looks back 30 days, or `days` from 1 to 90. `additions` has one entry, newest first, for each merge in that period that added a token, and leaves out a token BitGo has since removed. " +
+    "Looks back 30 days, or `days` from 1 to 90. " +
+    "To see only what was merged after an earlier answer, pass its `readAt` as `since`: a time in ISO 8601, at most 90 days back, used in place of `days` when both are given. " +
+    "`additions` has one entry, newest first, for each merge in that period that added a token, and leaves out a token BitGo has since removed. " +
     "Each entry gives `addedAt`, when the merge landed; `commit`, a link to its commit; and `tokens`, each with its `name`, `contract` address, `decimals` and `id`, BitGo's id for it, such as hoodeth:cashcat. " +
     "`additions` is empty if nothing was added. `readAt` is when the merges were read from GitHub and `since` is where the period starts. " +
     "Most of the tokens BitGo has added are stock tokens issued by Robinhood itself, which say nothing about a listing on an exchange, and some are added before their contract is deployed. " +
@@ -42,7 +44,10 @@ export const CUSTODY_TOOL: Tool = {
   annotations: { readOnlyHint: true, openWorldHint: true },
   inputSchema: {
     type: "object",
-    properties: { days: { type: "integer", minimum: 1, maximum: MAX_DAYS, description: `Optional: how many days back to look, from 1 to ${MAX_DAYS}. Without it the tool looks back ${DEFAULT_DAYS} days.` } },
+    properties: {
+      days: { type: "integer", minimum: 1, maximum: MAX_DAYS, description: `Optional: how many days back to look, from 1 to ${MAX_DAYS}. Without it the tool looks back ${DEFAULT_DAYS} days.` },
+      since: { type: "string", description: `Optional, in place of days: a time in ISO 8601, such as the readAt of an earlier answer, at most ${MAX_DAYS} days back. The tool lists what was merged at or after it.` },
+    },
     additionalProperties: false,
   },
 };
@@ -170,15 +175,16 @@ async function tokensAt(reader: BitGoReader, commit: string): Promise<Map<string
 }
 
 /**
- * The tokens on BitGo's lists now that were on neither list `days` days ago, each under a change to master that added it.
+ * The tokens on BitGo's lists now that were on neither list at the start of the period, `days` days ago or at `since`,
+ * each under a change to master that added it.
  *
  * It reads master's own history, not the commits behind it: a commit is often made on a branch days before it is merged,
  * and a branch can drop a token and put it back without master ever losing it. The change is found by halving the period,
  * so 64 changes cost about eight states for one token, not 64. A token that master gained, lost and gained again within
  * the period is listed once, under one of the two gains.
  */
-export async function custodyAdditions(reader: BitGoReader, days: number, now = new Date()): Promise<CustodyBoard> {
-  const since = now.getTime() - days * DAY_MS;
+export async function custodyAdditions(reader: BitGoReader, period: number | Date, now = new Date()): Promise<CustodyBoard> {
+  const since = typeof period === "number" ? now.getTime() - period * DAY_MS : period.getTime();
   const { head, readAt, recent } = await changesSince(reader, since);
   const held = await tokensAt(reader, head);
   if (held.size === 0) throw new CustodyError(MOVED);
@@ -217,6 +223,31 @@ export async function custodyAdditions(reader: BitGoReader, days: number, now = 
     since: new Date(since).toISOString(),
     additions,
   };
+}
+
+/** Every Robinhood Chain token on BitGo's lists as master stands now. */
+export async function listedTokens(reader: BitGoReader): Promise<CustodyToken[]> {
+  const { changes } = await reader.changes();
+  if (!changes[0]) throw new CustodyError(MOVED);
+  const held = await tokensAt(reader, changes[0].after);
+  if (held.size === 0) throw new CustodyError(MOVED);
+  return [...held].map(([id, token]) => ({ id: `hoodeth:${id}`, ...token }));
+}
+
+/** The input of the tools that take a token. */
+export const TOKEN_INPUT = { type: "string", description: "The token's contract address on Robinhood Chain, 0x followed by 40 hex characters, or its symbol or name as BitGo lists it, such as RLUSD." } as const;
+
+/** How the tools that take a token say they take a symbol too. */
+export const BY_SYMBOL =
+  "`token` can also be a symbol or name, such as RLUSD or Ripple USD, looked up on BitGo's lists for Robinhood Chain: when exactly one token goes by it, `lookup` in the answer names the `contract` it stands for, and when several do, the answer lists them as `candidates` and reads nothing more. ";
+
+const fold = (text: string) => text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+
+/** The tokens `asked` names, by BitGo's id with or without `hoodeth:`, or by BitGo's name, in any case and with or without a leading `$`. */
+export function named(tokens: readonly CustodyToken[], asked: string): CustodyToken[] {
+  const wanted = fold(asked.replace(/^\$/, ""));
+  if (!wanted) return [];
+  return tokens.filter(({ id, name }) => [id, id.slice("hoodeth:".length), ...(name ? [name] : [])].some((key) => fold(key) === wanted));
 }
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -351,7 +382,13 @@ export async function within<T>(ms: number, work: Promise<T>, late: Error): Prom
 
 let reader: BitGoReader | undefined;
 
-export function readCustodyAdditions(days: number): Promise<CustodyBoard> {
+export function readListedTokens(): Promise<CustodyToken[]> {
   reader ??= bitGoReader();
-  return within(ANSWER_MS, custodyAdditions(reader, days), new CustodyError("BitGo's code on GitHub is taking too long to read. Try again in a minute."));
+  return within(ANSWER_MS, listedTokens(reader), new CustodyError("BitGo's code on GitHub is taking too long to read. Try again in a minute."));
+}
+
+/** `period` is a number of days back, or the time the period starts. */
+export function readCustodyAdditions(period: number | Date): Promise<CustodyBoard> {
+  reader ??= bitGoReader();
+  return within(ANSWER_MS, custodyAdditions(reader, period), new CustodyError("BitGo's code on GitHub is taking too long to read. Try again in a minute."));
 }

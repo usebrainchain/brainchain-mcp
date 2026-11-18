@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { PREMIUMS_NAME } from "./premiums.js";
 import { READINESS_NAME } from "./readiness.js";
 import { SIGHTINGS_NAME } from "./sightings.js";
+import { TIMELINE_NAME } from "./timeline.js";
 import { resolveConfig } from "./config.js";
 import { CUSTODY_NAME } from "./custody.js";
 import { MAKERS_NAME } from "./makers.js";
@@ -56,7 +57,7 @@ describe("the server", () => {
     expect(client.getServerVersion()).toMatchObject({ name: "brainchain", title: "BrainChain" });
     expect(client.getInstructions()).toBe(INSTRUCTIONS);
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]);
+    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, TIMELINE_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]);
 
     const post = await client.callTool({ name: POST_TASK_NAME, arguments: task });
     expect(post.isError).toBe(true);
@@ -84,7 +85,7 @@ describe("the server", () => {
       expect(logged[0]).toContain(problem);
 
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(11);
+      expect(tools).toHaveLength(12);
       const description = tools.find((tool) => tool.name === POST_TASK_NAME)!.description!;
       expect(description.startsWith(`Invalid setting: ${problem}`)).toBe(true);
       expect(description).not.toMatch(/USDG|USDC/);
@@ -110,12 +111,39 @@ describe("the server", () => {
       // The tools that read BitGo's lists and a market maker's wallet need no setting, so each answers for itself: here, about what it was sent.
       const custody = await client.callTool({ name: CUSTODY_NAME, arguments: { days: 0 } });
       expect(JSON.parse(text(custody))).toEqual({ error: "days must be a whole number from 1 to 90. Leave it out to look back 30 days." });
-      for (const name of [MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME]) {
+      for (const name of [MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, TIMELINE_NAME]) {
         const result = await client.callTool({ name, arguments: {} });
         expect(JSON.parse(text(result))).toEqual({ error: "token is required." });
       }
       expect(logged).toHaveLength(1);
     }
+  });
+
+  it("names the wallets BRAINCHAIN_MAKER_WALLETS adds in the market maker tool, and says nothing at startup", async () => {
+    const logged: string[] = [];
+    const client = await connect({ BRAINCHAIN_MAKER_WALLETS: "Acme=0xb97e4298c7f5f55360d207a6196125376675b3ea" }, { log: (message) => logged.push(message) });
+    expect(logged).toEqual([]);
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === MAKERS_NAME)!.description).toContain("This server also follows one more wallet that its operator added with BRAINCHAIN_MAKER_WALLETS: Acme at 0xB97e4298c7F5f55360d207a6196125376675B3eA.");
+  });
+
+  it("reports a BRAINCHAIN_MAKER_WALLETS it cannot read once at startup, and stops only the tools that read the wallets", async () => {
+    const problem = "The address of wallet 1 in BRAINCHAIN_MAKER_WALLETS must be 0x followed by 40 hex characters. Fix it in this server's environment and restart the server.";
+    for (const env of [{}, { BRAINCHAIN_PAYER_KEY: KEY }, { BRAINCHAIN_NETWORK: "devnet" }]) {
+      const logged: string[] = [];
+      const client = await connect({ ...env, BRAINCHAIN_MAKER_WALLETS: "Acme=0x12" }, { log: (message) => logged.push(message) });
+      expect(logged.filter((line) => line.includes("BRAINCHAIN_MAKER_WALLETS"))).toEqual([`brainchain-mcp has an invalid setting: ${problem}`]);
+      const { tools } = await client.listTools();
+      for (const [name, opening] of [[MAKERS_NAME, "How much of a Robinhood Chain token"], [TIMELINE_NAME, "Every dated public step"]] as const) {
+        expect(tools.find((tool) => tool.name === name)!.description).toMatch(new RegExp(`^Invalid setting: ${problem.replace(/[.]/g, "\\.")} Until the operator fixes it, this tool only returns that error\\. ${opening}`));
+        for (const sent of [{ token: "0x020bfC650A365f8BB26819deAAbF3E21291018b4" }, {}]) expect(JSON.parse(text(await client.callTool({ name, arguments: sent })))).toEqual({ error: problem });
+      }
+      for (const name of [POST_TASK_NAME, CUSTODY_NAME, READINESS_NAME, SIGHTINGS_NAME]) expect(tools.find((tool) => tool.name === name)!.description).not.toContain("BRAINCHAIN_MAKER_WALLETS");
+      expect(JSON.parse(text(await client.callTool({ name: CUSTODY_NAME, arguments: { days: 0 } })))).toEqual({ error: "days must be a whole number from 1 to 90. Leave it out to look back 30 days." });
+      for (const name of [READINESS_NAME, SIGHTINGS_NAME]) expect(JSON.parse(text(await client.callTool({ name, arguments: {} })))).toEqual({ error: "token is required." });
+    }
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    expect(readme).toContain("A `BRAINCHAIN_MAKER_WALLETS` it cannot read stops `brainchain_market_maker_holdings` and `brainchain_token_timeline`, which read the wallets it adds, and no other tool.");
   });
 
   it("stops only the tools that pay for a setting only payments read, and keeps reading orders, grades and bonds", async () => {
@@ -260,9 +288,9 @@ describe("the server", () => {
         expect(asked).toHaveLength(2);
 
         // The premiums, BitGo's additions, a market maker's holdings and a token's readiness and sightings read public data and no setting, so each answers for itself.
-        for (const name of [PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME]) expect(tools.find((tool) => tool.name === name)!.description).not.toContain("Invalid setting");
+        for (const name of [PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, TIMELINE_NAME]) expect(tools.find((tool) => tool.name === name)!.description).not.toContain("Invalid setting");
         expect(JSON.parse(text(await client.callTool({ name: CUSTODY_NAME, arguments: { days: 0 } })))).toEqual({ error: "days must be a whole number from 1 to 90. Leave it out to look back 30 days." });
-        for (const name of [MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME]) expect(JSON.parse(text(await client.callTool({ name, arguments: {} })))).toEqual({ error: "token is required." });
+        for (const name of [MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, TIMELINE_NAME]) expect(JSON.parse(text(await client.callTool({ name, arguments: {} })))).toEqual({ error: "token is required." });
 
         // Nor does reading a bond: its description names no problem, and on testnet it answers as it always does there.
         const status = tools.find((tool) => tool.name === BOND_STATUS_NAME)!.description!;
@@ -276,7 +304,8 @@ describe("the server", () => {
     }
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
     expect(readme).toContain("A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_bond_task` and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working.");
-    expect(readme).toContain("A setting only payments read stops just the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; the other eight keep working.");
+    expect(readme).toContain("A setting only payments read stops just the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; the other nine keep working.");
+    expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings` and `brainchain_token_timeline`.");
     expect(readme).toContain("`BRAINCHAIN_STATE_DIR` (including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set)");
     expect(readme).not.toContain("the task and bond tools return the error");
   });

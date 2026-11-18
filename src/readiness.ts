@@ -1,6 +1,7 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { formatUnits, isAddressEqual, parseAbiItem, zeroAddress, type Address, type Hash } from "viem";
 
+import { BY_SYMBOL, TOKEN_INPUT } from "./custody.js";
 import { blockTime, ChainError, earliestLog, firstMint, firstSince, inTurn, tokenFacts, type ChainHistory, type Dated, type Kept, type Mint } from "./history.js";
 
 export const READINESS_NAME = "brainchain_token_readiness";
@@ -20,6 +21,7 @@ export const READINESS_TOOL: Tool = {
     "A token is often named before it exists: BitGo's public code lists contracts that are not deployed yet. " +
     "Each step that follows leaves a dated record on chain, and this tool reads them. " +
     "Pass the token's contract address as `token`; the `contract` of an entry from brainchain_custody_additions works. " +
+    BY_SYMBOL +
     "`deployed` says whether a contract is at the address. For a deployed token, `token` holds the `name` and `symbol` the contract gives itself, its `decimals` and its `totalSupply`, counted in tokens and not in the token's smallest unit. " +
     "Whoever deployed the contract chose the name and symbol, so they do not prove which token it is. " +
     "`firstMint` is the first time tokens were created: `at`, the `block`, the `transaction` and `to`, the address that received them. It is left out for a token with nothing minted. " +
@@ -32,7 +34,7 @@ export const READINESS_TOOL: Tool = {
   annotations: { readOnlyHint: true, openWorldHint: true },
   inputSchema: {
     type: "object",
-    properties: { token: { type: "string", description: "The token's contract address on Robinhood Chain: 0x followed by 40 hex characters." } },
+    properties: { token: TOKEN_INPUT },
     required: ["token"],
     additionalProperties: false,
   },
@@ -148,3 +150,6 @@ const kept: ReadinessKept = { mints: new Map(), pools: new Map() };
 export function readTokenReadiness(token: Address): Promise<ReadinessBoard> {
   return inTurn((reader) => tokenReadiness(reader, token, kept));
 }
+
+/** What `readTokenReadiness` reads, in a turn another tool already holds, so both share what was read. */
+export const readinessIn = (reader: ChainHistory, token: Address) => tokenReadiness(reader, token, kept);

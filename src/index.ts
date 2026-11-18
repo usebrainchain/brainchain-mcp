@@ -16,8 +16,8 @@ const USAGE = `brainchain-mcp ${version}
 MCP server that pays for tasks on BrainChain, reads their graded results and bonds tasks the wallet will deliver as a worker.
 It also reads what stock tokens cost on Robinhood Chain, lists the Robinhood Chain tokens that BitGo, a custodian for
 exchanges and funds, has recently started to support, reads how much of a token on that chain a market maker's
-trading wallets hold, reads how far along a token is (deployed, first minted, first pool created), and reads which
-lists and exchanges already carry it.
+trading wallets hold, now or at a past block, reads how far along a token is (deployed, first minted, first pool
+created), reads which lists and exchanges already carry it, and puts every dated public step of a token in one timeline.
 
 Usage:
   brainchain-mcp                 Start the server on stdio (what MCP clients run).
@@ -43,6 +43,9 @@ Environment:
   BRAINCHAIN_MAX_BOND_UNITS   Maximum locked in one delivery bond on Shipped (default 10000000 = 10 USDG); bonds also draw on
                               the budget and the daily limit.
   BRAINCHAIN_STATE_DIR        Where the daily limit's record is kept (default ~/.brainchain). Absolute or starting with ~/.
+  BRAINCHAIN_MAKER_WALLETS    More wallets for brainchain_market_maker_holdings and brainchain_token_timeline to follow, as
+                              Name=0xAddress separated by commas (at most 20). Nobody checks whose wallets they are; their
+                              entries say source configured.
   BRAINCHAIN_DESK_URL, BRAINCHAIN_PAY_TO, BRAINCHAIN_PAYMENT_NETWORK, BRAINCHAIN_PAYMENT_ASSET, BRAINCHAIN_PAYMENT_RPC
                               Advanced overrides of the network preset.
 `;

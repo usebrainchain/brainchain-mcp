@@ -3,14 +3,15 @@ import { getAddress, isAddress, type Address } from "viem";
 
 import type { Bonds } from "./bonds.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
-import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DEFAULT_DAYS, MAX_DAYS, readCustodyAdditions, type CustodyBoard } from "./custody.js";
-import { ChainError } from "./history.js";
+import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, type CustodyBoard, type CustodyToken } from "./custody.js";
+import { ChainError, type Moment } from "./history.js";
 import { MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
 import { brief, canonicalStringify, RESULT_LIMIT } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL, readPremiums, type PremiumBoard } from "./premiums.js";
 import { READINESS_NAME, READINESS_TOOL, readTokenReadiness, type ReadinessBoard } from "./readiness.js";
 import { MIN_BOND, MISSED_TO } from "./shipped.js";
 import { readTokenSightings, SIGHTINGS_NAME, SIGHTINGS_TOOL, SightingsError, type SightingsBoard } from "./sightings.js";
+import { readTokenTimeline, TIMELINE_NAME, TIMELINE_TOOL, type TimelineBoard } from "./timeline.js";
 
 /** What the post tool tells the model about cost and settlement on the configured network. */
 export interface Terms {
@@ -291,6 +292,70 @@ function address(name: string, value: unknown): Address {
   return getAddress(plain);
 }
 
+/** A symbol several of BitGo's tokens go by: the answer names them and reads nothing more. */
+class Candidates extends Error {
+  constructor(
+    message: string,
+    readonly candidates: CustodyToken[],
+  ) {
+    super(message);
+  }
+}
+
+/** How a symbol was looked up, as the answer reports it. */
+export interface Lookup {
+  asked: string;
+  id: string;
+  name?: string;
+  contract: Address;
+}
+
+/**
+ * The token `value` names: an address, checked as one, or a symbol or name, looked up on BitGo's lists. Anything that
+ * starts like an address is read as one, so a mistyped address is never taken for a symbol.
+ */
+async function tokenOf(value: unknown, listed: Readers["listed"]): Promise<{ token: Address; lookup?: Lookup }> {
+  const sent = text("token", value);
+  if (/^0x/i.test(sent) || /^[0-9a-fA-F]{40}$/.test(sent)) return { token: address("token", sent) };
+  if (sent.length > 80 || /[\n\r\u2028\u2029]/.test(sent)) throw new Error("token must be a contract address on Robinhood Chain, or a symbol or name of one line and at most 80 characters.");
+  const tokens = await listed().catch((error: unknown) => {
+    if (error instanceof CustodyError) throw error;
+    throw new Error(`BitGo's code on GitHub could not be read just now to look up the symbol: ${brief(error)} Pass the token's contract address, or try again in a minute.`);
+  });
+  const found = named(tokens, sent);
+  const contracts = new Set(found.map(({ contract }) => contract));
+  if (found.length === 0) throw new Error(`No token on BitGo's lists for Robinhood Chain has the id or name ${JSON.stringify(sent)}. Pass the token's contract address instead.`);
+  if (contracts.size > 1) throw new Candidates(`${found.length} tokens on BitGo's lists for Robinhood Chain go by ${JSON.stringify(sent)}, so nothing was read. Pass the contract address of the one you mean, from \`candidates\`.`, found);
+  const [{ id, name, contract }] = found as [CustodyToken];
+  if (!contract) throw new Error(`BitGo lists ${id} in a form this tool does not read, so it has no contract address for it. Pass the token's contract address instead.`);
+  return { token: contract, lookup: { asked: sent, id, ...(name ? { name } : {}), contract } };
+}
+
+/** A time in ISO 8601: a date, which is midnight UTC, or a date and time with its offset. Without one, a time would be read in the server's own zone. */
+const ISO_TIME = /^(\d{4})-(\d{2})-(\d{2})(?:T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/;
+
+/** A time in the past, in milliseconds. A date such as February 30 is refused, which `Date.parse` would move to March. */
+function instant(name: string, value: unknown, now = Date.now()): number {
+  const sent = text(name, value);
+  const [, year, month, day] = ISO_TIME.exec(sent) ?? [];
+  const time = Date.parse(sent);
+  if (!year || Number.isNaN(time) || new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))).getUTCDate() !== Number(day)) {
+    throw new Error(`${name} must be a time in ISO 8601, such as 2026-11-01T00:00:00Z, or a date, such as 2026-11-01.`);
+  }
+  if (time > now) throw new Error(`${name} is in the future.`);
+  return time;
+}
+
+/** The past block a read is for, from `atBlock` or `at`; undefined for a read of the newest block. */
+function moment(input: Record<string, unknown>): Moment | undefined {
+  if (input.atBlock !== undefined && input.at !== undefined) throw new Error("Pass atBlock or at, not both.");
+  if (input.atBlock !== undefined) {
+    if (typeof input.atBlock !== "number" || !Number.isSafeInteger(input.atBlock) || input.atBlock < 0) throw new Error("atBlock must be a block number: a whole number from 0.");
+    return { block: BigInt(input.atBlock) };
+  }
+  return input.at === undefined ? undefined : { time: instant("at", input.at) };
+}
+
 function refuseUnknownFields(input: Record<string, unknown>, schema: Tool["inputSchema"]): void {
   const known = Object.keys(schema.properties ?? {});
   const unknown = Object.keys(input).filter((key) => !known.includes(key));
@@ -372,13 +437,20 @@ function orderReply(view: unknown): CallToolResult {
 
 /** How the tools that read public sources get their answers. A test passes its own in place of any of them. */
 export interface Readers {
-  custody(days: number): Promise<CustodyBoard>;
-  makers(token: Address, wallet?: Address): Promise<MakerBoard>;
+  /** `period` is a number of days back, or the time the period starts. */
+  custody(period: number | Date): Promise<CustodyBoard>;
+  makers(token: Address, wallet?: Address, moment?: Moment): Promise<MakerBoard>;
   readiness(token: Address): Promise<ReadinessBoard>;
   sightings(token: Address): Promise<SightingsBoard>;
+  /** BitGo's tokens on Robinhood Chain, which a symbol is looked up in. */
+  listed(): Promise<CustodyToken[]>;
+  timeline(token: Address, until?: Moment): Promise<TimelineBoard>;
 }
 
-const READERS: Readers = { custody: readCustodyAdditions, makers: readMakerHoldings, readiness: readTokenReadiness, sightings: readTokenSightings };
+const READERS: Readers = { custody: readCustodyAdditions, makers: readMakerHoldings, readiness: readTokenReadiness, sightings: readTokenSightings, listed: readListedTokens, timeline: readTokenTimeline };
+
+/** An answer for a token looked up by symbol leads with what it was looked up as. */
+const withLookup = (board: object, lookup: Lookup | undefined) => (lookup ? { lookup, ...board } : board);
 
 /** `refused` names the tools that a setting keeps from running, each with the error it answers whatever it is sent. */
 export async function callTool(
@@ -390,7 +462,7 @@ export async function callTool(
   refused: ReadonlyMap<string, string> = new Map(),
   readers: Partial<Readers> = {},
 ): Promise<CallToolResult> {
-  const { custody, makers, readiness, sightings } = { ...READERS, ...readers };
+  const { custody, makers, readiness, sightings, listed, timeline } = { ...READERS, ...readers };
   const input = (args ?? {}) as Record<string, unknown>;
   const refusal = refused.get(name);
   if (refusal !== undefined) return reply({ error: refusal }, true);
@@ -437,7 +509,10 @@ export async function callTool(
       refuseUnknownFields(input, CUSTODY_TOOL.inputSchema);
       const days = input.days === undefined ? DEFAULT_DAYS : input.days;
       if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > MAX_DAYS) throw new Error(`days must be a whole number from 1 to ${MAX_DAYS}. Leave it out to look back ${DEFAULT_DAYS} days.`);
-      const board = await custody(days).catch((error: unknown) => {
+      const now = Date.now();
+      const since = input.since === undefined ? undefined : instant("since", input.since, now);
+      if (since !== undefined && since < now - MAX_DAYS * DAY_MS) throw new Error(`since can be at most ${MAX_DAYS} days back, as far as this tool reads BitGo's changes.`);
+      const board = await custody(since === undefined ? days : new Date(since)).catch((error: unknown) => {
         if (error instanceof CustodyError) throw error;
         throw new Error(`BitGo's code on GitHub could not be read just now: ${brief(error)} Try again in a minute.`);
       });
@@ -445,32 +520,45 @@ export async function callTool(
     }
     if (name === MAKERS_NAME) {
       refuseUnknownFields(input, MAKERS_TOOL.inputSchema);
-      const token = address("token", input.token);
       const wallet = input.wallet === undefined ? undefined : address("wallet", input.wallet);
-      const board = await makers(token, wallet).catch((error: unknown) => {
+      const when = moment(input);
+      const { token, lookup } = await tokenOf(input.token, listed);
+      const board = await makers(token, wallet, when).catch((error: unknown) => {
         if (error instanceof ChainError) throw error;
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
       });
-      return reply(board);
+      return reply(withLookup(board, lookup));
     }
     if (name === READINESS_NAME) {
       refuseUnknownFields(input, READINESS_TOOL.inputSchema);
-      const board = await readiness(address("token", input.token)).catch((error: unknown) => {
+      const { token, lookup } = await tokenOf(input.token, listed);
+      const board = await readiness(token).catch((error: unknown) => {
         if (error instanceof ChainError) throw error;
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
       });
-      return reply(board);
+      return reply(withLookup(board, lookup));
     }
     if (name === SIGHTINGS_NAME) {
       refuseUnknownFields(input, SIGHTINGS_TOOL.inputSchema);
-      const board = await sightings(address("token", input.token)).catch((error: unknown) => {
+      const { token, lookup } = await tokenOf(input.token, listed);
+      const board = await sightings(token).catch((error: unknown) => {
         if (error instanceof SightingsError) throw error;
         throw new Error(`The lists could not be read just now: ${brief(error)} Try again in a minute.`);
       });
-      return reply(board);
+      return reply(withLookup(board, lookup));
+    }
+    if (name === TIMELINE_NAME) {
+      refuseUnknownFields(input, TIMELINE_TOOL.inputSchema);
+      const when = moment(input);
+      const { token, lookup } = await tokenOf(input.token, listed);
+      const board = await timeline(token, when).catch((error: unknown) => {
+        if (error instanceof ChainError) throw error;
+        throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
+      });
+      return reply(withLookup(board, lookup));
     }
     return reply({ error: `Unknown tool ${name}.` }, true);
   } catch (error) {
-    return reply({ error: error instanceof Error ? error.message : String(error) }, true);
+    return reply({ error: error instanceof Error ? error.message : String(error), ...(error instanceof Candidates ? { candidates: error.candidates } : {}) }, true);
   }
 }
