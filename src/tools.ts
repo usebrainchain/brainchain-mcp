@@ -96,7 +96,7 @@ export function bondTools(
         lead(invalid.bond) +
         `Lock USDG on Shipped behind a BrainChain task from ${where}, as the worker that will deliver it. BrainChain must already have hired this wallet for the task. ` +
         `If the task is paid and its Proof is recorded by the bond's deadline, which is set after the task's and comes back in the reply, the bond less Shipped's 1% fee is credited to the wallet on Shipped's registry, where the worker CLI's \`bond claim\` collects it; if not, the bond goes to ${MISSED_TO}. ` +
-        `A worker's settled bonds, delivered and missed, are part of what BrainChain reads at later hires. ` +
+        `A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires. ` +
         `The amount is at least the task's bounty and ${formatUnits(MIN_BOND)} USDG, at most ${cap} per task, and counts against this server's budget and daily limit like a post. ` +
         `The wallet needs the USDG and a little ETH on Robinhood Chain. Never bond a task this wallet posted or paid for. Returns the bond, its transaction and its deadline; follow it with ${BOND_STATUS_NAME}. ` +
         `If the reply says possiblyBonded, the bond may have been placed and could not be confirmed: read the task with ${BOND_STATUS_NAME} and do not bond it again.`,
@@ -152,7 +152,7 @@ const POST_TASK_INPUT: Tool["inputSchema"] = {
 /** Given a configuration error instead of terms, the description leads with it. */
 export function postTaskTool(terms: Terms | string): Tool {
   const about =
-    `Pay for a task on BrainChain, whose decision model is served by TypeSafe. BrainChain hires a frontier model or an outside worker for the brief, grades the result against your quality levels and pays it only if the work reaches your pass level: with three quality levels, the second or better; with two, only the first. ` +
+    `Pay for a task on BrainChain. The model behind its decisions is Jev, a decision model from TypeSafe. BrainChain hires a frontier model or an outside worker for the brief, grades the result against your quality levels and pays it only if the work reaches your pass level: with three quality levels, the second or better; with two, only the first. ` +
     `Briefs and results are public, so never include credentials or code that cannot be published. ` +
     `A brief can be up to 32,000 UTF-16 units (${UNITS}), and the whole task at most 64,000 bytes as JSON. `;
   return {
@@ -174,7 +174,7 @@ export function postTaskTool(terms: Terms | string): Tool {
 const GRADE_INPUT: Tool["inputSchema"] = {
   type: "object",
   properties: {
-    brief: { type: "string", minLength: 1, maxLength: 32000, description: `What the work had to do, as the worker was told. BrainChain's decision model knows nothing else about the job. Up to 32,000 UTF-16 units: ${UNITS}.` },
+    brief: { type: "string", minLength: 1, maxLength: 32000, description: `What the work had to do, as the worker was told. Jev knows nothing else about the job. Up to 32,000 UTF-16 units: ${UNITS}.` },
     result: { type: "string", minLength: 1, description: "The delivered work as text, at most 100,000 bytes." },
     title: { type: "string", minLength: 1, maxLength: 120, description: "Optional: one line naming the job." },
     levels: {
@@ -195,7 +195,7 @@ const GRADE_INPUT: Tool["inputSchema"] = {
 export function gradeTool(terms: Terms | string): Tool {
   const about =
     `Have BrainChain grade work delivered somewhere else, such as a job on another agent market, against the brief it answered. ` +
-    `Returns the verdict: whether the work passes, the probability it reaches a passing level (the lower of what BrainChain's decision model and a second model each give), and a public decision record. ` +
+    `Returns the verdict: whether the work passes, the probability it reaches a passing level (the lower of what Jev and a second model each give), and a public decision record. ` +
     `The brief is published in the record, and the result once it is accepted, so never include credentials or text that cannot be published. ` +
     `This tool only grades: nothing is paid to the worker and no task is posted. `;
   return {

@@ -845,8 +845,8 @@ describe("the exam tools", () => {
     for (const tool of [EXAM_INFO_TOOL, EXAM_STATUS_TOOL, LICENCES_TOOL, AGENT_RECORD_TOOL]) expect(tool.annotations).toEqual({ readOnlyHint: true, openWorldHint: true });
   });
 
-  it("never name the model behind BrainChain's decisions", () => {
+  it("pause with no dash", () => {
     const tools = [EXAM_INFO_TOOL, sitExamTool(resolveConfig({}).terms), examSubmitTool(), EXAM_STATUS_TOOL, LICENCES_TOOL, AGENT_RECORD_TOOL];
-    for (const tool of tools) expect(JSON.stringify(tool)).not.toMatch(/\bJev\b|—/);
+    for (const tool of tools) expect(JSON.stringify(tool)).not.toContain("—");
   });
 });

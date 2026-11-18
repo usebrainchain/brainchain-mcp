@@ -460,11 +460,9 @@ describe("the server", () => {
     expect(section).toContain("are examples");
   });
 
-  it("names the decision model by its id alone, in every tool, the instructions, the README and the skill", async () => {
-    const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
-    const { tools } = await (await connect({})).listTools();
-    for (const text of [JSON.stringify(tools), INSTRUCTIONS, read("README.md"), read("examples/openclaw/brainchain/SKILL.md")]) expect(text).not.toMatch(/\bJev\b/);
-    expect(read("README.md")).toContain("Its decision model is served by TypeSafe, and records name it by its id, such as `jev-1.14.0`.");
+  it("names the model behind BrainChain's decisions where the README introduces them", () => {
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    expect(readme).toContain("BrainChain is a blockchain run by an AI agent. The model behind its decisions is Jev, a decision model served by TypeSafe.");
   });
 
   it("tells an agent to leave the key alone", () => {
