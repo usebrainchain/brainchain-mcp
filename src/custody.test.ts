@@ -3,12 +3,17 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  BITGO_START,
   bitGoReader,
   CUSTODY_NAME,
   CUSTODY_TOOL,
   custodyAdditions,
   CustodyError,
+  custodyHistory,
+  EARLY_LIST,
+  HISTORY_PAGES,
   KEEP_MS,
+  LISTS_MOVED_AT,
   listChanges,
   listedTokens,
   MAX_DAYS,
@@ -17,6 +22,7 @@ import {
   MOVED,
   named,
   PAGE,
+  PROBE_EVERY,
   REFUSED_MS,
   TOKEN_LISTS,
   tokenList,
@@ -138,6 +144,22 @@ describe("tokenList", () => {
     expect([...mentioned]).toEqual(["cashcat", "mcd", "ansemcat"]);
   });
 
+  it("reads the first Robinhood Chain tokens as BitGo first listed them, among every other chain's", () => {
+    // From allCoinsAndTokens.ts at 42d4c1de, the first commit in BitGoJS that added a Robinhood Chain token.
+    const TSLA = `  erc20Token(
+    '71bfcfbb-0e1d-4712-9836-8e7c481b9d87',
+    'hoodeth:tsla',
+    'Tesla',
+    18,
+    '0x322f0929c4625ed5bad873c95208d54e1c003b2d',
+    UnderlyingAsset['hoodeth:tsla'],
+    Networks.main.hoodeth
+  ),`;
+    const { tokens, mentioned } = tokenList(`${TESTNET}\n${TSLA}`)!;
+    expect([...tokens]).toEqual([["tsla", { name: "Tesla", contract: "0x322F0929c4625eD5bAd873c95208D54E1c003b2d", decimals: 18 }]]);
+    expect([...mentioned]).toEqual(["tsla"]);
+  });
+
   it("keeps the id of an entry whose details are written some other way, and does not lend it the next entry's", () => {
     const { tokens } = tokenList(`${odd}\n${CASHCAT}`)!;
     expect(tokens.get("deed")).toEqual({});
@@ -212,22 +234,26 @@ type Lists = { [file: string]: string[] };
  */
 function master(opening: Lists, steps: { at: string; lists: Lists }[]) {
   const reads: string[] = [];
-  const states = [opening, ...steps.map((step) => step.lists)];
-  const changes = steps.map((step, i): BranchChange => ({ at: Date.parse(step.at), before: sha(i + 1), after: sha(i + 2) })).reverse();
+  const states = () => [opening, ...steps.map((step) => step.lists)];
+  // GitHub pages from the newest change, so a page starts further back once master has moved.
+  const changes = () => steps.map((step, i): BranchChange => ({ at: Date.parse(step.at), before: sha(i + 1), after: sha(i + 2) })).reverse();
   const reader: BitGoReader = {
     async changes(page) {
       const start = page === undefined ? 0 : Number(page);
       reads.push(`changes ${start / PAGE + 1}`);
-      return { changes: changes.slice(start, start + PAGE), readAt: READ.getTime(), ...(start + PAGE < changes.length ? { next: String(start + PAGE) } : {}) };
+      const all = changes();
+      return { changes: all.slice(start, start + PAGE), readAt: READ.getTime(), ...(start + PAGE < all.length ? { next: String(start + PAGE) } : {}) };
     },
     async list(file, commit) {
       const state = parseInt(commit, 16) - 1;
-      reads.push(`${file === EDITED ? "edited" : "generated"} ${state}`);
-      const ids = states[state]?.[file];
+      reads.push(`${file === EDITED ? "edited" : file === GENERATED ? "generated" : "early"} ${state}`);
+      const ids = states()[state]?.[file];
       return ids && tokenListOf(ids);
     },
   };
-  return { reader, reads, states: () => [...new Set(reads.filter((read) => !read.startsWith("changes")).map((read) => Number(read.split(" ")[1])))].sort((a, b) => a - b) };
+  /** Master moves on by one more change. */
+  const grow = (step: { at: string; lists: Lists }) => void steps.push(step);
+  return { reader, reads, grow, states: () => [...new Set(reads.filter((read) => !read.startsWith("changes")).map((read) => Number(read.split(" ")[1])))].sort((a, b) => a - b) };
 }
 
 const OPENING = { [EDITED]: ["usdg"], [GENERATED]: [] };
@@ -433,6 +459,135 @@ describe("custodyAdditions", () => {
     await expect(custodyAdditions(naming(tokenListOf(["usdg"]), { tokens: new Map(), mentioned: new Set(["cashcat"]) }), 30, NOW)).rejects.toStrictEqual(new CustodyError(MOVED));
     // The generated list also holds entries for other chains, and one of those may point at a Robinhood Chain token the other list holds.
     await expect(custodyAdditions(naming(tokenListOf(["usdg", "cashcat"]), { tokens: new Map(), mentioned: new Set(["cashcat"]) }), 30, NOW)).resolves.toMatchObject({ additions: [] });
+  });
+});
+
+describe("custodyHistory", () => {
+  const TODAY = new Date("2026-11-19T00:00:00Z");
+  const FIVE = ["tsla", "usdg", "nvda", "aapl", "cashcat"];
+  // BitGo's own course, cut down: TSLA and USDG reach master in allCoinsAndTokens.ts on May 11, the tokens move to
+  // hoodethTokens.ts on June 10, Cash Cat arrives on July 28, and the generated list holds its first token from October 30.
+  const COURSE = () => [
+    { at: "2026-05-11T07:19:47Z", lists: { [EARLY_LIST]: [], [GENERATED]: [] } },
+    { at: "2026-05-11T08:17:10Z", lists: { [EARLY_LIST]: ["tsla", "usdg"], [GENERATED]: [] } },
+    { at: "2026-05-20T00:00:00Z", lists: { [EARLY_LIST]: ["tsla", "usdg", "nvda"], [GENERATED]: [] } },
+    { at: "2026-06-10T08:54:29Z", lists: { [EARLY_LIST]: [], [EDITED]: ["tsla", "usdg", "nvda", "aapl"], [GENERATED]: [] } },
+    { at: "2026-07-28T07:09:00Z", lists: { [EDITED]: FIVE, [GENERATED]: [] } },
+    { at: "2026-08-01T00:00:00Z", lists: { [EDITED]: [...FIVE, "pulled"], [GENERATED]: [] } },
+    { at: "2026-08-03T00:00:00Z", lists: { [EDITED]: FIVE, [GENERATED]: [] } },
+    { at: "2026-10-30T14:48:17Z", lists: { [EDITED]: FIVE, [GENERATED]: ["ansemcat"] } },
+  ];
+  const OPEN = { [EARLY_LIST]: [], [GENERATED]: [] };
+  const commit = (n: number) => `https://github.com/BitGo/BitGoJS/commit/${sha(n)}`;
+
+  it("starts where BitGo added its first Robinhood Chain token, and where its tokens were kept until June 10, 2026", () => {
+    expect(new Date(BITGO_START).toISOString()).toBe("2026-05-11T07:40:16.000Z");
+    expect(new Date(LISTS_MOVED_AT).toISOString()).toBe("2026-06-10T08:54:29.000Z");
+    expect(EARLY_LIST).toBe("modules/statics/src/allCoinsAndTokens.ts");
+    expect(HISTORY_PAGES * PAGE).toBeGreaterThan(1_124 * 4);
+  });
+
+  it("dates every token from BitGo's first Robinhood Chain token on, a token BitGo has since removed included", async () => {
+    const { reader } = master(OPEN, COURSE());
+    expect(await custodyHistory(reader, TODAY)).toEqual({
+      chain: "Robinhood Chain",
+      source: "https://github.com/BitGo/BitGoJS/tree/master/modules/statics/src/coins",
+      readAt: READ.toISOString(),
+      since: "2026-05-11T07:40:16.000Z",
+      additions: [
+        { addedAt: "2026-10-30T14:48:17.000Z", commit: commit(9), tokens: [answered("ansemcat")] },
+        { addedAt: "2026-08-01T00:00:00.000Z", commit: commit(7), tokens: [answered("pulled")] },
+        { addedAt: "2026-07-28T07:09:00.000Z", commit: commit(6), tokens: [answered("cashcat")] },
+        { addedAt: "2026-06-10T08:54:29.000Z", commit: commit(5), tokens: [answered("aapl")] },
+        { addedAt: "2026-05-20T00:00:00.000Z", commit: commit(4), tokens: [answered("nvda")] },
+        { addedAt: "2026-05-11T08:17:10.000Z", commit: commit(3), tokens: [answered("tsla"), answered("usdg")] },
+      ],
+    });
+  });
+
+  it("reads the early list only for master as it stood before the tokens moved, and needs the edited list after", async () => {
+    const { reader, reads } = master(OPEN, COURSE());
+    await custodyHistory(reader, TODAY);
+    expect([...new Set(reads.filter((read) => read.startsWith("early")).map((read) => Number(read.split(" ")[1])))].sort()).toEqual([1, 2, 3]);
+
+    const lost = COURSE();
+    lost[3] = { at: "2026-06-10T08:54:29Z", lists: { [EARLY_LIST]: ["tsla", "usdg", "nvda", "aapl"], [GENERATED]: [] } };
+    await expect(custodyHistory(master(OPEN, lost).reader, TODAY)).rejects.toStrictEqual(new CustodyError(MOVED));
+  });
+
+  it("describes a token still listed as the lists do now, and one since removed as they did when it was added", async () => {
+    const reader: BitGoReader = {
+      changes: async () => ({ readAt: 0, changes: [3, 2].map((n) => ({ at: Date.parse(`2026-08-0${n}T00:00:00Z`), before: sha(n - 1), after: sha(n) })) }),
+      list: async (file, commit) => {
+        if (file !== EDITED) return tokenListOf([]);
+        if (commit === sha(1)) return tokenListOf(["usdg"]);
+        const named = (name: string): [string, ListedToken] => ["cashcat", { name, decimals: 18 }];
+        const tokens = new Map<string, ListedToken>([["usdg", {}], commit === sha(3) ? named("Cash Cat") : named("CashCat (old)"), ...(commit === sha(2) ? [["pulled", { name: "Pulled" }] as [string, ListedToken]] : [])]);
+        return { tokens, mentioned: new Set(tokens.keys()) };
+      },
+    };
+    expect((await custodyHistory(reader, NOW)).additions).toEqual([
+      { addedAt: "2026-08-02T00:00:00.000Z", commit: commit(2), tokens: [{ id: "hoodeth:cashcat", name: "Cash Cat", decimals: 18 }, { id: "hoodeth:pulled", name: "Pulled" }] },
+    ]);
+  });
+
+  it("reads master every sixteen changes and halves only where the tokens changed", async () => {
+    const steps = Array.from({ length: 512 }, (_, i) => ({ at: new Date(BITGO_START + (i + 1) * 3_600_000).toISOString(), lists: { [EDITED]: i >= 300 ? ["usdg", "cashcat"] : i >= 100 ? ["usdg"] : [], [GENERATED]: [] } }));
+    const { reader, states } = master({ [EDITED]: [], [GENERATED]: [] }, steps);
+    const board = await custodyHistory(reader, TODAY);
+    expect(board.additions.map(({ addedAt, tokens }) => [addedAt, ...tokens.map(({ id }) => id)])).toEqual([
+      [steps[300]!.at, "hoodeth:cashcat"],
+      [steps[100]!.at, "hoodeth:usdg"],
+    ]);
+    // Every sixteenth state, and four more for each of the two changes: 41 of 513.
+    const every = Array.from({ length: 512 / PROBE_EVERY + 1 }, (_, i) => i * PROBE_EVERY);
+    expect(states().filter((state) => !every.includes(state))).toEqual([100, 101, 102, 104, 296, 300, 301, 302]);
+    expect(states()).toHaveLength(41);
+  });
+
+  it("finds a token BitGo removed again however quiet the stretch around it, once it stayed for sixteen changes", async () => {
+    const quiet = (count: number, start: string, ids: string[]) => Array.from({ length: count }, (_, i) => ({ at: new Date(Date.parse(start) + i * 3_600_000).toISOString(), lists: { [EDITED]: ids, [GENERATED]: [] } }));
+    const steps = [...quiet(300, "2026-06-11T00:00:00Z", ["usdg"]), ...quiet(PROBE_EVERY, "2026-07-01T00:00:00Z", ["usdg", "pulled"]), ...quiet(300, "2026-07-02T00:00:00Z", ["usdg"])];
+    for (const offset of [0, 3, 7, 11, 15]) {
+      const shifted = [...quiet(offset, "2026-06-01T00:00:00Z", ["usdg"]), ...steps];
+      const board = await custodyHistory(master({ [EDITED]: ["usdg"], [GENERATED]: [] }, shifted).reader, TODAY);
+      expect(board.additions, String(offset)).toEqual([{ addedAt: "2026-07-01T00:00:00.000Z", commit: `https://github.com/BitGo/BitGoJS/commit/${sha(offset + 302)}`, tokens: [answered("pulled")] }]);
+    }
+  });
+
+  it("goes on from where the last answer ended: one page of changes, the lists as they stand, and only the changes since", async () => {
+    const { reader, reads, grow, states } = master(OPEN, COURSE());
+    await custodyHistory(reader, TODAY);
+    reads.length = 0;
+    grow({ at: "2026-11-12T08:55:32Z", lists: { [EDITED]: [...FIVE, "rlusd"], [GENERATED]: ["ansemcat"] } });
+    const board = await custodyHistory(reader, TODAY);
+    expect(board.additions[0]).toEqual({ addedAt: "2026-11-12T08:55:32.000Z", commit: commit(10), tokens: [answered("rlusd")] });
+    expect(board.additions.at(-1)).toEqual({ addedAt: "2026-05-11T08:17:10.000Z", commit: commit(3), tokens: [answered("tsla"), answered("usdg")] });
+    expect(reads.filter((read) => read.startsWith("changes"))).toEqual(["changes 1"]);
+    expect(states()).toEqual([9]);
+  });
+
+  it("reads GitHub's pages of changes once, for itself and for the custody tool", async () => {
+    const quiet = Array.from({ length: 2 * PAGE + 50 }, (_, i) => ({ at: new Date(Date.parse("2026-08-04T00:00:00Z") + i * 3_600_000).toISOString(), lists: { [EDITED]: FIVE, [GENERATED]: [] } }));
+    const course = COURSE();
+    const { reader, reads, grow } = master(OPEN, [...course.slice(0, 5), ...quiet, course[7]!]);
+    // The custody tool read first, so the history reads on from the last page it read.
+    expect(byDay(await custodyAdditions(reader, 30, TODAY))).toEqual([["2026-10-30", "hoodeth:ansemcat"]]);
+    expect(reads.splice(0).filter((read) => read.startsWith("changes"))).toEqual(["changes 1"]);
+    expect((await custodyHistory(reader, TODAY)).additions).toHaveLength(5);
+    expect(reads.splice(0).filter((read) => read.startsWith("changes"))).toEqual(["changes 1", "changes 2", "changes 3"]);
+    // Master moved on: the newest page meets what was read, and no older page is read again.
+    grow({ at: "2026-11-18T22:47:52Z", lists: { [EDITED]: FIVE, [GENERATED]: ["ansemcat"] } });
+    expect(byDay(await custodyAdditions(reader, 90, TODAY))).toEqual([["2026-10-30", "hoodeth:ansemcat"]]);
+    expect((await custodyHistory(reader, TODAY)).additions).toHaveLength(5);
+    expect(reads.filter((read) => read.startsWith("changes"))).toEqual(["changes 1", "changes 1"]);
+  });
+
+  it("gives up with a message past its pages of changes", async () => {
+    const steps = Array.from({ length: HISTORY_PAGES * PAGE + 1 }, (_, i) => ({ at: new Date(TODAY.getTime() - (HISTORY_PAGES * PAGE + 1 - i) * 60_000).toISOString(), lists: { [EDITED]: ["usdg"], [GENERATED]: [] } }));
+    const { reader, reads } = master({ [EDITED]: ["usdg"], [GENERATED]: [] }, steps);
+    await expect(custodyHistory(reader, TODAY)).rejects.toStrictEqual(new CustodyError("BitGo merged into its master branch more than 6,000 times in that period, more than this tool reads. Try again with a smaller `days`."));
+    expect(reads.filter((read) => read.startsWith("changes"))).toHaveLength(HISTORY_PAGES);
   });
 });
 
