@@ -275,7 +275,8 @@ export const EXAM_INFO_TOOL: Tool = {
   name: EXAM_INFO_NAME,
   title: "Read BrainChain's licence exam",
   description:
-    "What BrainChain's licence exam for ERC-8004 agents is and costs, as the desk states it: the price of a sitting, the classes of work, how many items a sitting has, the pass mark, the minutes allowed, how long a licence lasts, the wait after a failed sitting, how audits can suspend a licence and how each signed message is built. " +
+    "What BrainChain's licence exam for ERC-8004 agents is and costs, as the desk states it: the price of a sitting, the classes of work, how many items a sitting has and how many of them are hard ones, the pass mark, the minutes allowed, how long a licence lasts, the wait after a failed sitting, how audits can suspend a licence and how each signed message is built. " +
+    "`sitting.levels` are the levels each item is graded against, best first, and `sitting.passes` is the level an item must reach to be accepted. " +
     `Read it before ${SIT_EXAM_NAME}. \`pool.inUse\` is the number of items in use; the desk's own answer lists their commitments. Free, no key.`,
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   annotations: { readOnlyHint: true, openWorldHint: true },
@@ -297,9 +298,10 @@ export function sitExamTool(terms: Terms | string): Tool {
           about +
           `The tool reads the price from the desk and pays exactly that from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. The price can be above this server's default limit per payment, so for this one call that limit is the price the desk states, and no further. ` +
           `A limit the operator set in BRAINCHAIN_MAX_PRICE_UNITS still holds. The payment counts against the budget and the daily limit, and a price above that limit, the daily limit or this server's budget of ${terms.budget} per run is refused with nothing charged. ` +
-          `If the desk refuses the sitting, for example because the wallet does not hold the id, a sitting is already open, a licence is still valid or a failed sitting is too recent, the reply is the desk's own reason and nothing was charged. ` +
+          `The desk refuses a sitting it cannot open before any payment is signed: when the wallet does not hold the id, a sitting is already open or already paid for, a licence is still valid or a failed sitting is too recent. The reply is then the desk's own reason, and nothing was charged. ` +
           `Returns the sitting id, the deadline and the briefs. Deliver each item with ${EXAM_SUBMIT_NAME} and follow the sitting with ${EXAM_STATUS_NAME}. ` +
-          `A reply that carries no briefs means the sitting is paid for and the desk has not opened it yet: call this tool again with the same agentId and class. While this server keeps running, that sends the same request with the same payment, which the desk does not charge twice.`,
+          `A reply that carries no briefs means the sitting is paid for and the desk has not opened it yet: call this tool again with the same agentId and class. While this server keeps running, that sends the same request with the same payment, which the desk does not charge twice. ` +
+          `A server that was restarted no longer holds that request. Its reply then names the sitting that is paid for, and ${EXAM_STATUS_NAME} with briefs: true reads the briefs once that sitting is open.`,
     inputSchema: SIT_EXAM_INPUT,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   };
@@ -324,7 +326,8 @@ export const EXAM_STATUS_TOOL: Tool = {
   name: EXAM_STATUS_NAME,
   title: "Read an exam sitting",
   description:
-    "Read a sitting of the licence exam: its state (open, passed or failed), its deadline, each item's state and outcome, and on a pass the licence BrainChain signed, with its expiry. Free, and without `briefs` it needs no key. " +
+    "Read a sitting of the licence exam: its state (opening, open, passed or failed), its deadline, each item's state and outcome, and on a pass the licence BrainChain signed, with its expiry. " +
+    "A sitting that is paid for and not open yet reads `opening`, with how its payment stands and the desk's reason when it gives one. Free, and without `briefs` it needs no key. " +
     "With `briefs: true` the reply also carries the sitting's briefs, which the desk shows only to the wallet sitting it, so that request is signed with this server's key. " +
     "Call again after `retryAfterSeconds` until `done` is true.",
   inputSchema: {
@@ -340,7 +343,7 @@ export const LICENCES_TOOL: Tool = {
   name: LICENCES_NAME,
   title: "Read an agent's BrainChain licences",
   description:
-    "List an ERC-8004 agent's BrainChain licences and the state of each: valid, expired, suspended (two failed audits in the last three) or lapsed (the id has another controller or build than the licence was earned with). " +
+    "List an ERC-8004 agent's BrainChain licences and the state of each. A licence past its expiry reads expired, whatever else was true of it. Before that it reads suspended after two failed audits in the last three, lapsed while the id has another controller or build than the licence was earned with, and valid otherwise. " +
     "Each comes with the licence BrainChain signed, its expiry and its audit counts. An agent that never passed has none. Free, no key.",
   inputSchema: AGENT_INPUT,
   annotations: { readOnlyHint: true, openWorldHint: true },

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -54,8 +54,12 @@ interface Paid {
 /**
  * A desk that states `price` to a request with no payment and hands a paid one to `paid`, with how many paid
  * requests came before it. `asked` is what the real request is quoted, when that differs from the price first read.
+ * `refuse` is what the desk says of a real request before it asks for payment, when it will not open the sitting.
  */
-function fakeDesk(paid: (sent: Paid, earlier: number) => Response | Promise<Response>, { price = PRICE, asked = price, payTo = config.payTo as string } = {}) {
+function fakeDesk(
+  paid: (sent: Paid, earlier: number) => Response | Promise<Response>,
+  { price = PRICE, asked = price, payTo = config.payTo as string, refuse }: { price?: string; asked?: string; payTo?: string; refuse?: () => Response } = {},
+) {
   const seen: Paid[] = [];
   const unpaid: string[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -65,6 +69,8 @@ function fakeDesk(paid: (sent: Paid, earlier: number) => Response | Promise<Resp
     const header = req.headers.get("payment-signature");
     if (!header) {
       unpaid.push(body);
+      // An empty request is always quoted; a real one is refused first when the sitting cannot open.
+      if (body !== "{}" && refuse) return refuse();
       return new Response("{}", { status: 402, headers: { "payment-required": challenge(body === "{}" ? price : asked, payTo) } });
     }
     const sent = { header, body, id: orderIdOf(JSON.parse(Buffer.from(header, "base64").toString("utf8")) as { payload: unknown }) };
@@ -199,7 +205,56 @@ describe("sitting the exam", () => {
     await expect(d.sit(request)).rejects.toThrow(/named no price for a sitting on Robinhood Chain testnet, so nothing was signed\..*brainchain_exam_info says\. Nothing was charged\.$/);
   });
 
-  it("passes on the desk's refusal in its own words, with nothing counted", async () => {
+  it("hears the desk's refusal when the request first arrives, before anything is signed or counted", async () => {
+    for (const [status, error] of [
+      [403, `Wallet ${signer.address} does not hold agent 20424: it is neither its controller nor its registered wallet. Nothing was charged.`],
+      [409, "Agent 20424 holds a code licence until 2100-03-02 00:00 UTC. It may sit again from 2100-02-16 00:00 UTC. Nothing was charged."],
+      [503, "The agent's identity could not be read just now. Nothing was charged; try again."],
+    ] as const) {
+      const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+      const { fetchImpl, seen, unpaid } = fakeDesk(opened, { refuse: () => json({ error }, status) });
+      const d = desk(fetchImpl, { daily: 20_000_000n, stateDir });
+      expect(await d.sit(request).catch((e: Error) => e.message)).toBe(error);
+      // The price was read, the request was sent once without a payment, and no payment was ever signed.
+      expect(unpaid).toHaveLength(2);
+      expect(seen).toHaveLength(0);
+      expect(d.spent()).toBe(0n);
+      // Nothing was reserved, so the daily limit has no record to keep.
+      expect(await readdir(stateDir)).toEqual([]);
+    }
+  });
+
+  it("names the sitting that is already paid for and opening, in place of paying for a second", async () => {
+    const other = `0x${"0d".repeat(32)}`;
+    const refusal = () => json({ error: "A sitting for agent 20424 is already paid for and being opened. Send the request that paid for it again to read it. Nothing was charged.", sitting: other }, 409);
+    const told = {
+      sitting: other,
+      statusUrl: `${config.desk}/exams/${other}`,
+      state: "opening",
+      done: false,
+      next:
+        "The sitting is paid for, and the desk is opening it. Through the paid route only the request that paid for the sitting reads its briefs, and this server does not hold that request. " +
+        "Once the sitting is open, brainchain_exam_status with briefs: true reads them for the wallet that sits it.",
+      retryAfterSeconds: 30,
+    };
+    // Told when the request first arrives, as a server that was restarted is.
+    const first = fakeDesk(opened, { refuse: refusal });
+    const d = desk(first.fetchImpl);
+    expect(await d.sit(request)).toEqual(told);
+    expect(first.seen).toHaveLength(0);
+    expect(d.spent()).toBe(0n);
+    // Or only with the payment, when the desk answered the first request with its plain offer: the payment is not taken.
+    const late = fakeDesk(refusal);
+    const paying = desk(late.fetchImpl);
+    expect(await paying.sit(request)).toEqual(told);
+    expect(late.seen).toHaveLength(1);
+    expect(paying.spent()).toBe(0n);
+    // Neither reply is kept as this call's answer: the next call asks the desk again.
+    expect(await d.sit(request)).toEqual(told);
+    expect(first.unpaid).toHaveLength(4);
+  });
+
+  it("passes on a refusal the desk makes only once it has the payment, in its own words, with nothing counted", async () => {
     for (const [status, error] of [
       [403, `Wallet ${signer.address} does not hold agent 20424: it is neither its controller nor its registered wallet. Nothing was charged.`],
       [409, "Agent 20424 has a sitting open until 2027-01-15 10:00 UTC: https://brain.testnet.usebrainchain.com/exams/0xabc. Nothing was charged."],
@@ -273,22 +328,24 @@ describe("sitting the exam", () => {
     expect(d.spent()).toBe(5_000_000n);
   });
 
-  it("says a sitting paid for here is not open yet when its status is read before the desk shows it", async () => {
-    const { fetchImpl, seen } = fakeDesk((sent) => json({ message: "The sitting is paid for and its items are being drawn.", sitting: sent.id, state: "paid" }, 202));
+  it("says a payment sent from here may not have reached the desk when the desk does not know its sitting", async () => {
+    const { fetchImpl, seen } = fakeDesk(() => {
+      throw new TypeError("fetch failed");
+    });
     const d = createDesk({
       config,
       signer,
       approveCommand: "approve",
       postTimeoutMs: 40,
       askAgainMs: 20,
-      // The sitting's own address answers 404 until the desk has opened it.
       fetch: (async (input: RequestInfo | URL, init?: RequestInit) => (String(input).startsWith(`${config.desk}/exams/`) ? json({ error: "Not found." }, 404) : fetchImpl(input, init))) as typeof fetch,
     });
-    await d.sit(request);
-    expect(await d.examStatus(seen[0]!.id, false)).toEqual({
-      sitting: seen[0]!.id,
+    const paid = (await d.sit(request)) as { sitting: string };
+    expect(seen).toHaveLength(1);
+    expect(await d.examStatus(paid.sitting, false)).toEqual({
+      sitting: paid.sitting,
       done: false,
-      next: "The sitting is paid for, and the desk has not opened it yet. Call brainchain_sit_exam again with the same agentId and class: it sends the same request with the same payment, which the desk does not charge twice.",
+      next: "The desk does not know this sitting, so the payment for it may not have reached the desk. Call brainchain_sit_exam again with the same agentId and class: it sends the same request with the same payment, which the desk does not charge twice.",
       retryAfterSeconds: 30,
     });
   });
@@ -444,6 +501,65 @@ describe("reading a sitting", () => {
     expect(failed).toMatchObject({ done: true, next: "Failed, with 3 of 5 accepted, and a pass takes 4. brainchain_exam_info says how long the agent waits before it may sit again." });
   });
 
+  const waiting = (extra: Record<string, unknown> = {}) =>
+    json({ sitting: SITTING, state: "opening", payment: "paid", message: "The sitting is paid for and its items are being drawn. Send the request that paid for it again to read it; it is not charged twice.", ...extra });
+  const unheld =
+    "Through the paid route only the request that paid for the sitting reads its briefs, and this server does not hold that request. " +
+    "Once the sitting is open, brainchain_exam_status with briefs: true reads them for the wallet that sits it.";
+
+  it("reads a sitting that is paid for and not open yet as opening, with how its payment stands and the desk's reason", async () => {
+    const named = { sitting: SITTING, statusUrl: `${config.desk}/exams/${SITTING}`, state: "opening" };
+    expect(await reader(() => waiting({ reason: "the pool has no item left to draw" })).d.examStatus(SITTING, false)).toEqual({
+      ...named,
+      payment: "paid",
+      reason: "the pool has no item left to draw",
+      done: false,
+      next: `The sitting is paid for, and the desk is opening it. It is not open yet for this reason: the pool has no item left to draw. ${unheld}`,
+      retryAfterSeconds: 30,
+    });
+    expect(await reader(() => waiting({ payment: "unconfirmed" })).d.examStatus(SITTING, false)).toEqual({
+      ...named,
+      payment: "unconfirmed",
+      done: false,
+      next: `The desk is confirming this sitting's payment on chain, and opens the sitting once it has. ${unheld}`,
+      retryAfterSeconds: 30,
+    });
+    // A payment the desk gave up is kept beside the ones it took: nothing opens from it.
+    expect(await reader(() => waiting({ payment: "failed" })).d.examStatus(SITTING, false)).toEqual({
+      ...named,
+      payment: "failed",
+      done: true,
+      next: "The payment for this sitting did not go through, so nothing was charged and no sitting opens from it. brainchain_sit_exam opens a new one.",
+    });
+  });
+
+  it("reads an opening sitting at its own address when the briefs are asked for before it is open", async () => {
+    const { d, urls } = reader((url) => (url.includes("/briefs") ? json({ error: "No sitting with that id." }, 404) : waiting()));
+    expect(await d.examStatus(SITTING, true)).toMatchObject({ sitting: SITTING, state: "opening", payment: "paid", done: false });
+    expect(urls).toHaveLength(2);
+    expect(urls[1]).toBe(`${config.desk}/exams/${SITTING}`);
+    // An id the desk knows nowhere is still refused.
+    await expect(reader(() => json({ error: "Not found." }, 404)).d.examStatus(SITTING, true)).rejects.toThrow("The desk has no sitting with this id.");
+  });
+
+  it("tells the server that paid for an opening sitting to send its request again", async () => {
+    const { fetchImpl, seen } = fakeDesk((sent) => json({ message: "The sitting is paid for and its items are being drawn.", sitting: sent.id, state: "paid" }, 202));
+    const d = createDesk({
+      config,
+      signer,
+      approveCommand: "approve",
+      postTimeoutMs: 40,
+      askAgainMs: 20,
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => (String(input).startsWith(`${config.desk}/exams/`) ? waiting({ sitting: seen[0]!.id }) : fetchImpl(input, init))) as typeof fetch,
+    });
+    await d.sit(request);
+    expect(await d.examStatus(seen[0]!.id, false)).toMatchObject({
+      sitting: seen[0]!.id,
+      state: "opening",
+      next: "The sitting is paid for, and the desk is opening it. Call brainchain_sit_exam again with the same agentId and class: it sends the same request with the same payment, which the desk does not charge twice.",
+    });
+  });
+
   it("refuses an id the desk does not know, passes on its refusal of a signature, and asks again later when it is busy", async () => {
     await expect(reader(() => json({ error: "Not found." }, 404)).d.examStatus(SITTING, false)).rejects.toThrow(/^The desk has no sitting with this id\. Check the id: it must be one that brainchain_sit_exam returned\.$/);
     const stranger = reader(() => json({ error: "The signature is not the sitting wallet's signature of the briefs message." }, 403)).d.examStatus(SITTING, true);
@@ -475,7 +591,16 @@ describe("the exam and the licences as the desk states them", () => {
     pay: exams,
     price: "5.00 USD a sitting, paid over x402 in test USDG on Robinhood Chain testnet",
     classes: [{ class: "code", about: "Small Python functions, each judged on hidden cases it is run on." }],
-    sitting: { items: 5, passMark: 4, minutes: 120, licenceDays: 60, waitAfterFailingDays: 7 },
+    sitting: {
+      items: 5,
+      hardItems: 3,
+      passMark: 4,
+      levels: ["Returns the right answer on every hidden case, with clear code", "Returns the right answer on every hidden case", "Returns a wrong answer on a hidden case"],
+      passes: "Returns the right answer on every hidden case",
+      minutes: 120,
+      licenceDays: 60,
+      waitAfterFailingDays: 7,
+    },
     pool: { usesPerItem: 3, inUse: [`0x${"01".repeat(32)}`, `0x${"02".repeat(32)}`], retired: 4 },
   };
   const at = (routes: Record<string, Response>) => {
@@ -488,7 +613,9 @@ describe("the exam and the licences as the desk states them", () => {
   };
 
   it("returns the exam as the desk describes it, with the items in use counted", async () => {
+    // The hard items, the levels and the level an item must reach come through as the desk states them.
     expect(await at({ "/exams": json(info) }).d.examInfo()).toEqual({ ...info, pool: { usesPerItem: 3, inUse: 2, retired: 4 } });
+    for (const field of ["`sitting.levels`", "`sitting.passes`", "how many of them are hard ones"]) expect(EXAM_INFO_TOOL.description).toContain(field);
     await expect(at({}).d.examInfo()).rejects.toThrow(`The licence exam is not open at ${config.desk}.`);
   });
 
@@ -618,6 +745,11 @@ describe("the exam tools", () => {
     expect(sit).toContain("A limit the operator set in BRAINCHAIN_MAX_PRICE_UNITS still holds.");
     expect(sit).toContain("a price above that limit, the daily limit or this server's budget of 10 USDG per run is refused with nothing charged.");
     expect(sit).toContain("Nothing is refunded, whatever the outcome.");
+    expect(sit).toContain("The desk refuses a sitting it cannot open before any payment is signed");
+    expect(sit).toContain("A server that was restarted no longer holds that request. Its reply then names the sitting that is paid for, and brainchain_exam_status with briefs: true reads the briefs once that sitting is open.");
+    expect(EXAM_STATUS_TOOL.description).toContain("A sitting that is paid for and not open yet reads `opening`");
+    // A licence's states in the order the desk reads them: an expiry first, whatever else was true.
+    expect(LICENCES_TOOL.description).toContain("A licence past its expiry reads expired, whatever else was true of it. Before that it reads suspended after two failed audits in the last three, lapsed while");
     expect(sitExamTool("BRAINCHAIN_NETWORK must be mainnet or testnet.").description).toMatch(/^Invalid setting: BRAINCHAIN_NETWORK must be mainnet or testnet\. Until the operator fixes it, this tool only returns that error\. Open a sitting/);
     const submit = examSubmitTool().description!;
     expect(submit).toContain("An item takes one delivery: once sent, the work cannot be replaced or sent again");
