@@ -97,6 +97,12 @@
           "format": "filepath"
         },
         {
+          "name": "BRAINCHAIN_MAKER_WALLETS",
+          "description": "More wallets for brainchain_market_maker_holdings to follow beside its five, as Name=0xAddress separated by commas, at most 20. Their entries carry the name and source configured; nobody checks whose wallets they are.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
           "name": "BRAINCHAIN_DESK_URL",
           "description": "Advanced: a payment desk to use in place of the network's own. An https URL, or http on localhost or 127.0.0.1. A custom desk needs its own BRAINCHAIN_PAY_TO.",
           "isRequired": false,

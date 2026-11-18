@@ -11,12 +11,29 @@ import { expandHome, formatUnits, PRICE, resolveConfig, type Config } from "./co
 import { CUSTODY_NAME, CUSTODY_TOOL } from "./custody.js";
 import { stateDirProblem } from "./daily.js";
 import { createLimits } from "./limits.js";
-import { MAKERS_NAME, MAKERS_TOOL } from "./makers.js";
+import { configuredMakers, MAKERS_NAME, makersTool, MARKET_MAKERS, readMakerHoldings, type MakerWallet } from "./makers.js";
 import { createDesk, erc20, firstLine } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL } from "./premiums.js";
 import { READINESS_NAME, READINESS_TOOL } from "./readiness.js";
 import { SIGHTINGS_NAME, SIGHTINGS_TOOL } from "./sightings.js";
-import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_GRADE_NAME, GET_GRADE_TOOL, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, gradeTool, POST_TASK_NAME, postTaskTool, type Desk, type Terms } from "./tools.js";
+import {
+  BOND_STATUS_NAME,
+  BOND_TASK_NAME,
+  bondTools,
+  callTool,
+  GET_GRADE_NAME,
+  GET_GRADE_TOOL,
+  GET_TASK_NAME,
+  GET_TASK_TOOL,
+  GRADE_NAME,
+  gradeTool,
+  invalidSetting,
+  POST_TASK_NAME,
+  postTaskTool,
+  type Desk,
+  type Readers,
+  type Terms,
+} from "./tools.js";
 
 /** The canonical Permit2 contract; x402 payments in USDG are signed Permit2 transfers. */
 export const PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
@@ -297,13 +314,43 @@ export interface ServerOptions {
   log?: (message: string) => void;
 }
 
+/** The wallets the market maker tool follows, and the problem with BRAINCHAIN_MAKER_WALLETS if it cannot be read. */
+function followedMakers(env: Record<string, string | undefined>): { configured: MakerWallet[]; problem?: string } {
+  try {
+    return { configured: configuredMakers(env.BRAINCHAIN_MAKER_WALLETS) };
+  } catch (error) {
+    return { configured: [], problem: `${messageOf(error)} Fix it in this server's environment and restart the server.` };
+  }
+}
+
 export function createServer(env: Record<string, string | undefined>, version: string, options: ServerOptions = {}): Server {
   const { desk, terms, bonds, bondTools: bondToolList, gradeTool: gradeToolDef, refused } = deskFor(env, version, options.fetch);
   const problem = typeof terms === "string" ? terms : terms.problem;
-  if (problem) (options.log ?? console.error)(`brainchain-mcp has an invalid setting: ${problem}`);
-  const tools = [postTaskTool(terms), GET_TASK_TOOL, gradeToolDef, GET_GRADE_TOOL, PREMIUMS_TOOL, CUSTODY_TOOL, MAKERS_TOOL, READINESS_TOOL, SIGHTINGS_TOOL, ...bondToolList];
+  const log = options.log ?? console.error;
+  if (problem) log(`brainchain-mcp has an invalid setting: ${problem}`);
+  // Only the tool that reads the wallets depends on them, so a bad list stops it and nothing else.
+  const makers = followedMakers(env);
+  if (makers.problem) {
+    log(`brainchain-mcp has an invalid setting: ${makers.problem}`);
+    refused.set(MAKERS_NAME, makers.problem);
+  }
+  const makersToolDef = makersTool(makers.configured);
+  const followed = [...MARKET_MAKERS, ...makers.configured];
+  const readers: Partial<Readers> = { makers: (token, wallet, moment) => readMakerHoldings(token, wallet, moment, followed) };
+  const tools = [
+    postTaskTool(terms),
+    GET_TASK_TOOL,
+    gradeToolDef,
+    GET_GRADE_TOOL,
+    PREMIUMS_TOOL,
+    CUSTODY_TOOL,
+    makers.problem ? { ...makersToolDef, description: invalidSetting(makers.problem) + makersToolDef.description } : makersToolDef,
+    READINESS_TOOL,
+    SIGHTINGS_TOOL,
+    ...bondToolList,
+  ];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
-  server.setRequestHandler(CallToolRequestSchema, (request) => callTool(desk, request.params.name, request.params.arguments, undefined, bonds, refused));
+  server.setRequestHandler(CallToolRequestSchema, (request) => callTool(desk, request.params.name, request.params.arguments, undefined, bonds, refused, readers));
   return server;
 }

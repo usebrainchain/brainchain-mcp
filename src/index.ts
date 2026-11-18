@@ -43,6 +43,8 @@ Environment:
   BRAINCHAIN_MAX_BOND_UNITS   Maximum locked in one delivery bond on Shipped (default 10000000 = 10 USDG); bonds also draw on
                               the budget and the daily limit.
   BRAINCHAIN_STATE_DIR        Where the daily limit's record is kept (default ~/.brainchain). Absolute or starting with ~/.
+  BRAINCHAIN_MAKER_WALLETS    More wallets for brainchain_market_maker_holdings to follow, as Name=0xAddress separated by
+                              commas (at most 20). Nobody checks whose wallets they are; their entries say source configured.
   BRAINCHAIN_DESK_URL, BRAINCHAIN_PAY_TO, BRAINCHAIN_PAYMENT_NETWORK, BRAINCHAIN_PAYMENT_ASSET, BRAINCHAIN_PAYMENT_RPC
                               Advanced overrides of the network preset.
 `;

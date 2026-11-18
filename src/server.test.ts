@@ -118,6 +118,31 @@ describe("the server", () => {
     }
   });
 
+  it("names the wallets BRAINCHAIN_MAKER_WALLETS adds in the market maker tool, and says nothing at startup", async () => {
+    const logged: string[] = [];
+    const client = await connect({ BRAINCHAIN_MAKER_WALLETS: "Acme=0xb97e4298c7f5f55360d207a6196125376675b3ea" }, { log: (message) => logged.push(message) });
+    expect(logged).toEqual([]);
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === MAKERS_NAME)!.description).toContain("This server also follows one more wallet that its operator added with BRAINCHAIN_MAKER_WALLETS: Acme at 0xB97e4298c7F5f55360d207a6196125376675B3eA.");
+  });
+
+  it("reports a BRAINCHAIN_MAKER_WALLETS it cannot read once at startup, and stops the market maker tool alone", async () => {
+    const problem = "The address of wallet 1 in BRAINCHAIN_MAKER_WALLETS must be 0x followed by 40 hex characters. Fix it in this server's environment and restart the server.";
+    for (const env of [{}, { BRAINCHAIN_PAYER_KEY: KEY }, { BRAINCHAIN_NETWORK: "devnet" }]) {
+      const logged: string[] = [];
+      const client = await connect({ ...env, BRAINCHAIN_MAKER_WALLETS: "Acme=0x12" }, { log: (message) => logged.push(message) });
+      expect(logged.filter((line) => line.includes("BRAINCHAIN_MAKER_WALLETS"))).toEqual([`brainchain-mcp has an invalid setting: ${problem}`]);
+      const { tools } = await client.listTools();
+      expect(tools.find((tool) => tool.name === MAKERS_NAME)!.description).toMatch(new RegExp(`^Invalid setting: ${problem.replace(/[.]/g, "\\.")} Until the operator fixes it, this tool only returns that error\\. How much of a Robinhood Chain token`));
+      for (const sent of [{ token: "0x020bfC650A365f8BB26819deAAbF3E21291018b4" }, {}]) expect(JSON.parse(text(await client.callTool({ name: MAKERS_NAME, arguments: sent })))).toEqual({ error: problem });
+      for (const name of [POST_TASK_NAME, CUSTODY_NAME, READINESS_NAME, SIGHTINGS_NAME]) expect(tools.find((tool) => tool.name === name)!.description).not.toContain("BRAINCHAIN_MAKER_WALLETS");
+      expect(JSON.parse(text(await client.callTool({ name: CUSTODY_NAME, arguments: { days: 0 } })))).toEqual({ error: "days must be a whole number from 1 to 90. Leave it out to look back 30 days." });
+      for (const name of [READINESS_NAME, SIGHTINGS_NAME]) expect(JSON.parse(text(await client.callTool({ name, arguments: {} })))).toEqual({ error: "token is required." });
+    }
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    expect(readme).toContain("A `BRAINCHAIN_MAKER_WALLETS` it cannot read stops `brainchain_market_maker_holdings`, which reads the wallets it adds, and no other tool.");
+  });
+
   it("stops only the tools that pay for a setting only payments read, and keeps reading orders, grades and bonds", async () => {
     for (const [env, problem] of [
       [{ BRAINCHAIN_BUDGET_UNITS: "-5" }, "BRAINCHAIN_BUDGET_UNITS must be a positive whole number of base units."],

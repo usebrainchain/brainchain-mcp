@@ -20,7 +20,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { ChainError, chainHistory, GAP_MS, MAX_KEPT, paced, RETRY_MS, SETTLED_BLOCKS, STILL_READING, STRETCH_BLOCKS, type ChainHistory } from "./history.js";
-import { makerHoldings, MAKERS_NAME, MAKERS_TOOL, MARKET_MAKERS, type MakerKept } from "./makers.js";
+import { configuredMakers, makerHoldings, MAKERS_NAME, MAKERS_TOOL, makersTool, MARKET_MAKERS, MAX_CONFIGURED, type MakerKept } from "./makers.js";
 import { MULTICALL3 } from "./premiums.js";
 
 const ONE = [MARKET_MAKERS[0]!] as const;
@@ -582,6 +582,59 @@ describe("makerHoldings", () => {
   });
 });
 
+describe("configuredMakers", () => {
+  const ACME = getAddress("0x1111111111111111111111111111111111111111".replace(/1/g, "a"));
+
+  it("reads each wallet as Name=0xAddress, with its checksum, and marks it as the operator's", () => {
+    expect(configuredMakers(` Acme Trading = ${ACME.toLowerCase()} ,Jump (2)=${OTHER}`)).toEqual([
+      { name: "Acme Trading", source: "configured", wallet: ACME },
+      { name: "Jump (2)", source: "configured", wallet: OTHER },
+    ]);
+    for (const nothing of [undefined, "", "   "]) expect(configuredMakers(nothing)).toEqual([]);
+    expect(configuredMakers(Array.from({ length: MAX_CONFIGURED }, (_, i) => `W${i}=0x${(i + 1).toString(16).padStart(40, "0")}`).join(","))).toHaveLength(20);
+  });
+
+  it("refuses a list it cannot read, by the place of the wallet that is wrong, and never repeats a part of it", () => {
+    const key = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+    const shape = (n: number) => `BRAINCHAIN_MAKER_WALLETS must list wallets as Name=0xAddress, separated by commas, such as Acme=0x0000000000000000000000000000000000000001; wallet ${n} in BRAINCHAIN_MAKER_WALLETS is not written that way.`;
+    for (const [value, said] of [
+      ["Acme", shape(1)],
+      [`Acme=${ACME},`, shape(2)],
+      [`=${ACME}`, shape(1)],
+      ["Acme=", shape(1)],
+      [`Acme=${ACME}=x`, shape(1)],
+      [`Acme=${ACME},${key}`, shape(2)],
+      [`<b>Acme</b>=${ACME}`, "The name of wallet 1 in BRAINCHAIN_MAKER_WALLETS must be 1 to 40 letters, digits, spaces or . & ' ( ) -, starting with a letter or digit."],
+      [`${"A".repeat(41)}=${ACME}`, "The name of wallet 1 in BRAINCHAIN_MAKER_WALLETS must be 1 to 40 letters, digits, spaces or . & ' ( ) -, starting with a letter or digit."],
+      [`Acme=0x${key}`, "The address of wallet 1 in BRAINCHAIN_MAKER_WALLETS must be 0x followed by 40 hex characters."],
+      [`Acme=${ACME.slice(2)}`, "The address of wallet 1 in BRAINCHAIN_MAKER_WALLETS must be 0x followed by 40 hex characters."],
+      [`Acme=${OTHER.replace("B97e", "b97E")}`, "The capital and small letters in the address of wallet 1 in BRAINCHAIN_MAKER_WALLETS do not match its checksum, which usually means a character was mistyped. If the address is right, write it in lowercase."],
+      [`Mine=${WINTERMUTE.toLowerCase()}`, `The address of wallet 1 in BRAINCHAIN_MAKER_WALLETS, ${WINTERMUTE}, is one of Wintermute's, which the tool already follows. Leave it out.`],
+      [`Acme=${ACME},Acme again=${ACME.toLowerCase()}`, `BRAINCHAIN_MAKER_WALLETS names ${ACME} twice.`],
+      [Array.from({ length: 21 }, (_, i) => `W${i}=0x${(i + 1).toString(16).padStart(40, "0")}`).join(","), "BRAINCHAIN_MAKER_WALLETS can add at most 20 wallets, and it lists 21."],
+    ] as const) {
+      expect(() => configuredMakers(value), value).toThrow(new Error(said));
+    }
+  });
+
+  it("are read beside the wallets the tool follows, and say whose list they came from", async () => {
+    const { reader } = chain({ [CASHCAT]: cashCat({ balances: { [OTHER]: 2n * 10n ** 18n } }) });
+    const { wallets } = await makerHoldings(reader, CASHCAT, [...ONE, ...configuredMakers(`Acme=${OTHER}`)], nothingKept(), NOW);
+    expect(wallets[1]).toEqual({ name: "Acme", source: "configured", wallet: OTHER, balance: "2", block: Number(NEWEST), readAt: "2026-11-16T14:40:50.000Z", currentOnly: true, shareOfSupplyPct: "0.0000" });
+    expect(wallets[0]).not.toHaveProperty("source");
+  });
+
+  it("are named in the tool's description, and the description without them is the one the README quotes", () => {
+    const description = makersTool(configuredMakers(`Acme=${OTHER},Acme 2=${DEPLOYER}`)).description!;
+    expect(description).toContain(
+      `This server also follows 2 more wallets that its operator added with BRAINCHAIN_MAKER_WALLETS: Acme at ${OTHER}, Acme 2 at ${DEPLOYER}. Their entries have \`source\` set to configured and the name the operator gave, and the tool does not check whose wallets they are; passed as \`wallet\`, one of them gets the same entry. To read another wallet instead`,
+    );
+    expect(makersTool(configuredMakers(`Acme=${OTHER}`)).description).toContain("This server also follows one more wallet that its operator added");
+    expect(MAKERS_TOOL).toEqual(makersTool([]));
+    expect(MAKERS_TOOL.description).not.toContain("BRAINCHAIN_MAKER_WALLETS");
+  });
+});
+
 describe("makerHoldings at a past block", () => {
   const LAUNCHER = getAddress("0xd9ec2db5f3d1b236843925949fe5bd8a3836fccb");
   const POOL = getAddress("0x0c37a24f5d23a486fa692d1500881d698b1f77a4");
@@ -954,6 +1007,23 @@ describe("readMakerHoldings", () => {
       expect([permit2.token.contract, cashcat.wallets[0]!.wallet]).toEqual([PERMIT2, OTHER]);
       const tokens = requests.filter(({ about }) => about).map(({ about }) => getAddress(about.replace("any ", "").split(" ")[0]!));
       expect(tokens.lastIndexOf(PERMIT2)).toBeLessThan(tokens.indexOf(CASHCAT));
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives a caller who names a wallet the operator added that wallet's entry", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    vi.stubGlobal("fetch", endpoint({ [CASHCAT]: cashCat({ approvals: [] }) }).fetchImpl);
+    try {
+      const fresh = await import("./makers.js");
+      const followed = [...fresh.MARKET_MAKERS, ...fresh.configuredMakers(`Acme=${OTHER}`)];
+      const byAddress = await settled(fresh.readMakerHoldings(CASHCAT, OTHER, undefined, followed));
+      expect(byAddress.wallets).toEqual([expect.objectContaining({ name: "Acme", source: "configured", wallet: OTHER })]);
+      const all = await settled(fresh.readMakerHoldings(CASHCAT, undefined, undefined, followed));
+      expect(all.wallets.map(({ wallet }) => wallet)).toEqual(followed.map(({ wallet }) => wallet));
     } finally {
       vi.unstubAllGlobals();
       vi.useRealTimers();

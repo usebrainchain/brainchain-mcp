@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { formatUnits, isAddressEqual, parseAbiItem, type Address } from "viem";
+import { formatUnits, getAddress, isAddress, isAddressEqual, parseAbiItem, type Address } from "viem";
 
 import {
   blockOf,
@@ -55,54 +55,105 @@ export const MARKET_MAKERS: readonly MakerWallet[] = [
   { name: "Galaxy Digital", tag: "Galaxy Digital: OTC", wallet: "0x33566c9D8BE6Cf0B23795E0d380E112Be9d75836" },
 ];
 
-export const MAKERS_TOOL: Tool = {
-  name: MAKERS_NAME,
-  title: "A market maker's holdings and first approval of a Robinhood Chain token",
-  description:
-    "How much of a Robinhood Chain token a market maker's trading wallet holds, and when that wallet first approved the token, read from the chain. " +
-    "An approval is a transaction in which a wallet gives a contract permission to move its holdings of one token. " +
-    "A market maker makes one when it is getting ready to trade a token, which can be before an exchange lists the token: " +
-    "Wintermute's trading contract first approved Cash Cat on August 5, 2026, and Robinhood listed that token on August 6, 2026. " +
-    "A first approval is a lead to look into: it does not say why the market maker wants the token, and it does not mean an exchange will list it. " +
-    "Pass the token's contract address as `token`; the `contract` of an entry from brainchain_custody_additions works. " +
-    "The tool follows five wallets at three firms: Wintermute's trading contract at 0x51C72848c68a965f66FA7a88855F9f7784502a7F, two more Wintermute wallets, one B2C2 wallet and one Galaxy Digital wallet. " +
-    "Etherscan tags the contract's address as a market maker and Arkham attributes it to Wintermute. The other four are plain wallets with a public name tag on Etherscan, which each entry repeats as `tag`. " +
-    "To read another wallet instead, pass its address as `wallet`. Unless it is one of the five, its entry has no `name` or `tag`, and the tool does not check whose wallet it is. " +
-    "In the answer, `token` holds the token's `contract`, the `name` and `symbol` the contract gives itself, its `decimals` and its `totalSupply`, counted in tokens and not in the token's smallest unit. " +
-    "Whoever deployed the contract chose the name and symbol, so they do not prove which token it is. " +
-    "`wallets` has one entry for each wallet read: the `wallet`, the firm's `name`, the `tag`, the `balance` it holds now, also counted in tokens, and `shareOfSupplyPct`, that balance as a percentage of the total supply, which is left out for a token with no supply. " +
-    "`firstApproval` is there only if the token's log shows an approval by the wallet: `at` is when, `block` is the block it is in, `spender` is the contract it gave permission to, and `transaction` is the transaction's hash. " +
-    "`confirmed` is true when the wallet took part in that transaction: the wallet sent it, it was sent to the wallet or, for Wintermute's trading contract, it was sent to the Safe at 0x7d330DD7AF628c24E9FC75eb2986b130b2125ad0. " +
-    "Every approval of the Cash Cat and Pons tokens by that contract has gone through that Safe. When `confirmed` is false, the token's own log is the only sign of the approval. " +
-    "A token's contract writes its own balances and logs, so whoever deployed a token can make any wallet appear to hold it or to have approved it, and anyone can send a wallet tokens. " +
-    "For a token whose origin you do not know, a `balance` therefore proves little, and a `firstApproval` counts only when its `confirmed` is true. " +
-    "A wallet with a zero `balance` and no `firstApproval` holds none of the token now and has never approved it. A market maker also trades from other wallets, so that does not mean the firm holds none. " +
-    "`readAt` is when the chain was read. " +
-    "Without `atBlock` or `at`, each `balance` is what the wallet holds at `block`, the newest block when the chain was read, and the entry is marked `currentOnly`: it shows nothing of what could be seen earlier, so leave it out of a backtest. " +
-    "To read the balances at a past block, pass its number as `atBlock`, or pass `at`, a time in ISO 8601 such as 2026-11-01T00:00:00Z, for the last block made at or before it. " +
-    "Robinhood Chain's public endpoint keeps no state that old, so the tool adds up the token's Transfer logs to and from each wallet up to that block. " +
-    "It checks the method at the newest block, where the same sum must equal what the token's own `balanceOf` says. " +
-    "`asOf` then gives the `block` asked for and when it was made (`at`), and `transfersCheck` gives the `block` checked and whether the check `passed`. " +
-    "If it did not, the token's balances do not follow its transfers, as with a token that rebases or takes a fee on each transfer, and no past `balance` is given: `transfersCheck` names the first `wallet` that differs, what its `transfers` add up to and what `balanceOf` says. " +
-    "A past entry has no `shareOfSupplyPct`, since the supply at that block is not read, and `token` is read at the newest block. `firstApproval` is the first approval whenever it was made, so compare its `block` with the one asked for. " +
-    "The tool answers one request at a time, so requests sent together are answered in turn. " +
-    "The first answer for a token can take half a minute, because the tool reads the token's whole history for each wallet; later ones are faster for as long as the server keeps running. " +
-    "At a past block it also reads every transfer of the token to and from each wallet, which can take several tries for a wallet that trades the token often. " +
-    "An answer that is not ready after 45 seconds says so, and asking again goes on from where it stopped. " +
-    "Free, no key and no payment. Not advice.",
-  annotations: { readOnlyHint: true, openWorldHint: true },
-  inputSchema: {
-    type: "object",
-    properties: {
-      token: { type: "string", description: "The token's contract address on Robinhood Chain: 0x followed by 40 hex characters." },
-      wallet: { type: "string", description: "Optional: the address of another wallet or contract to read instead of the wallets the tool follows." },
-      atBlock: { type: "integer", minimum: 0, description: "Optional: a block number. The balances are those at the end of that block, added up from the token's transfers." },
-      at: { type: "string", description: "Optional, in place of atBlock: a time in ISO 8601, such as 2026-11-01T00:00:00Z. The balances are those at the last block made at or before it." },
+/** What the description says of the wallets the operator added, if any. */
+function added(configured: readonly MakerWallet[]): string {
+  if (configured.length === 0) return "";
+  const list = configured.map(({ name, wallet }) => `${name} at ${wallet}`).join(", ");
+  const count = configured.length === 1 ? "one more wallet" : `${configured.length} more wallets`;
+  return `This server also follows ${count} that its operator added with BRAINCHAIN_MAKER_WALLETS: ${list}. Their entries have \`source\` set to configured and the name the operator gave, and the tool does not check whose wallets they are; passed as \`wallet\`, one of them gets the same entry. `;
+}
+
+/** The most wallets BRAINCHAIN_MAKER_WALLETS can add: every answer reads each one in full. */
+export const MAX_CONFIGURED = 20;
+
+const WALLET_NAME = /^[\p{L}\p{N}][\p{L}\p{N} .&'()-]{0,39}$/u;
+
+/**
+ * The wallets BRAINCHAIN_MAKER_WALLETS adds, written as `Name=0xAddress,Name2=0xAddress2`. An address the tool already
+ * follows, or one named twice, would answer two ways, so it is refused. A part that is wrong is named by its place and
+ * never repeated: a value in the wrong variable can be a key.
+ */
+export function configuredMakers(value: string | undefined): MakerWallet[] {
+  const given = value?.trim();
+  if (!given) return [];
+  const entries = given.split(",");
+  if (entries.length > MAX_CONFIGURED) throw new Error(`BRAINCHAIN_MAKER_WALLETS can add at most ${MAX_CONFIGURED} wallets, and it lists ${entries.length}.`);
+  const wallets: MakerWallet[] = [];
+  entries.forEach((entry, i) => {
+    const which = `wallet ${i + 1} in BRAINCHAIN_MAKER_WALLETS`;
+    const parts = entry.split("=").map((part) => part.trim());
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      throw new Error(`BRAINCHAIN_MAKER_WALLETS must list wallets as Name=0xAddress, separated by commas, such as Acme=0x0000000000000000000000000000000000000001; ${which} is not written that way.`);
+    }
+    const [name, address] = parts as [string, string];
+    if (!WALLET_NAME.test(name)) throw new Error(`The name of ${which} must be 1 to 40 letters, digits, spaces or . & ' ( ) -, starting with a letter or digit.`);
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new Error(`The address of ${which} must be 0x followed by 40 hex characters.`);
+    // An address with no small letters carries no checksum, as one with no capitals does.
+    const plain = /[a-f]/.test(address) ? address : address.toLowerCase();
+    if (!isAddress(plain)) throw new Error(`The capital and small letters in the address of ${which} do not match its checksum, which usually means a character was mistyped. If the address is right, write it in lowercase.`);
+    const wallet = getAddress(plain);
+    const followed = MARKET_MAKERS.find((maker) => isAddressEqual(maker.wallet, wallet));
+    if (followed) throw new Error(`The address of ${which}, ${wallet}, is one of ${followed.name}'s, which the tool already follows. Leave it out.`);
+    if (wallets.some((earlier) => isAddressEqual(earlier.wallet, wallet))) throw new Error(`BRAINCHAIN_MAKER_WALLETS names ${wallet} twice.`);
+    wallets.push({ name, source: "configured", wallet });
+  });
+  return wallets;
+}
+
+/** The tool as this server describes it, with the wallets its operator added. */
+export function makersTool(configured: readonly MakerWallet[] = []): Tool {
+    return {
+    name: MAKERS_NAME,
+    title: "A market maker's holdings and first approval of a Robinhood Chain token",
+    description:
+      "How much of a Robinhood Chain token a market maker's trading wallet holds, and when that wallet first approved the token, read from the chain. " +
+      "An approval is a transaction in which a wallet gives a contract permission to move its holdings of one token. " +
+      "A market maker makes one when it is getting ready to trade a token, which can be before an exchange lists the token: " +
+      "Wintermute's trading contract first approved Cash Cat on August 5, 2026, and Robinhood listed that token on August 6, 2026. " +
+      "A first approval is a lead to look into: it does not say why the market maker wants the token, and it does not mean an exchange will list it. " +
+      "Pass the token's contract address as `token`; the `contract` of an entry from brainchain_custody_additions works. " +
+      "The tool follows five wallets at three firms: Wintermute's trading contract at 0x51C72848c68a965f66FA7a88855F9f7784502a7F, two more Wintermute wallets, one B2C2 wallet and one Galaxy Digital wallet. " +
+      "Etherscan tags the contract's address as a market maker and Arkham attributes it to Wintermute. The other four are plain wallets with a public name tag on Etherscan, which each entry repeats as `tag`. " +
+      added(configured) +
+      "To read another wallet instead, pass its address as `wallet`. Unless it is one of the five, its entry has no `name` or `tag`, and the tool does not check whose wallet it is. " +
+      "In the answer, `token` holds the token's `contract`, the `name` and `symbol` the contract gives itself, its `decimals` and its `totalSupply`, counted in tokens and not in the token's smallest unit. " +
+      "Whoever deployed the contract chose the name and symbol, so they do not prove which token it is. " +
+      "`wallets` has one entry for each wallet read: the `wallet`, the firm's `name`, the `tag`, the `balance` it holds now, also counted in tokens, and `shareOfSupplyPct`, that balance as a percentage of the total supply, which is left out for a token with no supply. " +
+      "`firstApproval` is there only if the token's log shows an approval by the wallet: `at` is when, `block` is the block it is in, `spender` is the contract it gave permission to, and `transaction` is the transaction's hash. " +
+      "`confirmed` is true when the wallet took part in that transaction: the wallet sent it, it was sent to the wallet or, for Wintermute's trading contract, it was sent to the Safe at 0x7d330DD7AF628c24E9FC75eb2986b130b2125ad0. " +
+      "Every approval of the Cash Cat and Pons tokens by that contract has gone through that Safe. When `confirmed` is false, the token's own log is the only sign of the approval. " +
+      "A token's contract writes its own balances and logs, so whoever deployed a token can make any wallet appear to hold it or to have approved it, and anyone can send a wallet tokens. " +
+      "For a token whose origin you do not know, a `balance` therefore proves little, and a `firstApproval` counts only when its `confirmed` is true. " +
+      "A wallet with a zero `balance` and no `firstApproval` holds none of the token now and has never approved it. A market maker also trades from other wallets, so that does not mean the firm holds none. " +
+      "`readAt` is when the chain was read. " +
+      "Without `atBlock` or `at`, each `balance` is what the wallet holds at `block`, the newest block when the chain was read, and the entry is marked `currentOnly`: it shows nothing of what could be seen earlier, so leave it out of a backtest. " +
+      "To read the balances at a past block, pass its number as `atBlock`, or pass `at`, a time in ISO 8601 such as 2026-11-01T00:00:00Z, for the last block made at or before it. " +
+      "Robinhood Chain's public endpoint keeps no state that old, so the tool adds up the token's Transfer logs to and from each wallet up to that block. " +
+      "It checks the method at the newest block, where the same sum must equal what the token's own `balanceOf` says. " +
+      "`asOf` then gives the `block` asked for and when it was made (`at`), and `transfersCheck` gives the `block` checked and whether the check `passed`. " +
+      "If it did not, the token's balances do not follow its transfers, as with a token that rebases or takes a fee on each transfer, and no past `balance` is given: `transfersCheck` names the first `wallet` that differs, what its `transfers` add up to and what `balanceOf` says. " +
+      "A past entry has no `shareOfSupplyPct`, since the supply at that block is not read, and `token` is read at the newest block. `firstApproval` is the first approval whenever it was made, so compare its `block` with the one asked for. " +
+      "The tool answers one request at a time, so requests sent together are answered in turn. " +
+      "The first answer for a token can take half a minute, because the tool reads the token's whole history for each wallet; later ones are faster for as long as the server keeps running. " +
+      "At a past block it also reads every transfer of the token to and from each wallet, which can take several tries for a wallet that trades the token often. " +
+      "An answer that is not ready after 45 seconds says so, and asking again goes on from where it stopped. " +
+      "Free, no key and no payment. Not advice.",
+    annotations: { readOnlyHint: true, openWorldHint: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        token: { type: "string", description: "The token's contract address on Robinhood Chain: 0x followed by 40 hex characters." },
+        wallet: { type: "string", description: "Optional: the address of another wallet or contract to read instead of the wallets the tool follows." },
+        atBlock: { type: "integer", minimum: 0, description: "Optional: a block number. The balances are those at the end of that block, added up from the token's transfers." },
+        at: { type: "string", description: "Optional, in place of atBlock: a time in ISO 8601, such as 2026-11-01T00:00:00Z. The balances are those at the last block made at or before it." },
+      },
+      required: ["token"],
+      additionalProperties: false,
     },
-    required: ["token"],
-    additionalProperties: false,
-  },
-};
+  };
+}
+
+export const MAKERS_TOOL = makersTool();
 
 export interface Approval extends Dated {
   spender: Address;
