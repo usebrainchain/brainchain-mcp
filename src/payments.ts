@@ -488,9 +488,14 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       // As for a task or a grade, the desk answers 400 before it settles anything.
       if (answer.status === 400) return uncharged(said ? `${sentence(said)} Nothing was charged.` : "The desk answered 400. Nothing was charged.");
       if (answer.status === 402) return uncharged(await explainRefusal("exam", reply.error, sitting.hold?.amount ?? 0n));
-      // 409 with the sitting named is the desk still taking the payment.
-      if (answer.status !== 202 && answer.status !== 502 && !(answer.status === 409 && typeof reply.sitting === "string")) {
-        const reason = said ? ` (${said.replace(/[.!?]+$/, "")})` : "";
+      const reason = said ? ` (${said.replace(/[.!?]+$/, "")})` : "";
+      // 409 with the sitting named is the desk still taking the payment. Without one, the desk holds no sitting for the
+      // payment and takes it no more, so keeping it would only show it again for the same answer. Its amount stays counted.
+      if (answer.status === 409 && typeof reply.sitting !== "string") {
+        unopened.delete(key);
+        throw new Error(`The desk holds no sitting for that payment and takes it no more${reason}. Call brainchain_sit_exam again to sit: it signs a new payment.`);
+      }
+      if (answer.status !== 202 && answer.status !== 502 && answer.status !== 409) {
         return { ...receipt, possiblyCharged: true, done: false, error: `The desk answered ${answer.status}${reason}. The payment may have gone through. ${askAgain}`, retryAfterSeconds: 60 };
       }
       const told = said || (typeof reply.message === "string" && reply.message.trim()) || "The desk has not opened the sitting yet.";

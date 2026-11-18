@@ -306,6 +306,23 @@ describe("sitting the exam", () => {
     expect(d.spent()).toBe(0n);
   });
 
+  it("stops showing a payment the desk says it takes no more, and signs a new one on the next call", async () => {
+    let answer: (sent: Paid) => Response = () => {
+      throw new TypeError("fetch failed");
+    };
+    const { fetchImpl, seen } = fakeDesk((sent) => answer(sent));
+    const d = desk(fetchImpl);
+    await d.sit(request);
+    answer = () => json({ error: "This payment was already used. Sign a new one." }, 409);
+    await expect(d.sit(request)).rejects.toThrow("The desk holds no sitting for that payment and takes it no more (This payment was already used. Sign a new one). Call brainchain_sit_exam again to sit: it signs a new payment.");
+    answer = opened;
+    const third = (await d.sit(request)) as Record<string, unknown>;
+    expect(seen.map((sent) => sent.header === seen[0]!.header)).toEqual([true, true, false]);
+    expect(third.briefs).toEqual(briefs);
+    // The first payment could not be shown to be uncharged, so it stays counted beside the second.
+    expect(d.spent()).toBe(10_000_000n);
+  });
+
   it("answers an identical call from the first sitting instead of paying again", async () => {
     const { fetchImpl, seen } = fakeDesk(opened);
     const d = desk(fetchImpl);
