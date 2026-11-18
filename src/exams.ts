@@ -6,6 +6,8 @@ import { keccak256, toBytes } from "viem";
 
 /** How many of a record's entries one read returns, counted from the first. */
 export const RECORD_PAGE = 20;
+/** The desk's cap on the work for one item of a sitting, as GET /exams states it. */
+export const MAX_WORK_BYTES = 48_000;
 
 export const sittingMessage = (chainId: number, agent: { chainId: number; id: string }, examClass: string, at: number): string =>
   `BrainChain exam v1\nchain ${chainId}\nagent ${agent.chainId}:${agent.id}\nclass ${examClass}\nat ${at}`;

@@ -8,7 +8,7 @@ import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, within, type CustodyBoard, type CustodyToken } from "./custody.js";
 import type { SymbolRow } from "./dataset/format.js";
 import { datasetReader, DatasetError, type Dataset, type DatasetRef } from "./dataset/published.js";
-import { RECORD_PAGE } from "./exams.js";
+import { MAX_WORK_BYTES, RECORD_PAGE } from "./exams.js";
 import { blockOf, ChainError, inTurn, tokenFacts, type Moment } from "./history.js";
 import { MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
 import { MARKET_CAP_NAME, MARKET_CAP_TOOL, readMarketCap, type MarketCapBoard } from "./marketcap.js";
@@ -48,7 +48,7 @@ export const BOND_TASK_NAME = "brainchain_bond_task";
 export const BOND_STATUS_NAME = "brainchain_bond_status";
 export const GRADE_NAME = "brainchain_grade";
 export const GET_GRADE_NAME = "brainchain_get_grade";
-/** The desk's cap on a delivered result sent for a grade, and on the work for one item of an exam sitting. */
+/** The desk's cap on a delivered result sent for a grade. */
 export const MAX_RESULT_BYTES = 100_000;
 export const EXAM_INFO_NAME = "brainchain_exam_info";
 export const SIT_EXAM_NAME = "brainchain_sit_exam";
@@ -264,7 +264,7 @@ const EXAM_SUBMIT_INPUT: Tool["inputSchema"] = {
   properties: {
     sitting: SITTING_ID,
     item: { type: "integer", minimum: 0, maximum: 9, description: "The item's index, as the sitting lists it, from 0." },
-    text: { type: "string", minLength: 1, description: "The finished work for the item, at most 100,000 bytes. For the code class, one Python code block that defines the function the brief asks for." },
+    text: { type: "string", minLength: 1, description: "The finished work for the item, at most 48,000 bytes. For the code class, one Python code block that defines the function the brief asks for." },
   },
   required: ["sitting", "item", "text"],
   additionalProperties: false,
@@ -637,7 +637,7 @@ export function checkWork(input: Record<string, unknown>): { sitting: string; it
   if (typeof input.text !== "string") throw new Error(`text must be a string, not ${typeName(input.text)}.`);
   if (BLANK.test(input.text.trim())) throw new Error("text is empty.");
   const bytes = Buffer.byteLength(input.text);
-  if (bytes > MAX_RESULT_BYTES) throw new Error(`text is ${count(bytes)} bytes; the limit is ${count(MAX_RESULT_BYTES)}.`);
+  if (bytes > MAX_WORK_BYTES) throw new Error(`text is ${count(bytes)} bytes; the limit is ${count(MAX_WORK_BYTES)}.`);
   return { sitting, item: input.item as number, text: input.text };
 }
 

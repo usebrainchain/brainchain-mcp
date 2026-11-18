@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +8,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 
 import { resolveConfig } from "./config.js";
-import { briefsMessage, RECORD_PAGE, resultMessage, sittingGuidance, sittingMessage } from "./exams.js";
+import { briefsMessage, MAX_WORK_BYTES, RECORD_PAGE, resultMessage, sittingGuidance, sittingMessage } from "./exams.js";
 import { createDesk, orderIdOf } from "./payments.js";
 import {
   AGENT_RECORD_NAME,
@@ -22,7 +23,6 @@ import {
   examSubmitTool,
   LICENCES_NAME,
   LICENCES_TOOL,
-  MAX_RESULT_BYTES,
   SIT_EXAM_NAME,
   sitExamTool,
   type Desk,
@@ -594,7 +594,7 @@ describe("the exam tools", () => {
       [EXAM_SUBMIT_NAME, { sitting: SITTING, item: 10, text: "x" }, "item must be the item's index as the sitting lists it, a whole number from 0."],
       [EXAM_SUBMIT_NAME, { sitting: SITTING, item: 0 }, "text is required."],
       [EXAM_SUBMIT_NAME, { sitting: SITTING, item: 0, text: " \n" }, "text is empty."],
-      [EXAM_SUBMIT_NAME, { sitting: SITTING, item: 0, text: "é".repeat(MAX_RESULT_BYTES / 2 + 1) }, "text is 100,002 bytes; the limit is 100,000."],
+      [EXAM_SUBMIT_NAME, { sitting: SITTING, item: 0, text: "é".repeat(MAX_WORK_BYTES / 2 + 1) }, "text is 48,002 bytes; the limit is 48,000."],
       [EXAM_STATUS_NAME, { sitting: SITTING, briefs: "yes" }, "briefs must be true or false, not a string."],
       [EXAM_STATUS_NAME, {}, "sitting is required."],
       [EXAM_INFO_NAME, { class: "code" }, "Unknown field: class. This tool takes nothing."],
@@ -621,6 +621,9 @@ describe("the exam tools", () => {
     expect(sitExamTool("BRAINCHAIN_NETWORK must be mainnet or testnet.").description).toMatch(/^Invalid setting: BRAINCHAIN_NETWORK must be mainnet or testnet\. Until the operator fixes it, this tool only returns that error\. Open a sitting/);
     const submit = examSubmitTool().description!;
     expect(submit).toContain("An item takes one delivery: once sent, the work cannot be replaced or sent again");
+    // The limit on an item's work is the desk's, lower than the limit on a result sent for a grade.
+    expect(JSON.stringify(examSubmitTool().inputSchema)).toContain("at most 48,000 bytes");
+    expect(readFileSync(new URL("../README.md", import.meta.url), "utf8")).toContain("the `text` of the finished work, at most 48,000 bytes");
     expect(examSubmitTool("BRAINCHAIN_PAYER_KEY must be 64 hex characters, with or without 0x.").description).toMatch(/^Invalid setting: BRAINCHAIN_PAYER_KEY must be 64 hex characters/);
     expect(AGENT_RECORD_TOOL.description).toContain("`npx brainchain-verify <network> --record <agentId>`");
     expect(AGENT_RECORD_TOOL.description).toContain(`its first ${RECORD_PAGE} entries`);
