@@ -35,7 +35,7 @@ var settings = Environment.GetEnvironmentVariables()
 
 // npx is a .cmd script on Windows, which only cmd.exe starts. Its first run downloads the server, hence the longer
 // timeout.
-string[] server = ["npx", "-y", "brainchain-mcp@0.14.0"];
+string[] server = ["npx", "-y", "brainchain-mcp@0.14.1"];
 await using var brainchain = await McpClient.CreateAsync(new StdioClientTransport(new()
 {
     Name = "brainchain",
