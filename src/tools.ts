@@ -3,7 +3,7 @@ import { getAddress, isAddress, type Address } from "viem";
 
 import type { Bonds } from "./bonds.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
-import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DEFAULT_DAYS, MAX_DAYS, readCustodyAdditions, type CustodyBoard } from "./custody.js";
+import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, readCustodyAdditions, type CustodyBoard } from "./custody.js";
 import { ChainError, type Moment } from "./history.js";
 import { MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
 import { brief, canonicalStringify, RESULT_LIMIT } from "./payments.js";
@@ -397,7 +397,8 @@ function orderReply(view: unknown): CallToolResult {
 
 /** How the tools that read public sources get their answers. A test passes its own in place of any of them. */
 export interface Readers {
-  custody(days: number): Promise<CustodyBoard>;
+  /** `period` is a number of days back, or the time the period starts. */
+  custody(period: number | Date): Promise<CustodyBoard>;
   makers(token: Address, wallet?: Address, moment?: Moment): Promise<MakerBoard>;
   readiness(token: Address): Promise<ReadinessBoard>;
   sightings(token: Address): Promise<SightingsBoard>;
@@ -462,7 +463,10 @@ export async function callTool(
       refuseUnknownFields(input, CUSTODY_TOOL.inputSchema);
       const days = input.days === undefined ? DEFAULT_DAYS : input.days;
       if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > MAX_DAYS) throw new Error(`days must be a whole number from 1 to ${MAX_DAYS}. Leave it out to look back ${DEFAULT_DAYS} days.`);
-      const board = await custody(days).catch((error: unknown) => {
+      const now = Date.now();
+      const since = input.since === undefined ? undefined : instant("since", input.since, now);
+      if (since !== undefined && since < now - MAX_DAYS * DAY_MS) throw new Error(`since can be at most ${MAX_DAYS} days back, as far as this tool reads BitGo's changes.`);
+      const board = await custody(since === undefined ? days : new Date(since)).catch((error: unknown) => {
         if (error instanceof CustodyError) throw error;
         throw new Error(`BitGo's code on GitHub could not be read just now: ${brief(error)} Try again in a minute.`);
       });

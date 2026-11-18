@@ -110,6 +110,8 @@ describe("the custody tool's words", () => {
     expect(KEEP_MS).toBe(600_000);
     expect(CUSTODY_TOOL.description).toContain("Looks back 30 days, or `days` from 1 to 90.");
     expect(row).toContain("(1 to 90, 30 when left out)");
+    for (const text of [CUSTODY_TOOL.description!, row]) expect(text).toContain("pass its `readAt` as `since`: a time in ISO 8601, at most 90 days back, used in place of `days` when both are given.");
+    expect(Object.keys(CUSTODY_TOOL.inputSchema.properties!)).toEqual(["days", "since"]);
     expect((CUSTODY_TOOL.inputSchema.properties as { days: { minimum: number; maximum: number } }).days).toMatchObject({ minimum: 1, maximum: MAX_DAYS });
   });
 
@@ -259,6 +261,20 @@ describe("custodyAdditions", () => {
     expect(byDay(await custodyAdditions(reader, 30, NOW))).toEqual([["2026-08-06", "hoodeth:today"], ["2026-07-08", "hoodeth:edge"]]);
     expect(byDay(await custodyAdditions(reader, 90, NOW))).toEqual([["2026-08-06", "hoodeth:today"], ["2026-07-08", "hoodeth:edge"], ["2026-07-07", "hoodeth:before"], ["2026-05-09", "hoodeth:quarter"]]);
     expect(byDay(await custodyAdditions(reader, 1, NOW))).toEqual([["2026-08-06", "hoodeth:today"]]);
+  });
+
+  it("starts the period at a given time, to the millisecond, and says so in `since`", async () => {
+    const { reader } = master(OPENING, [
+      { at: "2026-07-07T23:59:59.999Z", lists: { [EDITED]: ["usdg", "before"], [GENERATED]: [] } },
+      { at: "2026-07-08T00:00:00Z", lists: { [EDITED]: ["usdg", "before", "edge"], [GENERATED]: [] } },
+      { at: "2026-08-06T12:00:00Z", lists: { [EDITED]: ["usdg", "before", "edge", "today"], [GENERATED]: [] } },
+    ]);
+    const board = await custodyAdditions(reader, new Date("2026-07-08T00:00:00Z"), NOW);
+    expect(board.since).toBe("2026-07-08T00:00:00.000Z");
+    expect(byDay(board)).toEqual([["2026-08-06", "hoodeth:today"], ["2026-07-08", "hoodeth:edge"]]);
+    expect(byDay(await custodyAdditions(reader, new Date("2026-07-08T00:00:00.001Z"), NOW))).toEqual([["2026-08-06", "hoodeth:today"]]);
+    // A time is the same period as the days it stands for.
+    expect(await custodyAdditions(reader, new Date(NOW.getTime() - 30 * 86_400_000), NOW)).toEqual(await custodyAdditions(reader, 30, NOW));
   });
 
   it("dates a token by when it reached master, not by its commit", async () => {

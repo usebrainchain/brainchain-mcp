@@ -423,7 +423,7 @@ describe("stock premiums", () => {
 
 describe("custody additions", () => {
   const board = { chain: "Robinhood Chain" as const, source: "https://github.com/BitGo/BitGoJS/tree/master/modules/statics/src/coins", readAt: "2026-11-16T10:00:00.000Z", since: "2026-10-17T10:00:00.000Z", additions: [] };
-  const call = (args: unknown, custody: (days: number) => Promise<typeof board>) => callTool(desk, "brainchain_custody_additions", args, undefined, undefined, undefined, { custody });
+  const call = (args: unknown, custody: (period: number | Date) => Promise<typeof board>) => callTool(desk, "brainchain_custody_additions", args, undefined, undefined, undefined, { custody });
 
   it("serves the board without a desk or a key, for 30 days unless told otherwise", async () => {
     const asked: number[] = [];
@@ -444,7 +444,35 @@ describe("custody additions", () => {
       expect(result.isError).toBe(true);
       expect(body(result)).toEqual({ error: "days must be a whole number from 1 to 90. Leave it out to look back 30 days." });
     }
-    expect(body(await call({ token: "cashcat" }, read))).toEqual({ error: "Unknown field: token. This tool takes only days." });
+    expect(body(await call({ token: "cashcat" }, read))).toEqual({ error: "Unknown field: token. This tool takes only days, since." });
+    expect(reads).toBe(0);
+  });
+
+  it("reads from `since` when it is given, in place of `days`", async () => {
+    const asked: (number | Date)[] = [];
+    const read = async (period: number | Date) => (asked.push(period), board);
+    const recent = new Date(Date.now() - 3_600_000).toISOString();
+    for (const args of [{ since: recent }, { since: recent, days: 7 }, { since: recent.slice(0, 10) }]) expect((await call(args, read)).isError).toBe(false);
+    expect(asked).toEqual([new Date(recent), new Date(recent), new Date(`${recent.slice(0, 10)}T00:00:00Z`)]);
+  });
+
+  it("refuses a `since` it cannot read, or one further back than it reads, before reading anything", async () => {
+    let reads = 0;
+    const read = async () => (reads++, board);
+    const far = new Date(Date.now() - 91 * 86_400_000).toISOString();
+    for (const [args, said] of [
+      [{ since: "last week" }, "since must be a time in ISO 8601, such as 2026-11-01T00:00:00Z, or a date, such as 2026-11-01."],
+      [{ since: "2026-11-01T00:00:00" }, "since must be a time in ISO 8601, such as 2026-11-01T00:00:00Z, or a date, such as 2026-11-01."],
+      [{ since: 1_793_491_200_000 }, "since must be a string, not a number."],
+      [{ since: "2999-01-01" }, "since is in the future."],
+      [{ since: far }, "since can be at most 90 days back, as far as this tool reads BitGo's changes."],
+      // `since` wins over `days`, and a `days` that is wrong in itself is still refused.
+      [{ since: new Date().toISOString().slice(0, 10), days: 0 }, "days must be a whole number from 1 to 90. Leave it out to look back 30 days."],
+    ] as const) {
+      const result = await call(args, read);
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: said });
+    }
     expect(reads).toBe(0);
   });
 
