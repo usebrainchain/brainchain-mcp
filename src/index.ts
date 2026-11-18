@@ -51,8 +51,8 @@ Environment:
   BRAINCHAIN_NETWORK          mainnet (default) or testnet.
   BRAINCHAIN_PAY_ON           base (default) pays in USDC on Base (Base Sepolia on testnet);
                               robinhood pays in USDG on Robinhood Chain.
-  BRAINCHAIN_MAX_PRICE_UNITS  Maximum paid per task or grade, in base units (default 1000000 = 1 USDC or USDG). An exam
-                              sitting is paid at the price the desk states, within the budget and the daily limit.
+  BRAINCHAIN_MAX_PRICE_UNITS  Maximum paid per task or grade, in base units (default 1000000 = 1 USDC or USDG). Left unset,
+                              it gives way to the price of an exam sitting for that one payment; set, it holds for one too.
   BRAINCHAIN_BUDGET_UNITS     Maximum paid in total while the server runs (default 10000000 = 10 USDC or USDG).
   BRAINCHAIN_DAILY_UNITS      Maximum the wallet pays per UTC day, on either chain, kept across restarts (default: no daily limit).
   BRAINCHAIN_MAX_BOND_UNITS   Maximum locked in one delivery bond on Shipped (default 10000000 = 10 USDG); bonds also draw on

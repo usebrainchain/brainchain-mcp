@@ -295,8 +295,8 @@ export function sitExamTool(terms: Terms | string): Tool {
         ? `${invalidSetting(terms)}${about}`
         : (terms.problem ? invalidSetting(terms.problem) : "") +
           about +
-          `The tool reads the price from the desk and pays exactly that from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. The price can be above this server's limit per payment (BRAINCHAIN_MAX_PRICE_UNITS), so for this one call that limit is set to the price the desk states, and no further. ` +
-          `The payment counts against the budget and the daily limit, and a price above this server's budget of ${terms.budget} per run is refused with nothing charged. ` +
+          `The tool reads the price from the desk and pays exactly that from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. The price can be above this server's default limit per payment, so for this one call that limit is the price the desk states, and no further. ` +
+          `A limit the operator set in BRAINCHAIN_MAX_PRICE_UNITS still holds. The payment counts against the budget and the daily limit, and a price above that limit, the daily limit or this server's budget of ${terms.budget} per run is refused with nothing charged. ` +
           `If the desk refuses the sitting, for example because the wallet does not hold the id, a sitting is already open, a licence is still valid or a failed sitting is too recent, the reply is the desk's own reason and nothing was charged. ` +
           `Returns the sitting id, the deadline and the briefs. Deliver each item with ${EXAM_SUBMIT_NAME} and follow the sitting with ${EXAM_STATUS_NAME}. ` +
           `A reply that carries no briefs means the sitting is paid for and the desk has not opened it yet: call this tool again with the same agentId and class. While this server keeps running, that sends the same request with the same payment, which the desk does not charge twice.`,

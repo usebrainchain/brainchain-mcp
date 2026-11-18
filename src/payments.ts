@@ -512,9 +512,9 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   }
 
   /**
-   * Pays for a sitting at the price the desk states, and at no other: the limit per payment is that price for this
-   * one payment, whatever BRAINCHAIN_MAX_PRICE_UNITS says, and a price the budget or the daily limit cannot hold
-   * is refused before anything is signed.
+   * Pays for a sitting at the price the desk states, and at no other. The default limit per payment can be under
+   * that price, so for this one payment the limit is the price itself. A limit the operator set still holds, as do the
+   * budget and the daily limit: a price above any of them is refused before anything is signed.
    */
   async function openSitting(key: string, request: SittingRequest): Promise<unknown> {
     const wallet = account();
@@ -524,6 +524,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
     const over = (limit: bigint, what: string, setting: string) =>
       `A sitting costs ${formatUnits(price)} ${config.token}, above ${what} of ${formatUnits(limit)} (${setting}). Raise it and restart the server to allow the sitting. Nothing was charged.`;
+    if (config.maxPriceSet && price > config.maxPrice) throw new Error(over(config.maxPrice, "the limit per payment this server was set", "BRAINCHAIN_MAX_PRICE_UNITS"));
     if (price > config.budget) throw new Error(over(config.budget, "this server's budget per run", "BRAINCHAIN_BUDGET_UNITS"));
     if (config.daily !== undefined && price > config.daily) throw new Error(over(config.daily, "this wallet's daily limit", "BRAINCHAIN_DAILY_UNITS"));
 

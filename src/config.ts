@@ -113,6 +113,8 @@ export interface Config {
   token: string;
   /** The most this server pays for one task or grade, in the asset's smallest unit. */
   maxPrice: bigint;
+  /** Whether the operator set that limit. An exam sitting costs more than the default, which gives way to its price; a limit that was set does not. */
+  maxPriceSet: boolean;
   /** The most this server process pays in total, in the asset's smallest unit. */
   budget: bigint;
   /** The most the wallet pays per UTC day across restarts, servers and payment chains, when set. */
@@ -246,6 +248,7 @@ export function resolveConfig(given: Record<string, string | undefined>, { payme
     chain: preset.chain,
     token: preset.token,
     maxPrice,
+    maxPriceSet: envString(env, "BRAINCHAIN_MAX_PRICE_UNITS") !== undefined,
     budget,
     ...(daily !== undefined ? { daily } : {}),
     stateDir: envDirectory(env, "BRAINCHAIN_STATE_DIR", join(homedir(), ".brainchain")),

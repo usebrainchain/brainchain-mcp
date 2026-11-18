@@ -145,6 +145,25 @@ describe("sitting the exam", () => {
     await expect(tasks.post({ title: "T", brief: "B", levels: ["Good", "Bad"] })).rejects.toThrow(/above this server's limit of 1 test USDG/);
   });
 
+  it("holds a sitting to a limit per payment the operator set, and to its price under a higher one", async () => {
+    expect(resolveConfig({})).toMatchObject({ maxPrice: 1_000_000n, maxPriceSet: false });
+    expect(resolveConfig({ BRAINCHAIN_MAX_PRICE_UNITS: "1000000" }).maxPriceSet).toBe(true);
+    expect(resolveConfig({ BRAINCHAIN_MAX_PRICE_UNITS: " " }).maxPriceSet).toBe(false);
+    const { fetchImpl, seen } = fakeDesk(opened);
+    const held = desk(fetchImpl, { maxPrice: 3_000_000n, maxPriceSet: true });
+    await expect(held.sit(request)).rejects.toThrow(
+      "A sitting costs 5 test USDG, above the limit per payment this server was set of 3 (BRAINCHAIN_MAX_PRICE_UNITS). Raise it and restart the server to allow the sitting. Nothing was charged.",
+    );
+    expect(seen).toHaveLength(0);
+    // A limit above the price allows the sitting, at its price and no more.
+    const dearer = fakeDesk(opened, { asked: "6000000" });
+    await expect(desk(dearer.fetchImpl, { maxPrice: 8_000_000n, maxPriceSet: true }).sit(request)).rejects.toThrow(/so nothing was signed\. Try again\. Nothing was charged\.$/);
+    expect(dearer.seen).toHaveLength(0);
+    const allowed = desk(fetchImpl, { maxPrice: 8_000_000n, maxPriceSet: true });
+    expect(await allowed.sit(request)).toMatchObject({ price: "5 test USDG" });
+    expect(allowed.spent()).toBe(5_000_000n);
+  });
+
   it("refuses a price the budget or the daily limit cannot hold, before anything is signed", async () => {
     const { fetchImpl, seen } = fakeDesk(opened);
     const small = desk(fetchImpl, { budget: 4_000_000n });
@@ -595,8 +614,9 @@ describe("the exam tools", () => {
     const sit = sitExamTool({ ...terms, wallet: signer.address }).description!;
     expect(sit).toContain("This server's wallet signs the request, so it must hold the agent's id on Robinhood Chain (Robinhood Chain testnet on testnet), as the id's controller or as its registered wallet.");
     expect(sit).toContain(`pays exactly that from this server's wallet ${signer.address} on Robinhood Chain.`);
-    expect(sit).toContain("for this one call that limit is set to the price the desk states, and no further.");
-    expect(sit).toContain("a price above this server's budget of 10 USDG per run is refused with nothing charged.");
+    expect(sit).toContain("The price can be above this server's default limit per payment, so for this one call that limit is the price the desk states, and no further.");
+    expect(sit).toContain("A limit the operator set in BRAINCHAIN_MAX_PRICE_UNITS still holds.");
+    expect(sit).toContain("a price above that limit, the daily limit or this server's budget of 10 USDG per run is refused with nothing charged.");
     expect(sit).toContain("Nothing is refunded, whatever the outcome.");
     expect(sitExamTool("BRAINCHAIN_NETWORK must be mainnet or testnet.").description).toMatch(/^Invalid setting: BRAINCHAIN_NETWORK must be mainnet or testnet\. Until the operator fixes it, this tool only returns that error\. Open a sitting/);
     const submit = examSubmitTool().description!;
