@@ -103,7 +103,7 @@ export function configuredMakers(value: string | undefined): MakerWallet[] {
 
 /** The tool as this server describes it, with the wallets its operator added. */
 export function makersTool(configured: readonly MakerWallet[] = []): Tool {
-    return {
+  return {
     name: MAKERS_NAME,
     title: "A market maker's holdings and first approval of a Robinhood Chain token",
     description:
@@ -166,6 +166,7 @@ export interface Approval extends Dated {
 export interface MakerHolding {
   name?: string;
   tag?: string;
+  source?: "configured";
   wallet: Address;
   /** Left out at a past block when the token's balances do not follow its transfers. */
   balance?: string;
