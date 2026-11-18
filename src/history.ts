@@ -295,7 +295,8 @@ export function chainHistory(rpc = ROBINHOOD_RPC, fetchImpl: typeof fetch = fetc
  */
 export const TURNED_AWAY =
   "Robinhood Chain's public endpoint is turning this server's requests away, which it does for a few minutes after a lot of reading. What was read is kept: ask again in five minutes and it goes on from there.";
-const turnedAway = (error: unknown) => error instanceof BaseError && error.walk((cause) => cause instanceof HttpRequestError && cause.status === 429) !== null;
+/** The endpoint refuses with a 429 whose body is a JSON-RPC error, which viem reports as an RPC error with that status. */
+const turnedAway = (error: unknown) => error instanceof BaseError && error.walk((cause) => (cause instanceof HttpRequestError || cause instanceof RpcRequestError) && cause.status === 429) !== null;
 
 export const STILL_READING =
   "This token's history on Robinhood Chain was not read within 45 seconds, the wait behind earlier answers included. What was read is kept: ask again and it goes on from there.";

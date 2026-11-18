@@ -65,6 +65,22 @@ describe("inTurn", () => {
     }
   });
 
+  it("says the same when the refusal comes as a JSON-RPC error, as Robinhood Chain's endpoint sends it", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    // Read from the endpoint on 2026-11-18: HTTP 429 with this body.
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: 429, message: "Too Many Requests" } }), { status: 429 }));
+    try {
+      const history = await import("./history.js");
+      const refused = expect(history.inTurn((reader) => reader.getLogs({ address: "0x020bfC650A365f8BB26819deAAbF3E21291018b4", fromBlock: 0n, toBlock: 1n }))).rejects.toStrictEqual(new history.ChainError(history.TURNED_AWAY));
+      await vi.advanceTimersByTimeAsync(10_000);
+      await refused;
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("tells the caller after 45 seconds that it is still reading, and stops the answer at its next request", async () => {
     vi.useFakeTimers();
     vi.resetModules();
