@@ -25,7 +25,7 @@ import { MULTICALL3 } from "./premiums.js";
 
 const ONE = [MARKET_MAKERS[0]!] as const;
 const WINTERMUTE = ONE[0].wallet;
-const nothingKept = (): MakerKept => ({ approvals: new Map(), starts: new Map() });
+const nothingKept = (): MakerKept => ({ approvals: new Map(), starts: new Map(), transfers: new Map(), times: new Map() });
 const SAFE = MARKET_MAKERS[0]!.safe!;
 const CASHCAT = getAddress("0x020bfc650a365f8bb26819deaabf3e21291018b4");
 const SPENDER = getAddress("0x520ed467860d840ec6ca20f1dacb9c0fa5168aa7");
@@ -68,6 +68,14 @@ interface Token {
   /** A wallet whose balance the contract refuses to give. */
   refuses?: Address;
   approvals?: Logged[];
+  transfers?: Moved[];
+}
+
+interface Moved {
+  block: bigint;
+  from: Address;
+  to: Address;
+  value: bigint;
 }
 
 type Sent = Record<Hash, { from: Address; to: Address | null }>;
@@ -96,14 +104,16 @@ function answerOf(token: Token | undefined, callData: Hex): { success: boolean; 
  * Robinhood Chain as `makerHoldings` meets it: tokens by address, the newest block, the most logs one request returns, the
  * most blocks it searches before it gives up, and who sent each transaction.
  */
-function chain(tokens: Record<Address, Token>, { newest = NEWEST, most = 10_000, widest = NEWEST, times = {} as Record<string, number>, sent = {} as Sent } = {}) {
+function chain(tokens: Record<Address, Token>, { newest = NEWEST, most = 10_000, widest = NEWEST, times = {} as Record<string, number>, sent = {} as Sent, clock = undefined as ((block: bigint) => number) | undefined } = {}) {
   const asked: string[] = [];
   const failing: { logs?: Error; any?: Error; contract?: Error } = {};
   const reader = {
-    async readContract({ address, functionName, args }: { address: Address; functionName: string; args: [{ target: Address; callData: Hex }[]] }) {
+    async readContract({ address, functionName, args, blockNumber }: { address: Address; functionName: string; args: [{ target: Address; callData: Hex }[]]; blockNumber?: bigint }) {
       asked.push("aggregate3");
       if (failing.contract) throw failing.contract;
       expect([address, functionName]).toEqual([MULTICALL3, "aggregate3"]);
+      // Balances are read at the block the answer names, never at whatever block is newest by the time they are.
+      expect(blockNumber).toBe(newest);
       return args[0].map(({ target, callData }) => answerOf(tokens[target], callData));
     },
     async getBlockNumber() {
@@ -114,7 +124,16 @@ function chain(tokens: Record<Address, Token>, { newest = NEWEST, most = 10_000,
       asked.push("code");
       return tokens[address] ? "0x6080" : undefined;
     },
-    async getLogs({ address, event, args, fromBlock, toBlock }: { address: Address; event: { name: string }; args?: { owner: Address }; fromBlock: bigint; toBlock: bigint }) {
+    async getLogs({ address, event, args, fromBlock, toBlock }: { address: Address; event: { name: string }; args?: { owner?: Address; from?: Address; to?: Address }; fromBlock: bigint; toBlock: bigint }) {
+      if (event.name === "Transfer") {
+        const side = args?.to ? "to" : args?.from ? "from" : "any";
+        asked.push(`transfers ${side} ${fromBlock}-${toBlock}`);
+        if (failing.logs) throw failing.logs;
+        if (toBlock - fromBlock >= widest) throw rpcError(TOO_SLOW);
+        const logs = (tokens[address]?.transfers ?? []).filter((log) => log.block >= fromBlock && log.block <= toBlock && (side === "any" || log[side] === args![side]));
+        if (logs.length > most) throw rpcError(TOO_MANY);
+        return logs.map((log, i) => ({ blockNumber: log.block, logIndex: i, transactionHash: hash("70"), args: { from: log.from, to: log.to, value: log.value } }));
+      }
       expect(event.name).toBe("Approval");
       const inRange = (tokens[address]?.approvals ?? []).filter((log) => log.block >= fromBlock && log.block <= toBlock);
       // Asked without an owner, the endpoint returns every wallet's approvals.
@@ -127,14 +146,14 @@ function chain(tokens: Record<Address, Token>, { newest = NEWEST, most = 10_000,
     },
     async getBlock({ blockNumber }: { blockNumber: bigint }) {
       asked.push(`block ${blockNumber}`);
-      return { timestamp: BigInt(times[String(blockNumber)] ?? 1_785_925_937) };
+      return { timestamp: BigInt(clock ? clock(blockNumber) : (times[String(blockNumber)] ?? 1_785_925_937)) };
     },
     async getTransaction({ hash: transaction }: { hash: Hash }) {
       asked.push(`transaction ${transaction.slice(0, 6)}`);
       return sent[transaction] ?? { from: OPERATOR, to: SAFE };
     },
   } as unknown as ChainHistory;
-  return { reader, asked, failing, logsAsked: () => asked.filter((entry) => entry.startsWith("logs ")) };
+  return { reader, asked, failing, logsAsked: () => asked.filter((entry) => entry.startsWith("logs ")), transfersAsked: () => asked.filter((entry) => entry.startsWith("transfers ")) };
 }
 
 const approval = (block: bigint, index: number, value: bigint, more: Partial<Logged> = {}): Logged => ({ block, index, owner: WINTERMUTE, spender: SPENDER, value, transaction: FIRST.transaction, ...more });
@@ -190,8 +209,45 @@ describe("the market maker tool's words", () => {
   });
 
   it("name the answer's fields as the answer does", () => {
-    const fields = ["`token`", "`contract`", "`wallets`", "`wallet`", "`name`", "`tag`", "`block`", "`symbol`", "`decimals`", "`totalSupply`", "`balance`", "`shareOfSupplyPct`", "`firstApproval`", "`at`", "`spender`", "`transaction`", "`confirmed`", "`readAt`"];
+    const fields = [
+      "`token`",
+      "`contract`",
+      "`wallets`",
+      "`wallet`",
+      "`name`",
+      "`tag`",
+      "`block`",
+      "`symbol`",
+      "`decimals`",
+      "`totalSupply`",
+      "`balance`",
+      "`shareOfSupplyPct`",
+      "`firstApproval`",
+      "`at`",
+      "`spender`",
+      "`transaction`",
+      "`confirmed`",
+      "`readAt`",
+      "`currentOnly`",
+      "`atBlock`",
+      "`asOf`",
+      "`transfersCheck`",
+      "`passed`",
+      "`transfers`",
+      "`balanceOf`",
+    ];
     for (const text of [MAKERS_TOOL.description!, row]) for (const field of fields) expect(text).toContain(field);
+  });
+
+  it("say how a past balance is read and checked, and that a balance read now is no record of the past", () => {
+    for (const text of [MAKERS_TOOL.description!, section]) {
+      expect(text).toContain("Robinhood Chain's public endpoint keeps no state that old, so the tool adds up the token's Transfer logs to and from each wallet up to that block.");
+      expect(text).toContain("It checks the method at the newest block, where the same sum must equal what the token's own `balanceOf` says.");
+      expect(text).toContain("the token's balances do not follow its transfers, as with a token that rebases or takes a fee on each transfer, and no past `balance` is given");
+      expect(text).toContain("it shows nothing of what could be seen earlier, so leave it out of a backtest.");
+      expect(text).toContain("`firstApproval` is the first approval whenever it was made, so compare its `block` with the one asked for.");
+      expect(text).toContain("At a past block it also reads every transfer of the token to and from each wallet, which can take several tries for a wallet that trades the token often.");
+    }
   });
 
   it("say that answers come one at a time, and why the first is slow", () => {
@@ -205,7 +261,7 @@ describe("the market maker tool's words", () => {
   it("are counted with the tools that only read, and ask for the token", () => {
     expect(MAKERS_TOOL.annotations).toEqual({ readOnlyHint: true, openWorldHint: true });
     expect(MAKERS_TOOL.inputSchema).toMatchObject({ required: ["token"], additionalProperties: false });
-    expect(Object.keys(MAKERS_TOOL.inputSchema.properties!)).toEqual(["token", "wallet"]);
+    expect(Object.keys(MAKERS_TOOL.inputSchema.properties!)).toEqual(["token", "wallet", "atBlock", "at"]);
     expect(readme).toContain(`- \`${MAKERS_NAME}\` `);
     expect(readme).toContain("The other eight only read.");
     expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness` and `brainchain_token_sightings`.");
@@ -225,6 +281,9 @@ describe("makerHoldings", () => {
           tag: "Market Maker: 0x51c7...2a7f",
           wallet: WINTERMUTE,
           balance: "6089236.854553468672656857",
+          block: Number(NEWEST),
+          readAt: "2026-11-16T14:40:50.000Z",
+          currentOnly: true,
           shareOfSupplyPct: "0.6089",
           firstApproval: { at: FIRST.at, block: 28_416_243, transaction: FIRST.transaction, spender: SPENDER, confirmed: true },
         },
@@ -235,7 +294,7 @@ describe("makerHoldings", () => {
   it("gives a wallet that never touched the token a zero balance and no first approval", async () => {
     const { reader } = chain({ [CASHCAT]: cashCat({ balances: {}, approvals: [] }) });
     const { wallets } = await makerHoldings(reader, CASHCAT, ONE, nothingKept(), NOW);
-    expect(wallets).toEqual([{ name: "Wintermute", tag: "Market Maker: 0x51c7...2a7f", wallet: WINTERMUTE, balance: "0", shareOfSupplyPct: "0.0000" }]);
+    expect(wallets).toEqual([{ name: "Wintermute", tag: "Market Maker: 0x51c7...2a7f", wallet: WINTERMUTE, balance: "0", block: Number(NEWEST), readAt: "2026-11-16T14:40:50.000Z", currentOnly: true, shareOfSupplyPct: "0.0000" }]);
   });
 
   it("reads the wallets it is given, each for itself, and names only those that came with a name", async () => {
@@ -246,8 +305,8 @@ describe("makerHoldings", () => {
       [undefined, OTHER, "73", PERMIT2],
       ["Wintermute", WINTERMUTE, "5000000", SPENDER],
     ]);
-    expect(Object.keys(wallets[0]!)).toEqual(["wallet", "balance", "shareOfSupplyPct", "firstApproval"]);
-    expect(Object.keys(wallets[1]!)).toEqual(["name", "tag", "wallet", "balance", "shareOfSupplyPct", "firstApproval"]);
+    expect(Object.keys(wallets[0]!)).toEqual(["wallet", "balance", "block", "readAt", "currentOnly", "shareOfSupplyPct", "firstApproval"]);
+    expect(Object.keys(wallets[1]!)).toEqual(["name", "tag", "wallet", "balance", "block", "readAt", "currentOnly", "shareOfSupplyPct", "firstApproval"]);
   });
 
   it("takes the earliest approval above zero, whatever order the logs come in", async () => {
@@ -292,7 +351,7 @@ describe("makerHoldings", () => {
   it("finds where the token's approvals begin, then reads the wallet from there and stops at its first", async () => {
     const { reader, asked } = chain({ [CASHCAT]: cashCat() });
     await makerHoldings(reader, CASHCAT, ONE, nothingKept(), NOW);
-    expect(asked).toEqual(["aggregate3", "newest", "any 0-9999999", "any 10000000-19999999", "any 20000000-29999999", "logs 20000000-29999999", `block ${FIRST.block}`, "transaction 0x3693"]);
+    expect(asked).toEqual(["newest", "aggregate3", "any 0-9999999", "any 10000000-19999999", "any 20000000-29999999", "logs 20000000-29999999", `block ${FIRST.block}`, "transaction 0x3693"]);
   });
 
   it("reads every stretch for a wallet that never approved, the last one up to the newest block", async () => {
@@ -363,7 +422,7 @@ describe("makerHoldings", () => {
     const first = await firstOf(found.reader, ONE, again);
     found.asked.length = 0;
     expect(await firstOf(found.reader, ONE, again)).toEqual(first);
-    expect(found.asked).toEqual(["aggregate3", "newest"]);
+    expect(found.asked).toEqual(["newest", "aggregate3"]);
   });
 
   it("keeps a stretch only once it ended an hour ago", async () => {
@@ -452,7 +511,7 @@ describe("makerHoldings", () => {
         `There is no contract at ${CASHCAT} on Robinhood Chain. If the address came from brainchain_custody_additions, the token may not be deployed yet: BitGo lists some tokens before their contract exists. Otherwise check the address.`,
       ),
     );
-    expect(asked).toEqual(["aggregate3", "code"]);
+    expect(asked).toEqual(["newest", "aggregate3", "code"]);
   });
 
   const NOT_TOKEN = new ChainError(
@@ -471,7 +530,7 @@ describe("makerHoldings", () => {
     ] as const) {
       const { reader, asked } = chain({ [CASHCAT]: cashCat(broken as Token) });
       await expect(makerHoldings(reader, CASHCAT, wallets, nothingKept(), NOW)).rejects.toStrictEqual(NOT_TOKEN);
-      expect(asked).toEqual(["aggregate3", "code"]);
+      expect(asked).toEqual(["newest", "aggregate3", "code"]);
     }
     const { reader } = chain({ [CASHCAT]: cashCat({ decimals: 255 }) });
     expect((await makerHoldings(reader, CASHCAT, ONE, nothingKept(), NOW)).token.decimals).toBe(255);
@@ -487,7 +546,7 @@ describe("makerHoldings", () => {
       failing.contract = failure;
       await expect(makerHoldings(reader, CASHCAT, ONE, nothingKept(), NOW)).rejects.toBe(failure);
     }
-    expect(asked).toEqual(["aggregate3", "aggregate3", "aggregate3", "aggregate3"]);
+    expect(asked).toEqual(Array.from({ length: 4 }, () => ["newest", "aggregate3"]).flat());
   });
 
   it("leaves out a name or symbol it cannot read, and the share of a token with no supply", async () => {
@@ -495,7 +554,7 @@ describe("makerHoldings", () => {
     const { reader } = chain({ [CASHCAT]: { decimals: 18, supply: 0n, name: { raw: stringToHex("Maker", { size: 32 }) }, approvals: [] } });
     const board = await makerHoldings(reader, CASHCAT, ONE, nothingKept(), NOW);
     expect(board.token).toEqual({ contract: CASHCAT, decimals: 18, totalSupply: "0" });
-    expect(board.wallets).toEqual([{ name: "Wintermute", tag: "Market Maker: 0x51c7...2a7f", wallet: WINTERMUTE, balance: "0" }]);
+    expect(board.wallets).toEqual([{ name: "Wintermute", tag: "Market Maker: 0x51c7...2a7f", wallet: WINTERMUTE, balance: "0", block: Number(NEWEST), readAt: "2026-11-16T14:40:50.000Z", currentOnly: true }]);
   });
 
   it("leaves out the share of a balance above the supply", async () => {
@@ -520,6 +579,174 @@ describe("makerHoldings", () => {
     expect([token.totalSupply, wallets[0]!.balance, wallets[0]!.shareOfSupplyPct]).toEqual(["3", "1", "33.3333"]);
     const twoThirds = chain({ [CASHCAT]: { decimals: 6, supply: 3_000_000n, balances: { [WINTERMUTE]: 2_000_000n }, approvals: [] } });
     expect((await makerHoldings(twoThirds.reader, CASHCAT, ONE, nothingKept(), NOW)).wallets[0]!.shareOfSupplyPct).toBe("66.6667");
+  });
+});
+
+describe("makerHoldings at a past block", () => {
+  const LAUNCHER = getAddress("0xd9ec2db5f3d1b236843925949fe5bd8a3836fccb");
+  const POOL = getAddress("0x0c37a24f5d23a486fa692d1500881d698b1f77a4");
+  // Bought at launch, sold some in the summer, bought a little back this week: 100 - 30 + 5.
+  const HISTORY: Moved[] = [
+    { block: 5_000_000n, from: LAUNCHER, to: WINTERMUTE, value: 100n * 10n ** 18n },
+    { block: 50_000_000n, from: WINTERMUTE, to: POOL, value: 30n * 10n ** 18n },
+    { block: 115_000_000n, from: POOL, to: WINTERMUTE, value: 5n * 10n ** 18n },
+    { block: 60_000_000n, from: POOL, to: OTHER, value: 7n * 10n ** 18n },
+  ];
+  const traded = (more: Token = {}) => cashCat({ balances: { [WINTERMUTE]: 75n * 10n ** 18n, [OTHER]: 7n * 10n ** 18n }, approvals: [], transfers: HISTORY, ...more });
+  /** Blocks one second apart for the chain's first million, then ten a second, after a genesis at zero as Robinhood Chain's is. */
+  const clock = (block: bigint) => (block === 0n ? 0 : block <= 1_000_000n ? 1_777_567_930 + Number(block) : 1_778_567_930 + Math.floor(Number(block - 1_000_000n) / 10));
+
+  it("adds up each wallet's transfers to the block asked for, and checks the same sum at the newest block", async () => {
+    const { reader } = chain({ [CASHCAT]: traded() }, { clock });
+    expect(await makerHoldings(reader, CASHCAT, [...ONE, { wallet: OTHER }], nothingKept(), NOW, { block: 60_000_000n })).toEqual({
+      chain: "Robinhood Chain",
+      token: { contract: CASHCAT, name: "Cash Cat", symbol: "CASHCAT", decimals: 18, totalSupply: "1000000000" },
+      readAt: "2026-11-16T14:40:50.000Z",
+      asOf: { block: 60_000_000, at: new Date(clock(60_000_000n) * 1000).toISOString() },
+      transfersCheck: { block: Number(NEWEST), passed: true },
+      wallets: [
+        { name: "Wintermute", tag: "Market Maker: 0x51c7...2a7f", wallet: WINTERMUTE, balance: "70", block: 60_000_000, readAt: "2026-11-16T14:40:50.000Z" },
+        { wallet: OTHER, balance: "7", block: 60_000_000, readAt: "2026-11-16T14:40:50.000Z" },
+      ],
+    });
+  });
+
+  it("counts a transfer in the block asked for, and none after it", async () => {
+    const { reader } = chain({ [CASHCAT]: traded() }, { clock });
+    const at = async (block: bigint) => (await makerHoldings(reader, CASHCAT, ONE, nothingKept(), NOW, { block })).wallets[0]!.balance;
+    expect([await at(4_999_999n), await at(5_000_000n), await at(49_999_999n), await at(50_000_000n), await at(NEWEST)]).toEqual(["0", "100", "100", "70", "75"]);
+  });
+
+  it("gives no past balance for a token whose balances do not follow its transfers, and says which wallet differs", async () => {
+    // A token that rebases: the wallet holds 80 by the token's own count, though its transfers come to 75.
+    const { reader } = chain({ [CASHCAT]: traded({ balances: { [WINTERMUTE]: 80n * 10n ** 18n, [OTHER]: 7n * 10n ** 18n } }) }, { clock });
+    const board = await makerHoldings(reader, CASHCAT, [{ wallet: OTHER }, ...ONE], nothingKept(), NOW, { block: 60_000_000n });
+    expect(board.transfersCheck).toEqual({ block: Number(NEWEST), passed: false, wallet: WINTERMUTE, transfers: "75", balanceOf: "80" });
+    expect(board.wallets.map((entry) => "balance" in entry)).toEqual([false, false]);
+    expect(board.wallets[1]).toEqual({ name: "Wintermute", tag: "Market Maker: 0x51c7...2a7f", wallet: WINTERMUTE, block: 60_000_000, readAt: "2026-11-16T14:40:50.000Z" });
+  });
+
+  it("fails the check for a wallet whose transfers would leave it holding less than nothing", async () => {
+    const { reader } = chain({ [CASHCAT]: traded({ transfers: [...HISTORY, { block: 10_000_000n, from: WINTERMUTE, to: POOL, value: 500n * 10n ** 18n }, { block: 70_000_000n, from: POOL, to: WINTERMUTE, value: 500n * 10n ** 18n }] }) }, { clock });
+    expect((await makerHoldings(reader, CASHCAT, ONE, nothingKept(), NOW, { block: 60_000_000n })).transfersCheck).toMatchObject({ passed: false, transfers: "75", balanceOf: "75" });
+  });
+
+  it("keeps the first approval as it is, whenever it was made", async () => {
+    const { reader } = chain({ [CASHCAT]: traded({ approvals: cashCat().approvals }) }, { clock });
+    const [wintermute] = (await makerHoldings(reader, CASHCAT, ONE, nothingKept(), NOW, { block: 5_000_000n })).wallets;
+    expect(wintermute).toMatchObject({ balance: "100", block: 5_000_000, firstApproval: { block: Number(FIRST.block), transaction: FIRST.transaction } });
+    expect(wintermute).not.toHaveProperty("shareOfSupplyPct");
+    expect(wintermute).not.toHaveProperty("currentOnly");
+  });
+
+  it("reads each wallet from the stretch where the token's transfers begin, in two parts around the block asked for", async () => {
+    const late = HISTORY.map((log) => ({ ...log, block: log.block + 100_000_000n })).filter((log) => log.block <= NEWEST);
+    const { reader, transfersAsked } = chain({ [CASHCAT]: traded({ transfers: late, balances: { [WINTERMUTE]: 100n * 10n ** 18n } }) }, { clock });
+    await makerHoldings(reader, CASHCAT, ONE, nothingKept(), NOW, { block: 112_000_000n });
+    expect(transfersAsked()).toEqual([
+      ...Array.from({ length: 11 }, (_, i) => `transfers any ${BigInt(i) * STRETCH_BLOCKS}-${BigInt(i + 1) * STRETCH_BLOCKS - 1n}`),
+      "transfers to 100000000-109999999",
+      "transfers from 100000000-109999999",
+      "transfers to 110000000-112000000",
+      "transfers from 110000000-112000000",
+      `transfers to 112000001-${NEWEST}`,
+      `transfers from 112000001-${NEWEST}`,
+    ]);
+  });
+
+  it("reads nothing for a wallet of a token that has never moved", async () => {
+    const { reader, transfersAsked } = chain({ [CASHCAT]: traded({ transfers: [], balances: {} }) }, { clock });
+    const board = await makerHoldings(reader, CASHCAT, MARKET_MAKERS, nothingKept(), NOW, { block: 60_000_000n });
+    expect(board.transfersCheck).toEqual({ block: Number(NEWEST), passed: true });
+    expect(board.wallets.map(({ balance }) => balance)).toEqual(["0", "0", "0", "0", "0"]);
+    expect(transfersAsked().every((entry) => entry.startsWith("transfers any "))).toBe(true);
+  });
+
+  it("keeps what has settled, so asking again reads only the newest part", async () => {
+    const kept = nothingKept();
+    const { reader, transfersAsked } = chain({ [CASHCAT]: traded() }, { clock });
+    const first = await makerHoldings(reader, CASHCAT, ONE, kept, NOW, { block: 60_000_000n });
+    const before = transfersAsked().length;
+    expect(await makerHoldings(reader, CASHCAT, ONE, kept, NOW, { block: 60_000_000n })).toEqual(first);
+    expect(transfersAsked().slice(before)).toEqual([`transfers to 110000000-${NEWEST}`, `transfers from 110000000-${NEWEST}`]);
+    // Another block reuses each stretch read whole, and reads the one it falls in and the one read in parts before.
+    const third = transfersAsked().length;
+    expect((await makerHoldings(reader, CASHCAT, ONE, kept, NOW, { block: 55_000_000n })).wallets[0]!.balance).toBe("70");
+    expect(transfersAsked().slice(third)).toEqual([
+      "transfers to 50000000-55000000",
+      "transfers from 50000000-55000000",
+      "transfers to 55000001-59999999",
+      "transfers from 55000001-59999999",
+      "transfers to 60000000-69999999",
+      "transfers from 60000000-69999999",
+      `transfers to 110000000-${NEWEST}`,
+      `transfers from 110000000-${NEWEST}`,
+    ]);
+  });
+
+  it("halves a range with more transfers than the endpoint returns, keeps the halves, and still adds them all up", async () => {
+    const many: Moved[] = Array.from({ length: 30 }, (_, i) => ({ block: 20_000_000n + BigInt(i) * 100_000n, from: LAUNCHER, to: WINTERMUTE, value: 10n ** 18n }));
+    const { reader, transfersAsked } = chain({ [CASHCAT]: traded({ transfers: many, balances: { [WINTERMUTE]: 30n * 10n ** 18n } }) }, { clock, most: 8 });
+    const kept = nothingKept();
+    const board = await makerHoldings(reader, CASHCAT, ONE, kept, NOW, { block: 21_000_000n });
+    expect(board.wallets[0]!.balance).toBe("11");
+    expect(board.transfersCheck!.passed).toBe(true);
+    expect(transfersAsked().filter((entry) => entry.startsWith("transfers to 20000000-"))).toEqual(["transfers to 20000000-21000000", "transfers to 20000000-20500000"]);
+    const before = transfersAsked().length;
+    await makerHoldings(reader, CASHCAT, ONE, kept, NOW, { block: 21_000_000n });
+    expect(transfersAsked().slice(before)).toEqual([`transfers to 110000000-${NEWEST}`, `transfers from 110000000-${NEWEST}`]);
+  });
+
+  it("says so when one block holds more transfers than the endpoint returns", async () => {
+    const crowd: Moved[] = Array.from({ length: 3 }, () => ({ block: 7n, from: LAUNCHER, to: WINTERMUTE, value: 1n }));
+    const { reader } = chain({ [CASHCAT]: traded({ transfers: crowd }) }, { clock, newest: 7n, most: 2 });
+    await expect(makerHoldings(reader, CASHCAT, ONE, nothingKept(), NOW, { block: 7n })).rejects.toStrictEqual(
+      new ChainError(`The contract at ${CASHCAT} logged more than 10,000 transfers to ${WINTERMUTE} in a single block, more than this tool can read, so it cannot give a past balance for this token. Trying again will not change that.`),
+    );
+  });
+
+  it("refuses a block the chain has not made yet, before it reads a transfer", async () => {
+    const { reader, transfersAsked } = chain({ [CASHCAT]: traded() }, { clock });
+    await expect(makerHoldings(reader, CASHCAT, ONE, nothingKept(), NOW, { block: NEWEST + 1n })).rejects.toStrictEqual(new ChainError(`Block ${NEWEST + 1n} is not on Robinhood Chain yet: the newest block is ${NEWEST}.`));
+    expect(transfersAsked()).toEqual([]);
+  });
+
+  it("takes a time for the last block made at or before it, in a few reads, however unevenly blocks came", async () => {
+    for (const [time, block] of [
+      // Each second from the millionth block on holds ten blocks, so a time on the second is that second's last block.
+      [new Date(clock(60_000_000n) * 1000), 60_000_009n],
+      [new Date(clock(60_000_000n) * 1000 + 999), 60_000_009n],
+      [new Date(clock(60_000_000n) * 1000 - 1), 59_999_999n],
+      [new Date(clock(500_000n) * 1000), 500_000n],
+      [new Date(clock(1n) * 1000 - 1), 0n],
+      [new Date(clock(NEWEST) * 1000 + 86_400_000), NEWEST],
+    ] as const) {
+      const kept = nothingKept();
+      const { reader, asked } = chain({ [CASHCAT]: traded({ transfers: [] }) }, { clock });
+      const board = await makerHoldings(reader, CASHCAT, ONE, kept, NOW, { time: time.getTime() });
+      expect(board.asOf, time.toISOString()).toEqual({ block: Number(block), at: new Date(clock(block) * 1000).toISOString() });
+      expect(asked.filter((entry) => entry.startsWith("block ")).length).toBeLessThan(60);
+    }
+  });
+
+  it("keeps the times of settled blocks, so the same time is found again without a read", async () => {
+    const kept = nothingKept();
+    const { reader, asked } = chain({ [CASHCAT]: traded({ transfers: [] }) }, { clock });
+    const time = clock(60_000_000n) * 1000;
+    await makerHoldings(reader, CASHCAT, ONE, kept, NOW, { time });
+    const before = asked.filter((entry) => entry.startsWith("block ")).length;
+    await makerHoldings(reader, CASHCAT, ONE, kept, NOW, { time });
+    // Only the newest block's time is read again: it has not settled.
+    expect(asked.filter((entry) => entry.startsWith("block ")).length - before).toBe(1);
+  });
+
+  it("does not keep a range whose read failed, and passes the failure on as it is", async () => {
+    const kept = nothingKept();
+    const { reader, failing } = chain({ [CASHCAT]: traded() }, { clock });
+    failing.logs = Object.assign(new Error("HTTP request failed."), { status: 429 });
+    await expect(makerHoldings(reader, CASHCAT, ONE, kept, NOW, { block: 60_000_000n })).rejects.toBe(failing.logs);
+    await Promise.resolve();
+    expect(kept.transfers.size).toBe(0);
   });
 });
 
@@ -555,12 +782,14 @@ describe("paced", () => {
 });
 
 const APPROVAL_TOPIC = toEventSelector("Approval(address,address,uint256)");
+const TRANSFER_TOPIC = toEventSelector("Transfer(address,address,uint256)");
 const word = (address: Address) => pad(address.toLowerCase() as Hex);
 
 /** The endpoint as it answers over HTTP: one JSON-RPC call for each request, logs with a block time of zero, and its own refusals. */
 function endpoint(tokens: Record<Address, Token>, { newest = 41n, most = 10_000, refuseFirst = 0 } = {}) {
   const requests: { method: string; about: string; at: number }[] = [];
   const topics: (string | null)[][] = [];
+  const transfers: (string | null)[][] = [];
   let open = 0;
   let mostOpen = 0;
   let refusals = refuseFirst;
@@ -582,7 +811,13 @@ function endpoint(tokens: Record<Address, Token>, { newest = 41n, most = 10_000,
       const calls = decodeFunctionData({ abi: multicall3Abi, data: first.data as Hex }).args![0] as { target: Address; callData: Hex }[];
       return answer(encodeFunctionResult({ abi: multicall3Abi, functionName: "aggregate3", result: calls.map(({ target, callData }) => answerOf(tokens[getAddress(target)], callData)) }));
     }
-    // Another tool's log read: this endpoint has no mints and no pools.
+    // Two other wallets traded the token once, so its transfers begin in the first stretch.
+    if (method === "eth_getLogs" && first.topics![0] === TRANSFER_TOPIC) {
+      transfers.push(first.topics!);
+      const once = { address: first.address, topics: [TRANSFER_TOPIC, word(DEPLOYER), word(OPERATOR)], data: pad(numberToHex(1n)), blockNumber: "0x3", blockHash: hash("b0"), transactionHash: hash("70"), transactionIndex: "0x0", logIndex: "0x0", removed: false };
+      return answer(first.topics!.length === 1 ? [once] : []);
+    }
+    // Another tool's log read: this endpoint has no pools.
     if (method === "eth_getLogs" && first.topics![0] !== APPROVAL_TOPIC) return answer([]);
     if (method === "eth_getLogs") {
       if (!any) topics.push(first.topics!);
@@ -607,7 +842,7 @@ function endpoint(tokens: Record<Address, Token>, { newest = 41n, most = 10_000,
     if (method === "eth_getTransactionByHash") return answer({ hash: first, from: OPERATOR, to: SAFE, blockNumber: "0x7", input: "0x6a761202", value: "0x0", nonce: "0x1", gas: "0x0", type: "0x2" });
     throw new Error(method);
   }) as typeof fetch;
-  return { fetchImpl, requests, topics, methods: () => requests.map(({ method }) => method), mostOpen: () => mostOpen };
+  return { fetchImpl, requests, topics, transfers, methods: () => requests.map(({ method }) => method), mostOpen: () => mostOpen };
 }
 
 /** Runs the clock until `work` is done: the reader waits between requests and before asking again. */
@@ -631,7 +866,26 @@ describe("chainHistory", () => {
       expect(topics).toEqual([[APPROVAL_TOPIC, word(WINTERMUTE), null]]);
       expect(board.token).toEqual({ contract: CASHCAT, name: "Cash Cat", symbol: "CASHCAT", decimals: 18, totalSupply: "1000000000" });
       expect(board.wallets[0]!.firstApproval).toEqual({ at: FIRST.at, block: 9, transaction: FIRST.transaction, spender: SPENDER, confirmed: true });
-      expect(methods()).toEqual(["eth_call", "eth_blockNumber", "eth_getLogs", "eth_getLogs", "eth_getBlockByNumber", "eth_getTransactionByHash"]);
+      expect(methods()).toEqual(["eth_blockNumber", "eth_call", "eth_getLogs", "eth_getLogs", "eth_getBlockByNumber", "eth_getTransactionByHash"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks for what a wallet was sent and what it sent out by the Transfer log's own topics, and reads balances at the newest block", async () => {
+    vi.useFakeTimers();
+    try {
+      const { fetchImpl, transfers, requests } = endpoint({ [CASHCAT]: cashCat({ balances: {}, approvals: [] }) });
+      const sent: unknown[] = [];
+      const recording = (async (url: unknown, init?: RequestInit) => {
+        sent.push(JSON.parse(String(init?.body)));
+        return fetchImpl(url as string, init);
+      }) as typeof fetch;
+      const board = await settled(makerHoldings(chainHistory("https://rpc.example", recording), CASHCAT, ONE, nothingKept(), NOW, { block: 20n }));
+      expect(board).toMatchObject({ asOf: { block: 20 }, transfersCheck: { block: 41, passed: true }, wallets: [{ wallet: WINTERMUTE, balance: "0", block: 20 }] });
+      expect(transfers).toEqual([[TRANSFER_TOPIC], [TRANSFER_TOPIC, null, word(WINTERMUTE)], [TRANSFER_TOPIC, word(WINTERMUTE), null], [TRANSFER_TOPIC, null, word(WINTERMUTE)], [TRANSFER_TOPIC, word(WINTERMUTE), null]]);
+      expect(sent.find((body) => (body as { method: string }).method === "eth_call")).toMatchObject({ params: [expect.anything(), "0x29"] });
+      expect(requests.filter(({ method }) => method === "eth_getLogs").map(({ about }) => about.split(" ").at(-1))).toEqual(["0-41", "0-41", "0-20", "0-20", "21-41", "21-41"]);
     } finally {
       vi.useRealTimers();
     }

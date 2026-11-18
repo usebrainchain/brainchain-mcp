@@ -1,7 +1,25 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { formatUnits, isAddressEqual, parseAbiItem, type Address } from "viem";
 
-import { blockTime, ChainError, earliestLog, firstSince, inTurn, noContract, tokenFacts, tooMany, tooSlow, type ChainHistory, type Dated, type Kept } from "./history.js";
+import {
+  blockOf,
+  blockTime,
+  ChainError,
+  earliestLog,
+  firstSince,
+  inTurn,
+  noContract,
+  STRETCH_BLOCKS,
+  tokenFacts,
+  tooMany,
+  tooSlow,
+  transferred,
+  transfersStart,
+  type ChainHistory,
+  type Dated,
+  type Kept,
+  type Moment,
+} from "./history.js";
 
 export const MAKERS_NAME = "brainchain_market_maker_holdings";
 
@@ -10,6 +28,8 @@ export interface MakerWallet {
   name?: string;
   /** The public name tag that says so, as Etherscan shows it for the address on Ethereum. */
   tag?: string;
+  /** Set for a wallet the operator added with BRAINCHAIN_MAKER_WALLETS, whose owner nobody here has checked. */
+  source?: "configured";
   wallet: Address;
   /** A Safe that acts for the wallet, so a transaction sent to it can be the wallet's own. */
   safe?: Address;
@@ -58,8 +78,16 @@ export const MAKERS_TOOL: Tool = {
     "For a token whose origin you do not know, a `balance` therefore proves little, and a `firstApproval` counts only when its `confirmed` is true. " +
     "A wallet with a zero `balance` and no `firstApproval` holds none of the token now and has never approved it. A market maker also trades from other wallets, so that does not mean the firm holds none. " +
     "`readAt` is when the chain was read. " +
+    "Without `atBlock` or `at`, each `balance` is what the wallet holds at `block`, the newest block when the chain was read, and the entry is marked `currentOnly`: it shows nothing of what could be seen earlier, so leave it out of a backtest. " +
+    "To read the balances at a past block, pass its number as `atBlock`, or pass `at`, a time in ISO 8601 such as 2026-11-01T00:00:00Z, for the last block made at or before it. " +
+    "Robinhood Chain's public endpoint keeps no state that old, so the tool adds up the token's Transfer logs to and from each wallet up to that block. " +
+    "It checks the method at the newest block, where the same sum must equal what the token's own `balanceOf` says. " +
+    "`asOf` then gives the `block` asked for and when it was made (`at`), and `transfersCheck` gives the `block` checked and whether the check `passed`. " +
+    "If it did not, the token's balances do not follow its transfers, as with a token that rebases or takes a fee on each transfer, and no past `balance` is given: `transfersCheck` names the first `wallet` that differs, what its `transfers` add up to and what `balanceOf` says. " +
+    "A past entry has no `shareOfSupplyPct`, since the supply at that block is not read, and `token` is read at the newest block. `firstApproval` is the first approval whenever it was made, so compare its `block` with the one asked for. " +
     "The tool answers one request at a time, so requests sent together are answered in turn. " +
     "The first answer for a token can take half a minute, because the tool reads the token's whole history for each wallet; later ones are faster for as long as the server keeps running. " +
+    "At a past block it also reads every transfer of the token to and from each wallet, which can take several tries for a wallet that trades the token often. " +
     "An answer that is not ready after 45 seconds says so, and asking again goes on from where it stopped. " +
     "Free, no key and no payment. Not advice.",
   annotations: { readOnlyHint: true, openWorldHint: true },
@@ -68,6 +96,8 @@ export const MAKERS_TOOL: Tool = {
     properties: {
       token: { type: "string", description: "The token's contract address on Robinhood Chain: 0x followed by 40 hex characters." },
       wallet: { type: "string", description: "Optional: the address of another wallet or contract to read instead of the wallets the tool follows." },
+      atBlock: { type: "integer", minimum: 0, description: "Optional: a block number. The balances are those at the end of that block, added up from the token's transfers." },
+      at: { type: "string", description: "Optional, in place of atBlock: a time in ISO 8601, such as 2026-11-01T00:00:00Z. The balances are those at the last block made at or before it." },
     },
     required: ["token"],
     additionalProperties: false,
@@ -84,23 +114,47 @@ export interface MakerHolding {
   name?: string;
   tag?: string;
   wallet: Address;
-  balance: string;
-  /** Left out for a token with no supply, and for a balance above the supply, which only a broken token reports. */
+  /** Left out at a past block when the token's balances do not follow its transfers. */
+  balance?: string;
+  /** The block the balance is at, and when it was read. */
+  block: number;
+  readAt: string;
+  /** A balance read now, which a backtest must not take for one that could be seen at an earlier block. */
+  currentOnly?: true;
+  /** Left out for a token with no supply, for a balance above the supply, which only a broken token reports, and for a past balance. */
   shareOfSupplyPct?: string;
   firstApproval?: Approval;
+}
+
+/** Whether each wallet's transfers, added up to the newest block, come to what the token says it holds there. */
+export interface TransfersCheck {
+  block: number;
+  passed: boolean;
+  /** For a check that did not pass, the first wallet that differs and both figures, counted in tokens. */
+  wallet?: Address;
+  transfers?: string;
+  balanceOf?: string;
 }
 
 export interface MakerBoard {
   chain: "Robinhood Chain";
   token: { contract: Address; name?: string; symbol?: string; decimals: number; totalSupply: string };
   readAt: string;
+  /** For balances at a past block: the block and when it was made. */
+  asOf?: { block: number; at: string };
+  transfersCheck?: TransfersCheck;
   wallets: MakerHolding[];
 }
 
-/** What was found in the stretches already read: each wallet's first approval of a token, and where each token's approvals begin. */
+/**
+ * What was found in the stretches already read: each wallet's first approval of a token, where each token's approvals
+ * and transfers begin, what each wallet was sent and sent out in a range of blocks, and when blocks were made.
+ */
 export interface MakerKept {
   approvals: Kept<Approval>;
   starts: Kept<bigint>;
+  transfers: Map<string, Promise<bigint>>;
+  times: Map<string, Promise<bigint>>;
 }
 
 const approvalEvent = parseAbiItem("event Approval(address indexed owner, address indexed spender, uint256 value)");
@@ -148,40 +202,104 @@ function approvalsStart(reader: ChainHistory, token: Address, newest: bigint, ke
 }
 
 /**
- * What each wallet holds of `token` now, and the first time it approved the token, found in the token's logs a stretch
- * at a time (see `firstSince`).
+ * What `holder` held of `token` at `block` and at `newest`, as its Transfer logs add up, read a stretch at a time from
+ * `start`. The stretch that holds `block` is read in two parts, so every whole stretch is the same range from one block
+ * asked for to the next, and is kept once it has settled.
  */
-export async function makerHoldings(reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], kept: MakerKept, now = new Date()): Promise<MakerBoard> {
+async function rebuilt(reader: ChainHistory, token: Address, holder: Address, start: bigint, block: bigint, newest: bigint, kept: Map<string, Promise<bigint>>): Promise<{ then: bigint; now: bigint }> {
+  let then = 0n;
+  let now = 0n;
+  for (let from = (start / STRETCH_BLOCKS) * STRETCH_BLOCKS; from <= newest; from += STRETCH_BLOCKS) {
+    const end = from + STRETCH_BLOCKS - 1n < newest ? from + STRETCH_BLOCKS - 1n : newest;
+    const parts: [bigint, bigint][] = from <= block && block < end ? [[from, block], [block + 1n, end]] : [[from, end]];
+    for (const [low, high] of parts) {
+      const net = (await transferred(reader, token, holder, "to", low, high, newest, kept)) - (await transferred(reader, token, holder, "from", low, high, newest, kept));
+      now += net;
+      if (high <= block) then += net;
+    }
+  }
+  return { then, now };
+}
+
+/** Each wallet's first approval of `token`, in the order the wallets were given, found in the token's logs a stretch at a time (see `firstSince`). */
+export async function firstApprovals(reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], kept: Pick<MakerKept, "approvals" | "starts">, newest: bigint): Promise<(Approval | undefined)[]> {
+  const start = await approvalsStart(reader, token, newest, kept.starts);
+  const first: (Approval | undefined)[] = [];
+  for (const maker of wallets) first.push(start === undefined ? undefined : await firstSince(kept.approvals, `${token}:${maker.wallet}`, newest, (from, to) => firstApproval(reader, token, maker, from, to), start));
+  return first;
+}
+
+/**
+ * What each wallet holds of `token` at the newest block, and the first time it approved the token. Given `moment`, the
+ * balances are those at a past block instead, added up from the token's Transfer logs, since the endpoint keeps no state
+ * that old. The same sum up to the newest block must come to each wallet's balance there, or the token's balances do not
+ * follow its transfers and no past balance is given.
+ */
+export async function makerHoldings(reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], kept: MakerKept, now = new Date(), moment?: Moment): Promise<MakerBoard> {
+  const newest = await reader.getBlockNumber();
   const facts = await tokenFacts(
     reader,
     token,
     wallets.map(({ wallet }) => wallet),
+    newest,
   );
   if (!facts) throw noContract(token);
   const { decimals, supply, name, symbol, balances } = facts;
-  const newest = await reader.getBlockNumber();
-  const start = await approvalsStart(reader, token, newest, kept.starts);
-  const first: (Approval | undefined)[] = [];
-  for (const maker of wallets) first.push(start === undefined ? undefined : await firstSince(kept.approvals, `${token}:${maker.wallet}`, newest, (from, to) => firstApproval(reader, token, maker, from, to), start));
-  return {
-    chain: "Robinhood Chain",
+  const first = await firstApprovals(reader, token, wallets, kept, newest);
+  const readAt = now.toISOString();
+  const who = ({ name: owner, tag, source, wallet }: MakerWallet) => ({ ...(owner ? { name: owner } : {}), ...(tag ? { tag } : {}), ...(source ? { source } : {}), wallet });
+  const approved = (i: number) => (first[i] ? { firstApproval: first[i] } : {});
+  const board = {
+    chain: "Robinhood Chain" as const,
     token: { contract: token, ...(name ? { name } : {}), ...(symbol ? { symbol } : {}), decimals, totalSupply: formatUnits(supply, decimals) },
-    readAt: now.toISOString(),
-    wallets: wallets.map(({ name: owner, tag, wallet }, i) => ({
-      ...(owner ? { name: owner } : {}),
-      ...(tag ? { tag } : {}),
-      wallet,
-      balance: formatUnits(balances[i]!, decimals),
-      ...(supply > 0n && balances[i]! <= supply ? { shareOfSupplyPct: percent(balances[i]!, supply) } : {}),
-      ...(first[i] ? { firstApproval: first[i] } : {}),
+    readAt,
+  };
+  if (!moment) {
+    return {
+      ...board,
+      wallets: wallets.map((maker, i) => ({
+        ...who(maker),
+        balance: formatUnits(balances[i]!, decimals),
+        block: Number(newest),
+        readAt,
+        currentOnly: true as const,
+        ...(supply > 0n && balances[i]! <= supply ? { shareOfSupplyPct: percent(balances[i]!, supply) } : {}),
+        ...approved(i),
+      })),
+    };
+  }
+
+  const asOf = await blockOf(reader, moment, newest, kept.times);
+  const start = await transfersStart(reader, token, newest, kept.starts);
+  const sums: { then: bigint; now: bigint }[] = [];
+  for (const { wallet } of wallets) sums.push(start === undefined ? { then: 0n, now: 0n } : await rebuilt(reader, token, wallet, start, asOf.block, newest, kept.transfers));
+  // A negative balance is no balance at all, whatever the newest block says.
+  const differs = sums.findIndex(({ then, now: summed }, i) => summed !== balances[i] || then < 0n);
+  const transfersCheck: TransfersCheck =
+    differs < 0
+      ? { block: Number(newest), passed: true }
+      : { block: Number(newest), passed: false, wallet: wallets[differs]!.wallet, transfers: formatUnits(sums[differs]!.now, decimals), balanceOf: formatUnits(balances[differs]!, decimals) };
+  return {
+    ...board,
+    asOf: { block: Number(asOf.block), at: asOf.at },
+    transfersCheck,
+    wallets: wallets.map((maker, i) => ({
+      ...who(maker),
+      ...(transfersCheck.passed ? { balance: formatUnits(sums[i]!.then, decimals) } : {}),
+      block: Number(asOf.block),
+      readAt,
+      ...approved(i),
     })),
   };
 }
 
-const kept: MakerKept = { approvals: new Map(), starts: new Map() };
+const kept: MakerKept = { approvals: new Map(), starts: new Map(), transfers: new Map(), times: new Map() };
 
 /** A caller who names a wallet the tool follows gets that wallet's entry, Safe included: the same address must not answer two ways. */
-export function readMakerHoldings(token: Address, wallet?: Address): Promise<MakerBoard> {
-  const wallets = wallet ? [MARKET_MAKERS.find((maker) => isAddressEqual(maker.wallet, wallet)) ?? { wallet }] : MARKET_MAKERS;
-  return inTurn((reader) => makerHoldings(reader, token, wallets, kept));
+export function readMakerHoldings(token: Address, wallet?: Address, moment?: Moment, followed: readonly MakerWallet[] = MARKET_MAKERS): Promise<MakerBoard> {
+  const wallets = wallet ? [followed.find((maker) => isAddressEqual(maker.wallet, wallet)) ?? { wallet }] : followed;
+  return inTurn((reader) => makerHoldings(reader, token, wallets, kept, new Date(), moment));
 }
+
+/** The first approvals `readMakerHoldings` finds, read in a turn another tool already holds, so both share what was read. */
+export const readFirstApprovals = (reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], newest: bigint) => firstApprovals(reader, token, wallets, kept, newest);

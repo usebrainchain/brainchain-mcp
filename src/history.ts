@@ -74,7 +74,7 @@ const notToken = (token: Address) => new ChainError(`The contract at ${token} on
  * holds no contract. Everything the contract answers is read as untrusted data: a read that failed or came back in
  * another form than its type counts as missing.
  */
-export async function tokenFacts(reader: ChainHistory, token: Address, holders: readonly Address[] = []): Promise<TokenFacts | undefined> {
+export async function tokenFacts(reader: ChainHistory, token: Address, holders: readonly Address[] = [], blockNumber?: bigint): Promise<TokenFacts | undefined> {
   const reads: { functionName: TokenRead; args?: [Address] }[] = [
     { functionName: "decimals" },
     { functionName: "totalSupply" },
@@ -89,6 +89,7 @@ export async function tokenFacts(reader: ChainHistory, token: Address, holders: 
       abi: multicall3Abi,
       functionName: "aggregate3",
       args: [reads.map((read) => ({ target: token, allowFailure: true, callData: encodeFunctionData({ abi: tokenAbi, ...read }) }))],
+      ...(blockNumber === undefined ? {} : { blockNumber }),
     })
     .catch((error: unknown) => {
       // A contract that burns all the gas it is given takes the whole call down with it.
@@ -146,16 +147,7 @@ export async function firstSince<T>(kept: Kept<T>, key: string, newest: bigint, 
   function stretch(from: bigint): Promise<T | undefined> {
     const to = from + STRETCH_BLOCKS - 1n;
     if (to + SETTLED_BLOCKS > newest) return find(from, to < newest ? to : newest);
-    const name = `${key}:${from}`;
-    const earlier = kept.get(name);
-    if (earlier) return earlier;
-    if (kept.size >= MAX_KEPT) kept.clear();
-    const reading = find(from, to);
-    kept.set(name, reading);
-    reading.catch(() => {
-      if (kept.get(name) === reading) kept.delete(name);
-    });
-    return reading;
+    return remember(kept, `${key}:${from}`, () => find(from, to));
   }
   for (let from = (start / STRETCH_BLOCKS) * STRETCH_BLOCKS; from <= newest; from += STRETCH_BLOCKS) {
     const found = await stretch(from);
@@ -164,10 +156,61 @@ export async function firstSince<T>(kept: Kept<T>, key: string, newest: bigint, 
   return undefined;
 }
 
+/** What `read` finds, kept under `name`. A read that fails is dropped, so the next answer asks again. */
+function remember<T>(kept: Map<string, Promise<T>>, name: string, read: () => Promise<T>): Promise<T> {
+  const earlier = kept.get(name);
+  if (earlier) return earlier;
+  if (kept.size >= MAX_KEPT) kept.clear();
+  const reading = read();
+  kept.set(name, reading);
+  reading.catch(() => {
+    if (kept.get(name) === reading) kept.delete(name);
+  });
+  return reading;
+}
+
 /** When a block was made. The endpoint sends every log with a block time of zero, so the time comes from the block. */
 export async function blockTime(reader: ChainHistory, blockNumber: bigint): Promise<string> {
   const block = await reader.getBlock({ blockNumber });
   return new Date(Number(block.timestamp) * 1000).toISOString();
+}
+
+/** A point in the chain's past: a block, or a time in milliseconds, which stands for the last block made by then. */
+export type Moment = { block: bigint } | { time: number };
+
+/** As `noContract`: what a tool that reads the past says of a block the chain has not made. */
+const notYet = (block: bigint, newest: bigint) => new ChainError(`Block ${block} is not on Robinhood Chain yet: the newest block is ${newest}.`);
+
+/**
+ * The block `moment` stands for and when it was made. For a time that is the last block made at or before it. Blocks
+ * come at an uneven pace, a hundred in the chain's first week and about ten a second now, so a guess from the times on
+ * either side alternates with a halving: that keeps the search within twice the halvings alone, about 55 reads, and
+ * usually ends it in a dozen. The times of settled blocks are kept in `kept`, since a search for a nearby time asks for
+ * the same blocks.
+ */
+export async function blockOf(reader: ChainHistory, moment: Moment, newest: bigint, kept: Map<string, Promise<bigint>>): Promise<{ block: bigint; at: string }> {
+  const stamp = (block: bigint) => {
+    const read = () => reader.getBlock({ blockNumber: block }).then(({ timestamp }) => timestamp);
+    return block + SETTLED_BLOCKS > newest ? read() : remember(kept, String(block), read);
+  };
+  const dated = (block: bigint, seconds: bigint) => ({ block, at: new Date(Number(seconds) * 1000).toISOString() });
+  if ("block" in moment) {
+    if (moment.block > newest) throw notYet(moment.block, newest);
+    return dated(moment.block, await stamp(moment.block));
+  }
+  const wanted = BigInt(Math.floor(moment.time / 1000));
+  let [low, high] = [0n, newest];
+  let [lowAt, highAt] = [await stamp(low), await stamp(high)];
+  if (highAt <= wanted) return dated(high, highAt);
+  if (lowAt > wanted) throw new ChainError(`${new Date(moment.time).toISOString()} is before Robinhood Chain's first block.`);
+  for (let halve = false; high - low > 1n; halve = !halve) {
+    const guess = halve ? (low + high) / 2n : low + ((wanted - lowAt) * (high - low)) / (highAt - lowAt);
+    const probe = guess <= low ? low + 1n : guess >= high ? high - 1n : guess;
+    const at = await stamp(probe);
+    if (at <= wanted) [low, lowAt] = [probe, at];
+    else [high, highAt] = [probe, at];
+  }
+  return dated(low, lowAt);
 }
 
 /** Something that happened in a block: when, in which block, and the transaction it was part of. */
@@ -195,6 +238,40 @@ export function firstMint(reader: ChainHistory, token: Address, newest: bigint, 
     );
     return log && { at: await blockTime(reader, log.blockNumber), block: Number(log.blockNumber), transaction: log.transactionHash, to: log.args.to };
   });
+}
+
+/**
+ * How much of `token` the token's Transfer logs say `holder` was sent (`side` "to") or sent out (`side` "from") from one
+ * block to another. A range with more logs than the endpoint returns, or one it takes too long to search, is halved. A
+ * range that has settled is kept, halves included, so an answer that ran out of time goes on from where it stopped.
+ */
+export function transferred(reader: ChainHistory, token: Address, holder: Address, side: "from" | "to", from: bigint, to: bigint, newest: bigint, kept: Map<string, Promise<bigint>>): Promise<bigint> {
+  const read = async (): Promise<bigint> => {
+    const logs = await reader.getLogs({ address: token, event: transferEvent, args: side === "to" ? { to: holder } : { from: holder }, fromBlock: from, toBlock: to, strict: true }).catch((error: unknown) => {
+      if (from < to && (tooMany(error) || tooSlow(error))) return undefined;
+      throw tooMany(error) ? new ChainError(`The contract at ${token} logged more than 10,000 transfers ${side} ${holder} in a single block, more than this tool can read, so it cannot give a past balance for this token. Trying again will not change that.`) : error;
+    });
+    if (logs) return logs.reduce((sum, log) => sum + log.args.value, 0n);
+    const middle = (from + to) / 2n;
+    return (await transferred(reader, token, holder, side, from, middle, newest, kept)) + (await transferred(reader, token, holder, side, middle + 1n, to, newest, kept));
+  };
+  return to + SETTLED_BLOCKS > newest ? read() : remember(kept, `${token}:${holder}:${side}:${from}-${to}`, read);
+}
+
+/**
+ * The start of the first stretch in which `token` logged a transfer: no wallet held any of it before, so a wallet's
+ * transfers are read from there. A stretch too full to return, or too slow to search, has transfers, and counts.
+ */
+export function transfersStart(reader: ChainHistory, token: Address, newest: bigint, kept: Kept<bigint>): Promise<bigint | undefined> {
+  return firstSince(kept, `${token}:transfers`, newest, (from, to) =>
+    reader.getLogs({ address: token, event: transferEvent, fromBlock: from, toBlock: to, strict: true }).then(
+      (logs) => (logs.length > 0 ? from : undefined),
+      (error: unknown) => {
+        if (tooMany(error) || tooSlow(error)) return from;
+        throw error;
+      },
+    ),
+  );
 }
 
 /** `fetchImpl` with one request out at a time and `gap` milliseconds before the next. */

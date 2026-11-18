@@ -499,9 +499,55 @@ describe("market maker holdings", () => {
       [{ token: CASHCAT, wallet: "wintermute" }, shape("wallet")],
       [{ token: CASHCAT, wallet: null }, "wallet must be a string, not null."],
       [{ token: CASHCAT, wallet: WALLET.replace("B97e", "b97E") }, checksum("wallet")],
-      [{ token: CASHCAT, days: 30 }, "Unknown field: days. This tool takes only token, wallet."],
+      [{ token: CASHCAT, days: 30 }, "Unknown field: days. This tool takes only token, wallet, atBlock, at."],
     ] as const) {
       const result = await call(args, read);
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: said });
+    }
+    expect(reads).toBe(0);
+  });
+
+  it("passes on a past block, or a time in ISO 8601, and nothing for a read of the newest block", async () => {
+    const asked: unknown[] = [];
+    const read = async (_token: string, _wallet?: string, moment?: unknown) => (asked.push(moment), board);
+    for (const when of [{}, { atBlock: 0 }, { atBlock: 117_000_000 }, { at: "2026-11-01" }, { at: "2026-11-01T12:30Z" }, { at: " 2026-11-01T12:30:00.25+02:00 " }, { at: "2024-02-29T23:59:59Z" }]) {
+      const result = await call({ token: CASHCAT, ...when }, read);
+      expect(result.isError).toBe(false);
+    }
+    expect(asked).toEqual([
+      undefined,
+      { block: 0n },
+      { block: 117_000_000n },
+      { time: Date.parse("2026-11-01T00:00:00Z") },
+      { time: Date.parse("2026-11-01T12:30:00Z") },
+      { time: Date.parse("2026-11-01T10:30:00.250Z") },
+      { time: Date.parse("2024-02-29T23:59:59Z") },
+    ]);
+  });
+
+  it("refuses a block or a time it cannot read, and both at once, before reading anything", async () => {
+    let reads = 0;
+    const read = async () => (reads++, board);
+    const block = "atBlock must be a block number: a whole number from 0.";
+    const time = "at must be a time in ISO 8601, such as 2026-11-01T00:00:00Z, or a date, such as 2026-11-01.";
+    for (const [when, said] of [
+      [{ atBlock: -1 }, block],
+      [{ atBlock: 1.5 }, block],
+      [{ atBlock: "117000000" }, block],
+      [{ atBlock: null }, block],
+      [{ atBlock: 2 ** 53 }, block],
+      [{ at: "yesterday" }, time],
+      [{ at: "2026-02-30" }, time],
+      [{ at: "2026-11-01T24:00:00Z" }, time],
+      // Without an offset the server's own time zone would decide which block it is.
+      [{ at: "2026-11-01T12:30:00" }, time],
+      [{ at: "2026-11-01 12:30:00Z" }, time],
+      [{ at: 1_793_491_200 }, "at must be a string, not a number."],
+      [{ at: "2999-01-01" }, "at is in the future."],
+      [{ atBlock: 5, at: "2026-11-01" }, "Pass atBlock or at, not both."],
+    ] as const) {
+      const result = await call({ token: CASHCAT, ...when }, read);
       expect(result.isError).toBe(true);
       expect(body(result)).toEqual({ error: said });
     }

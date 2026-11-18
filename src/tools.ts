@@ -4,7 +4,7 @@ import { getAddress, isAddress, type Address } from "viem";
 import type { Bonds } from "./bonds.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DEFAULT_DAYS, MAX_DAYS, readCustodyAdditions, type CustodyBoard } from "./custody.js";
-import { ChainError } from "./history.js";
+import { ChainError, type Moment } from "./history.js";
 import { MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
 import { brief, canonicalStringify, RESULT_LIMIT } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL, readPremiums, type PremiumBoard } from "./premiums.js";
@@ -291,6 +291,31 @@ function address(name: string, value: unknown): Address {
   return getAddress(plain);
 }
 
+/** A time in ISO 8601: a date, which is midnight UTC, or a date and time with its offset. Without one, a time would be read in the server's own zone. */
+const ISO_TIME = /^(\d{4})-(\d{2})-(\d{2})(?:T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/;
+
+/** A time in the past, in milliseconds. A date such as February 30 is refused, which `Date.parse` would move to March. */
+function instant(name: string, value: unknown, now = Date.now()): number {
+  const sent = text(name, value);
+  const [, year, month, day] = ISO_TIME.exec(sent) ?? [];
+  const time = Date.parse(sent);
+  if (!year || Number.isNaN(time) || new Date(Date.UTC(Number(year), Number(month) - 1, Number(day))).getUTCDate() !== Number(day)) {
+    throw new Error(`${name} must be a time in ISO 8601, such as 2026-11-01T00:00:00Z, or a date, such as 2026-11-01.`);
+  }
+  if (time > now) throw new Error(`${name} is in the future.`);
+  return time;
+}
+
+/** The past block a read is for, from `atBlock` or `at`; undefined for a read of the newest block. */
+function moment(input: Record<string, unknown>): Moment | undefined {
+  if (input.atBlock !== undefined && input.at !== undefined) throw new Error("Pass atBlock or at, not both.");
+  if (input.atBlock !== undefined) {
+    if (typeof input.atBlock !== "number" || !Number.isSafeInteger(input.atBlock) || input.atBlock < 0) throw new Error("atBlock must be a block number: a whole number from 0.");
+    return { block: BigInt(input.atBlock) };
+  }
+  return input.at === undefined ? undefined : { time: instant("at", input.at) };
+}
+
 function refuseUnknownFields(input: Record<string, unknown>, schema: Tool["inputSchema"]): void {
   const known = Object.keys(schema.properties ?? {});
   const unknown = Object.keys(input).filter((key) => !known.includes(key));
@@ -373,7 +398,7 @@ function orderReply(view: unknown): CallToolResult {
 /** How the tools that read public sources get their answers. A test passes its own in place of any of them. */
 export interface Readers {
   custody(days: number): Promise<CustodyBoard>;
-  makers(token: Address, wallet?: Address): Promise<MakerBoard>;
+  makers(token: Address, wallet?: Address, moment?: Moment): Promise<MakerBoard>;
   readiness(token: Address): Promise<ReadinessBoard>;
   sightings(token: Address): Promise<SightingsBoard>;
 }
@@ -447,7 +472,7 @@ export async function callTool(
       refuseUnknownFields(input, MAKERS_TOOL.inputSchema);
       const token = address("token", input.token);
       const wallet = input.wallet === undefined ? undefined : address("wallet", input.wallet);
-      const board = await makers(token, wallet).catch((error: unknown) => {
+      const board = await makers(token, wallet, moment(input)).catch((error: unknown) => {
         if (error instanceof ChainError) throw error;
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
       });
