@@ -298,7 +298,9 @@ export function sitExamTool(terms: Terms | string): Tool {
           about +
           `The tool reads the price from the desk and pays exactly that from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. The price can be above this server's default limit per payment, so for this one call that limit is the price the desk states, and no further. ` +
           `A limit the operator set in BRAINCHAIN_MAX_PRICE_UNITS still holds. The payment counts against the budget and the daily limit, and a price above that limit, the daily limit or this server's budget of ${terms.budget} per run is refused with nothing charged. ` +
-          `The desk refuses a sitting it cannot open before any payment is signed: when the wallet does not hold the id, a sitting is already open or already paid for, a licence is still valid or a failed sitting is too recent. The reply is then the desk's own reason, and nothing was charged. ` +
+          `The desk refuses a sitting it cannot open before any payment is signed: when the wallet does not hold the id, a licence is still valid or a failed sitting is too recent. The reply is then the desk's own reason, and nothing was charged. ` +
+          `An agent that already has a sitting gets that sitting in place of a second one: with its briefs, marked duplicate, when it is open and this wallet sits it, or with where it stands when it is paid for and not open yet. ` +
+          `The desk looks at only so many unpaid requests from one address in a minute. Past that the reply says to call again after retryAfterSeconds, and nothing was signed. ` +
           `Returns the sitting id, the deadline and the briefs. Deliver each item with ${EXAM_SUBMIT_NAME} and follow the sitting with ${EXAM_STATUS_NAME}. ` +
           `A reply that carries no briefs means the sitting is paid for and the desk has not opened it yet: call this tool again with the same agentId and class. While this server keeps running, that sends the same request with the same payment, which the desk does not charge twice. ` +
           `A server that was restarted no longer holds that request. Its reply then names the sitting that is paid for, and ${EXAM_STATUS_NAME} with briefs: true reads the briefs once that sitting is open.`,
@@ -326,8 +328,8 @@ export const EXAM_STATUS_TOOL: Tool = {
   name: EXAM_STATUS_NAME,
   title: "Read an exam sitting",
   description:
-    "Read a sitting of the licence exam: its state (opening, open, passed or failed), its deadline, each item's state and outcome, and on a pass the licence BrainChain signed, with its expiry. " +
-    "A sitting that is paid for and not open yet reads `opening`, with how its payment stands and the desk's reason when it gives one. Free, and without `briefs` it needs no key. " +
+    "Read a sitting of the licence exam: its state (open, passed or failed), its deadline, each item's state and outcome, and on a pass the licence BrainChain signed, with its expiry. " +
+    "Before a sitting opens it reads `paying` while its payment settles, `opening` once it is paid for and its items are being drawn, with the desk's reason when a draw failed, or `failed` when the payment did not settle and nothing was charged. Free, and without `briefs` it needs no key. " +
     "With `briefs: true` the reply also carries the sitting's briefs, which the desk shows only to the wallet sitting it, so that request is signed with this server's key. " +
     "Call again after `retryAfterSeconds` until `done` is true.",
   inputSchema: {
@@ -344,7 +346,7 @@ export const LICENCES_TOOL: Tool = {
   title: "Read an agent's BrainChain licences",
   description:
     "List an ERC-8004 agent's BrainChain licences and the state of each. A licence past its expiry reads expired, whatever else was true of it. Before that it reads suspended after two failed audits in the last three, lapsed while the id has another controller or build than the licence was earned with, and valid otherwise. " +
-    "Each comes with the licence BrainChain signed, its expiry and its audit counts. An agent that never passed has none. Free, no key.",
+    "Each comes with the licence BrainChain signed, its expiry and its audit counts. `epoch` is the controller and the declared build BrainChain reads for the id now, which each state is held to; it is null when the id has no single controller or could not be read. An agent that never passed has no licences. Free, no key.",
   inputSchema: AGENT_INPUT,
   annotations: { readOnlyHint: true, openWorldHint: true },
 };

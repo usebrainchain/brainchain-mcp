@@ -461,25 +461,36 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   const pause = (ms: number, signal: AbortSignal) => until(signal, new Promise<boolean>((resolve) => setTimeout(() => resolve(true), ms))).catch(() => false);
 
   /**
-   * A sitting the desk holds a payment for and has not opened yet, as it reads to an agent. Through the paid route
-   * only the request that paid for it reads its briefs: kept here, that request is sent again; otherwise the briefs
-   * are read with the wallet's signature once the sitting is open. `view` is what the desk says of the payment.
+   * A sitting the desk holds a payment for and has not opened, as it reads to an agent: where its payment stands
+   * and how its briefs are read. Through the paid route only the request that paid for it reads them: kept here,
+   * that request is sent again; otherwise the wallet's signature reads them once the sitting is open.
    */
-  function opening(sitting: string, view: { payment?: unknown; reason?: unknown } = {}): Record<string, unknown> {
-    const named = { sitting, statusUrl: `${config.desk}/exams/${sitting}`, state: "opening", ...(typeof view.payment === "string" ? { payment: view.payment } : {}) };
-    // The desk keeps a payment it gave up beside the ones it took: that one was never charged and opens nothing.
-    if (view.payment === "failed") return { ...named, done: true, next: "The payment for this sitting did not go through, so nothing was charged and no sitting opens from it. brainchain_sit_exam opens a new one." };
+  function notOpen(sitting: string, view: Record<string, unknown>): Record<string, unknown> {
+    const named = { sitting, statusUrl: `${config.desk}/exams/${sitting}`, state: view.state, payment: view.payment };
+    if (view.state === "failed") return { ...named, done: true, next: "The payment for this sitting did not settle, so nothing was charged and no sitting opens from it. brainchain_sit_exam opens a new one." };
     const reason = typeof view.reason === "string" && view.reason.trim() ? view.reason.trim() : undefined;
     const kept = [...unopened.values()].some((paidFor) => paidFor.id === sitting);
     const how = kept
       ? askAgain
       : "Through the paid route only the request that paid for the sitting reads its briefs, and this server does not hold that request. Once the sitting is open, brainchain_exam_status with briefs: true reads them for the wallet that sits it.";
-    const stands = view.payment === "unconfirmed" ? "The desk is confirming this sitting's payment on chain, and opens the sitting once it has." : "The sitting is paid for, and the desk is opening it.";
+    const stands = view.state === "paying" ? "The desk is settling this sitting's payment, and opens the sitting once it has." : "The sitting is paid for, and the desk is opening it.";
     return { ...named, ...(reason ? { reason } : {}), done: false, next: `${stands}${reason ? ` It is not open yet for this reason: ${sentence(reason)}` : ""} ${how}`, retryAfterSeconds: 30 };
   }
 
-  /** The sitting a refusal names when one for the same agent and class is already paid for and opening. */
-  const alreadyPaid = (status: number, reply: Record<string, unknown>) => (status === 409 && typeof reply.sitting === "string" && /^0x[0-9a-fA-F]{64}$/.test(reply.sitting) ? reply.sitting.toLowerCase() : undefined);
+  /** The sitting a refusal names: the one the agent already has, open or paid for and still to open. */
+  const namedSitting = (status: number, reply: Record<string, unknown>) => (status === 409 && typeof reply.sitting === "string" && /^0x[0-9a-fA-F]{64}$/.test(reply.sitting) ? reply.sitting.toLowerCase() : undefined);
+
+  /**
+   * What a refusal that names a sitting comes to. One that is open and that this wallet sits is returned with its
+   * briefs, which the wallet's signature reads; one that is paid for and not open yet says where it stands. A
+   * sitting this wallet cannot read leaves the desk's refusal as it was said.
+   */
+  async function agentsSitting(sitting: string, said: string): Promise<unknown> {
+    const read = (await examStatus(sitting, true).catch(() => undefined)) as Record<string, unknown> | undefined;
+    if (read && Array.isArray(read.briefs)) return { ...read, duplicate: true };
+    if (read && beforeOpening(read) && read.state !== "failed") return read;
+    throw new Error(said);
+  }
 
   /**
    * Reads what the desk answered a paid sitting with, and while it says the items are still to be drawn, asks
@@ -506,12 +517,12 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       }
       const said = typeof reply.error === "string" ? reply.error.trim() : "";
       if (/Nothing was charged/.test(said)) {
-        const earlier = alreadyPaid(answer.status, reply);
+        const earlier = namedSitting(answer.status, reply);
         if (earlier === undefined) return uncharged(said);
-        // Another payment already bought this agent a sitting, so this one was turned away uncharged: that sitting is the one to read.
+        // The agent already has a sitting, so this payment was turned away uncharged: that sitting is the one to read.
         unopened.delete(key);
         await unreserve(sitting);
-        return opening(earlier);
+        return agentsSitting(earlier, said);
       }
       // As for a task or a grade, the desk answers 400 before it settles anything.
       if (answer.status === 400) return uncharged(said ? `${sentence(said)} Nothing was charged.` : "The desk answered 400. Nothing was charged.");
@@ -572,8 +583,17 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       const reply = (await until(limit.signal, jsonObject(answer)).catch(() => undefined)) ?? {};
       if (answer.ok) throw new Error(`The desk at ${config.desk} answered ${answer.status} without asking for payment, so no sitting was opened. Check BRAINCHAIN_DESK_URL. Nothing was charged.`);
       const said = typeof reply.error === "string" ? reply.error.trim() : "";
-      const earlier = /Nothing was charged/.test(said) ? alreadyPaid(answer.status, reply) : undefined;
-      if (earlier !== undefined) return opening(earlier);
+      // The desk looks at only so many unpaid sitting requests from one address in a minute, and says so in place of a price.
+      if (answer.status === 429) {
+        return {
+          error: "The desk has had too many sitting requests from this address in the last minute, so it did not look at this one. Nothing was signed or charged.",
+          done: false,
+          next: "Call brainchain_sit_exam again after retryAfterSeconds.",
+          retryAfterSeconds: retryAfter(answer) ?? 60,
+        };
+      }
+      const earlier = /Nothing was charged/.test(said) ? namedSitting(answer.status, reply) : undefined;
+      if (earlier !== undefined) return await agentsSitting(earlier, said);
       throw new Error(/Nothing was charged/.test(said) ? said : said ? `${sentence(said)} Nothing was charged.` : `The desk answered ${answer.status}. Nothing was charged.`);
     } finally {
       limit.clear();
@@ -648,20 +668,14 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
 
   /** A sitting as anyone may read it, with its briefs when this wallet, the one sitting it, signs for them. */
   async function examStatus(sitting: string, briefs: boolean): Promise<unknown> {
-    const url = `${config.desk}/exams/${sitting}`;
-    const signed = async () => {
+    let url = `${config.desk}/exams/${sitting}`;
+    if (briefs) {
       const at = Math.floor(Date.now() / 1000);
-      return `${url}/briefs?at=${at}&signature=${await account().signMessage({ message: briefsMessage(config.brainchainId, sitting, at) })}`;
-    };
-    const asked = briefs ? await signed() : url;
+      url += `/briefs?at=${at}&signature=${await account().signMessage({ message: briefsMessage(config.brainchainId, sitting, at) })}`;
+    }
     let response: Response;
     try {
-      response = await fetchImpl(asked, { signal: AbortSignal.timeout(20_000) });
-      // The briefs are kept with the sitting, which exists once it is open; its own address also answers for one still opening.
-      if (briefs && response.status === 404) {
-        await response.body?.cancel().catch(() => undefined);
-        response = await fetchImpl(url, { signal: AbortSignal.timeout(20_000) });
-      }
+      response = await fetchImpl(url, { signal: AbortSignal.timeout(20_000) });
     } catch (error) {
       return { sitting, error: `Could not reach the desk (${firstLine(error)}).`, done: false, next: "Read the sitting again after retryAfterSeconds.", retryAfterSeconds: 30 };
     }
@@ -674,9 +688,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     if (response.status >= 500 || RETRY_LATER.has(response.status)) {
       return { sitting, error: `The desk answered ${response.status}.`, done: false, next: "The desk is busy or briefly unavailable. Read the sitting again after retryAfterSeconds.", retryAfterSeconds: retryAfter(response) ?? 30 };
     }
+    // Before a sitting opens, its own address says where it stands, and its briefs address says the same with a 409.
+    if (view && beforeOpening(view) && (response.ok || response.status === 409)) return notOpen(sitting, view);
     if (!response.ok) throw new Error(typeof view?.error === "string" ? view.error : `The desk answered ${response.status}.`);
     if (!view) return { sitting, error: "The desk's reply could not be read.", done: false, next: "Read the sitting again shortly.", retryAfterSeconds: 30 };
-    if (view.state === "opening") return opening(sitting, view);
     return { ...view, ...sittingGuidance(view) };
   }
 
@@ -796,6 +811,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
 /** What this server pays the desk for. A task and a grade are read back at a route of their own; a sitting is asked for again with its payment. */
 type Kind = "task" | "grade" | "exam";
 type Posted = Exclude<Kind, "exam">;
+
+/**
+ * Whether the desk is speaking of a sitting it holds a payment for and has not opened: `paying` while the payment
+ * settles, `opening` once it is paid, `failed` when the payment did not settle. A sitting that closed without a
+ * pass also reads `failed`, so it is the payment's own state beside it that tells the two apart.
+ */
+const beforeOpening = (view: Record<string, unknown>) => typeof view.payment === "string" && (view.state === "paying" || view.state === "opening" || view.state === "failed");
 
 /** The headers an x402 payment travels in: version 2's, and version 1's. */
 const PAYMENT_HEADERS = ["payment-signature", "x-payment"];
