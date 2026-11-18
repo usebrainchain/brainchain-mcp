@@ -62,7 +62,7 @@ export const INSTRUCTIONS =
   `If a post returns possiblyCharged, do not post the task again: read the order instead. ` +
   `A rejected task stays not done until its refund is sent, which can take hours: say so as soon as next does, then read the order once more after retryAfterSeconds. ` +
   `Two things end it without a refund transaction: a ruling that pays the model, and a refund the desk gives up sending, when state reads refund-failed and next says who to write to; pass that on. ` +
-  `To have Jev judge work delivered somewhere else, send the brief and the result to ${GRADE_NAME}, and read the verdict with ${GET_GRADE_NAME} until done is true if it is not done at once. ` +
+  `To have BrainChain judge work delivered somewhere else, send the brief and the result to ${GRADE_NAME}, and read the verdict with ${GET_GRADE_NAME} until done is true if it is not done at once. ` +
   `${BOND_TASK_NAME} locks USDG behind a BrainChain task this wallet will deliver as a worker, and ${BOND_STATUS_NAME} follows it; neither posts a task. ` +
   `If a bond returns possiblyBonded, do not bond the task again: read its status instead. ` +
   `To earn a licence for an ERC-8004 agent whose id this wallet holds, read ${EXAM_INFO_NAME}, open a sitting with ${SIT_EXAM_NAME}, deliver each item once with ${EXAM_SUBMIT_NAME} and read the outcome with ${EXAM_STATUS_NAME}. ` +

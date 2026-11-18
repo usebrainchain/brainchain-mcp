@@ -741,27 +741,27 @@ describe("reading an order", () => {
       expect(guidance({ state: "posted", task: { status, accepted: false, due: { step: status === "ruled" ? "appeal" : "rule", by } } }, config)).toMatchObject({ done: false });
     }
     expect(guidance({ state: "posted", task: { status: "ruled", accepted: false, due: { step: "appeal", by } } }, config).next).toBe(
-      `Jev ruled on the dispute. The ruling settles when its appeal window closes at ${by}, unless the side it went against appeals.`,
+      `BrainChain ruled on the dispute. The ruling settles when its appeal window closes at ${by}, unless the side it went against appeals.`,
     );
-    expect(guidance({ state: "posted", task: { status: "appealed", accepted: true } }, config).next).toBe("The ruling was appealed; Jev rules again. If no second ruling comes, the first one stands.");
+    expect(guidance({ state: "posted", task: { status: "appealed", accepted: true } }, config).next).toBe("The ruling was appealed; BrainChain rules again. If no second ruling comes, the first one stands.");
   });
 
   it("finishes on a settled task even when the result file cannot be read, and claims no verdict it was not given", () => {
     const paid = guidance({ state: "posted", result: "https://desk/records/0xdead", task: { status: "paid", accepted: true } }, config);
-    expect(paid).toMatchObject({ done: true, next: "Jev accepted the work and the model was paid. The result is at https://desk/records/0xdead." });
+    expect(paid).toMatchObject({ done: true, next: "BrainChain accepted the work and the model was paid. The result is at https://desk/records/0xdead." });
     const overturned = guidance({ state: "posted", task: { status: "paid", accepted: false } }, config);
     expect(overturned).toMatchObject({ done: true, next: "The model was paid." });
-    expect(guidance({ state: "posted", task: { status: "graded" } }, config).next).toBe("Jev graded the work; the verdict is being recorded.");
-    expect(guidance({ state: "posted", task: { status: "graded", accepted: true } }, config).next).toBe("Jev accepted the work; the result is being prepared.");
+    expect(guidance({ state: "posted", task: { status: "graded" } }, config).next).toBe("BrainChain graded the work; the verdict is being recorded.");
+    expect(guidance({ state: "posted", task: { status: "graded", accepted: true } }, config).next).toBe("BrainChain accepted the work; the result is being prepared.");
   });
 
   it("names the deadline a step must meet and why an order was refunded", () => {
     const by = "2026-11-02T14:05:31.000Z";
     expect(guidance({ state: "posted", task: { status: "delivered", due: { step: "grade", by } } }, config).next).toBe(
-      `The model delivered; Jev is grading the work. If Jev has not graded it by ${by}, the full amount is refunded.`,
+      `The model delivered; BrainChain is grading the work. If it is not graded by ${by}, the full amount is refunded.`,
     );
-    const refunded = guidance({ state: "refunded", refundTx: "0xfeed", refundReason: "Jev did not grade the work within the grading window." }, config);
-    expect(refunded.next).toMatch(/^Jev did not grade the work within the grading window\. The full amount was refunded on .* in 0xfeed\.$/);
+    const refunded = guidance({ state: "refunded", refundTx: "0xfeed", refundReason: "BrainChain did not grade the work within the grading window." }, config);
+    expect(refunded.next).toMatch(/^BrainChain did not grade the work within the grading window\. The full amount was refunded on .* in 0xfeed\.$/);
   });
 });
 
@@ -770,9 +770,9 @@ describe("the chain brainchain_get_task names", () => {
   const base = resolveConfig({ BRAINCHAIN_PAY_ON: "base" });
   const NOW = Date.parse("2026-11-06T12:00:00.000Z");
   const by = "2026-11-06T15:38:00.000Z";
-  const reject = "Jev did not accept the work, so the result is withheld.";
+  const reject = "BrainChain did not accept the work, so the result is withheld.";
   const refund = (network: unknown) => ({
-    refunded: guidance({ state: "refunded", network, refundTx: "0xfeed", refundReason: "Jev did not accept the work." }, base, NOW).next,
+    refunded: guidance({ state: "refunded", network, refundTx: "0xfeed", refundReason: "BrainChain did not accept the work." }, base, NOW).next,
     refunding: guidance({ state: "refunding", network, task: { status: "refunded" } }, base, NOW).next,
     owed: guidance({ state: "posted", network, task: { status: "refunded" } }, base, NOW).next,
     rejected: guidance({ state: "posted", network, task: { status: "graded", accepted: false, due: { by } } }, base, NOW).next,
@@ -795,7 +795,7 @@ describe("the chain brainchain_get_task names", () => {
   ])("is the order's own: %s reads %s", (network, chain) => {
     expect(paidOn(network)).toEqual({ chain, escrow: false });
     expect(refund(network)).toEqual({
-      refunded: `Jev did not accept the work. The full amount was refunded on ${chain} in 0xfeed.`,
+      refunded: `BrainChain did not accept the work. The full amount was refunded on ${chain} in 0xfeed.`,
       refunding: `The refund is being sent on ${chain}.`,
       owed: `The refund is being sent on ${chain}.`,
       rejected: `${reject} The full amount is refunded on ${chain} when the dispute window closes at ${by}, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`,
@@ -811,7 +811,7 @@ describe("the chain brainchain_get_task names", () => {
     expect(paidOn(network)).toEqual({ chain, escrow: true });
     const returns = `escrow on ${chain} that holds the payment returns the full amount`;
     expect(refund(network)).toEqual({
-      refunded: `Jev did not accept the work. The ${returns}.`,
+      refunded: `BrainChain did not accept the work. The ${returns}.`,
       refunding: `The ${returns}.`,
       owed: `The ${returns}.`,
       rejected: `${reject} The ${returns}, unless the model disputes the grade before the dispute window closes at ${by} and a ruling pays it. Report this now, then read the order again after that time.`,
@@ -830,9 +830,9 @@ describe("the chain brainchain_get_task names", () => {
       network: "eip155:4663",
       refundTx: "0xb350daaf27b37ce91fbbb3967c3634f527986b7e90d1001e375a9df64be3aa42",
       task: { status: "refunded", accepted: false, refund: "rejected" },
-      refundReason: "Jev did not accept the work.",
+      refundReason: "BrainChain did not accept the work.",
     };
-    expect(guidance(onRobinhood, base).next).toBe("Jev did not accept the work. The full amount was refunded on Robinhood Chain in 0xb350daaf27b37ce91fbbb3967c3634f527986b7e90d1001e375a9df64be3aa42.");
+    expect(guidance(onRobinhood, base).next).toBe("BrainChain did not accept the work. The full amount was refunded on Robinhood Chain in 0xb350daaf27b37ce91fbbb3967c3634f527986b7e90d1001e375a9df64be3aa42.");
     const escrowed = { order: "0x0ad453eb153dcabf462d5ec7eee5d1a3d174d4ab3c753cf8225590bdf380dc80", state: "refunded", network: "acp:8453", task: { status: "refunded", accepted: false } };
     expect(guidance(escrowed, resolveConfig({})).next).toBe("The escrow on Base that holds the payment returns the full amount.");
     const onSolana = {
@@ -841,10 +841,10 @@ describe("the chain brainchain_get_task names", () => {
       network: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
       refundTx: "2vuSDTGoDf9656LThbJMSAgobaBzX5FjyQsvqoRpFbBXntbtEjuN3fCZsxYZDy9NcXEsLVkax5emTvXSLYJuru9e",
       task: { status: "refunded", accepted: false, refund: "rejected" },
-      refundReason: "Jev did not accept the work.",
+      refundReason: "BrainChain did not accept the work.",
     };
     expect(guidance(onSolana, config).next).toBe(
-      "Jev did not accept the work. The full amount was refunded on Solana devnet in 2vuSDTGoDf9656LThbJMSAgobaBzX5FjyQsvqoRpFbBXntbtEjuN3fCZsxYZDy9NcXEsLVkax5emTvXSLYJuru9e.",
+      "BrainChain did not accept the work. The full amount was refunded on Solana devnet in 2vuSDTGoDf9656LThbJMSAgobaBzX5FjyQsvqoRpFbBXntbtEjuN3fCZsxYZDy9NcXEsLVkax5emTvXSLYJuru9e.",
     );
   });
 });
@@ -874,49 +874,49 @@ describe("what brainchain_get_task says, for every order state and task status",
   });
 
   // [state, status, accepted, extra fields, what the caller is told].
-  const reject = "Jev did not accept the work, so the result is withheld.";
+  const reject = "BrainChain did not accept the work, so the result is withheld.";
   const TABLE: [string, string | undefined, boolean | undefined, Record<string, unknown>, ReturnType<typeof waits> | ReturnType<typeof finished>][] = [
     ["posted", undefined, undefined, {}, waits(20, "The task is posted; its status shows here shortly.")],
     ["posted", "none", undefined, {}, waits(60, "The order is in progress.")],
-    ["posted", "open", undefined, { due: by }, waits(60, `Waiting for Jev to hire a model. If no model is hired by ${by}, the full amount is refunded.`)],
+    ["posted", "open", undefined, { due: by }, waits(60, `Waiting for BrainChain to hire a model. If no model is hired by ${by}, the full amount is refunded.`)],
     ["posted", "hired", undefined, { due: by }, waits(60, `A model is working on the task. If the work is not delivered by ${by}, the full amount is refunded.`)],
-    ["posted", "delivered", undefined, { due: by }, waits(30, `The model delivered; Jev is grading the work. If Jev has not graded it by ${by}, the full amount is refunded.`)],
-    ["posted", "graded", undefined, { due: by }, waits(60, "Jev graded the work; the verdict is being recorded.")],
-    ["posted", "graded", true, { due: by }, waits(60, "Jev accepted the work; the result is being prepared.")],
-    ["posted", "graded", true, { due: by, result: "https://desk/r", resultError: "HTTP 500" }, waits(60, "Jev accepted the work, but the result could not be read just now.")],
-    ["posted", "graded", true, { due: by, resultText: "R" }, finished(`Jev accepted the work. The result follows this summary. The payment becomes final when the dispute window closes, ${config.terms.finalAfter} after grading.`)],
-    ["posted", "graded", true, { due: by, result: "https://elsewhere/r" }, finished(`Jev accepted the work. The result is at https://elsewhere/r. The payment becomes final when the dispute window closes, ${config.terms.finalAfter} after grading.`)],
+    ["posted", "delivered", undefined, { due: by }, waits(30, `The model delivered; BrainChain is grading the work. If it is not graded by ${by}, the full amount is refunded.`)],
+    ["posted", "graded", undefined, { due: by }, waits(60, "BrainChain graded the work; the verdict is being recorded.")],
+    ["posted", "graded", true, { due: by }, waits(60, "BrainChain accepted the work; the result is being prepared.")],
+    ["posted", "graded", true, { due: by, result: "https://desk/r", resultError: "HTTP 500" }, waits(60, "BrainChain accepted the work, but the result could not be read just now.")],
+    ["posted", "graded", true, { due: by, resultText: "R" }, finished(`BrainChain accepted the work. The result follows this summary. The payment becomes final when the dispute window closes, ${config.terms.finalAfter} after grading.`)],
+    ["posted", "graded", true, { due: by, result: "https://elsewhere/r" }, finished(`BrainChain accepted the work. The result is at https://elsewhere/r. The payment becomes final when the dispute window closes, ${config.terms.finalAfter} after grading.`)],
     // Rejected: the refund is still owed, and the model can still dispute, so the caller is not done. It comes back once the window has closed.
     ["posted", "graded", false, { due: by }, waits(6 * 3600 + 60, `${reject} The full amount is refunded on ${chain} when the dispute window closes at ${by}, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`)],
     ["posted", "graded", false, {}, waits(900, `${reject} The full amount is refunded on ${chain} when the dispute window closes, ${config.terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`)],
     ["posted", "graded", false, { due: closed }, waits(60, `${reject} The dispute window has closed, so the full amount is refunded on ${chain} shortly.`)],
     ["posted", "graded", false, { due: "soon" }, waits(900, `${reject} The full amount is refunded on ${chain} when the dispute window closes, ${config.terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. Report this now, then read the order again after that time for the refund transaction.`)],
-    ["posted", "disputed", false, { due: by }, waits(600, `The grade is disputed; Jev rules on it by ${by}. If no ruling comes, the grade stands.`)],
+    ["posted", "disputed", false, { due: by }, waits(600, `The grade is disputed; BrainChain rules on it by ${by}. If no ruling comes, the grade stands.`)],
     // An accepted grade under dispute can still refund the caller, so a result in hand does not finish it.
-    ["posted", "disputed", true, { due: by, resultText: "R" }, waits(600, `The grade is disputed; Jev rules on it by ${by}. If no ruling comes, the grade stands. The result follows this summary.`)],
-    ["posted", "ruled", false, { due: by }, waits(900, `Jev ruled on the dispute. The ruling settles when its appeal window closes at ${by}, unless the side it went against appeals.`)],
-    ["posted", "ruled", true, { due: by }, waits(900, `Jev ruled on the dispute. The ruling settles when its appeal window closes at ${by}, unless the side it went against appeals.`)],
-    ["posted", "appealed", false, { due: by }, waits(600, `The ruling was appealed; Jev rules again by ${by}. If no second ruling comes, the first one stands.`)],
-    ["posted", "appealed", true, { due: by }, waits(600, `The ruling was appealed; Jev rules again by ${by}. If no second ruling comes, the first one stands.`)],
-    ["posted", "paid", true, { resultText: "R" }, finished("Jev accepted the work and the model was paid. The result follows this summary.")],
+    ["posted", "disputed", true, { due: by, resultText: "R" }, waits(600, `The grade is disputed; BrainChain rules on it by ${by}. If no ruling comes, the grade stands. The result follows this summary.`)],
+    ["posted", "ruled", false, { due: by }, waits(900, `BrainChain ruled on the dispute. The ruling settles when its appeal window closes at ${by}, unless the side it went against appeals.`)],
+    ["posted", "ruled", true, { due: by }, waits(900, `BrainChain ruled on the dispute. The ruling settles when its appeal window closes at ${by}, unless the side it went against appeals.`)],
+    ["posted", "appealed", false, { due: by }, waits(600, `The ruling was appealed; BrainChain rules again by ${by}. If no second ruling comes, the first one stands.`)],
+    ["posted", "appealed", true, { due: by }, waits(600, `The ruling was appealed; BrainChain rules again by ${by}. If no second ruling comes, the first one stands.`)],
+    ["posted", "paid", true, { resultText: "R" }, finished("BrainChain accepted the work and the model was paid. The result follows this summary.")],
     ["posted", "paid", false, {}, finished("The model was paid.")],
     // The board has returned the money to the desk, and the payer's refund transaction has not been sent.
-    ["posted", "refunded", false, { refundReason: "Jev did not accept the work." }, waits(60, `Jev did not accept the work. The refund is being sent on ${chain}.`)],
+    ["posted", "refunded", false, { refundReason: "BrainChain did not accept the work." }, waits(60, `BrainChain did not accept the work. The refund is being sent on ${chain}.`)],
     ["posted", "refunded", undefined, {}, waits(60, `The refund is being sent on ${chain}.`)],
     // Settled days ago: past tense, and accepted only where the grade accepted it. A ruling can pay rejected work.
-    ["paid-out", "paid", true, { resultText: "R" }, finished("Jev accepted the work and the model was paid. The result follows this summary.")],
-    ["paid-out", "paid", true, { result: "https://desk/r", resultError: "HTTP 500" }, finished("Jev accepted the work and the model was paid.")],
+    ["paid-out", "paid", true, { resultText: "R" }, finished("BrainChain accepted the work and the model was paid. The result follows this summary.")],
+    ["paid-out", "paid", true, { result: "https://desk/r", resultError: "HTTP 500" }, finished("BrainChain accepted the work and the model was paid.")],
     ["paid-out", "paid", false, { resultText: "R" }, finished("The model was paid. The result follows this summary.")],
     ["paid-out", "paid", false, {}, finished("The model was paid.")],
     ["paid-out", undefined, undefined, {}, finished("The model was paid.")],
     // With no task the desk could not post the order, so no work ever existed.
     ["refunding", undefined, undefined, {}, waits(60, `The task could not be posted. The refund is being sent on ${chain}.`)],
-    ["refunding", "refunded", false, { refundReason: "Jev did not accept the work." }, waits(60, `Jev did not accept the work. The refund is being sent on ${chain}.`)],
+    ["refunding", "refunded", false, { refundReason: "BrainChain did not accept the work." }, waits(60, `BrainChain did not accept the work. The refund is being sent on ${chain}.`)],
     ["refunding", "refunded", undefined, { refundReason: "No model was hired before the task's deadline." }, waits(60, `No model was hired before the task's deadline. The refund is being sent on ${chain}.`)],
     ["refunded", undefined, undefined, { refundTx: "0xfeed" }, finished(`The task could not be posted. The full amount was refunded on ${chain} in 0xfeed.`)],
-    ["refunded", "refunded", false, { refundReason: "Jev did not accept the work.", refundTx: "0xfeed" }, finished(`Jev did not accept the work. The full amount was refunded on ${chain} in 0xfeed.`)],
+    ["refunded", "refunded", false, { refundReason: "BrainChain did not accept the work.", refundTx: "0xfeed" }, finished(`BrainChain did not accept the work. The full amount was refunded on ${chain} in 0xfeed.`)],
     ["refunded", "refunded", true, { refundReason: "The dispute was ruled for the poster.", refundTx: "0xfeed" }, finished(`The dispute was ruled for the poster. The full amount was refunded on ${chain} in 0xfeed.`)],
-    ["refunded", "refunded", undefined, { refundReason: "Jev did not grade the work within the grading window." }, finished(`Jev did not grade the work within the grading window. The full amount was refunded on ${chain}.`)],
+    ["refunded", "refunded", undefined, { refundReason: "BrainChain did not grade the work within the grading window." }, finished(`BrainChain did not grade the work within the grading window. The full amount was refunded on ${chain}.`)],
   ];
   it.each(TABLE)("%s, task %s, accepted %s, %j", (state, status, accepted, extra, expected) => {
     expect(read(state, status, accepted, extra)).toEqual(expected);
@@ -936,7 +936,7 @@ describe("what brainchain_get_task says, for every order state and task status",
             const at = `${state}/${status}/${accepted}/${JSON.stringify(extra)}: ${next}`;
             expect(next.length, at).toBeGreaterThan(0);
             expect(done ? retryAfterSeconds === undefined : retryAfterSeconds! > 0, at).toBe(true);
-            if (next.startsWith("Jev accepted")) expect(accepted, at).toBe(true);
+            if (next.startsWith("BrainChain accepted")) expect(accepted, at).toBe(true);
             if (next.includes("did not accept")) expect(accepted, at).toBe(false);
             if (/was paid/.test(next)) expect(state === "paid-out" || status === "paid", at).toBe(true);
             if (/was refunded/.test(next)) expect(state, at).toBe("refunded");

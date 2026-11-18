@@ -94,9 +94,9 @@ export function bondTools(
       title: "Bond a BrainChain task on Shipped",
       description:
         lead(invalid.bond) +
-        `Lock USDG on Shipped behind a BrainChain task from ${where}, as the worker that will deliver it. Jev must already have hired this wallet for the task. ` +
+        `Lock USDG on Shipped behind a BrainChain task from ${where}, as the worker that will deliver it. BrainChain must already have hired this wallet for the task. ` +
         `If the task is paid and its Proof is recorded by the bond's deadline, which is set after the task's and comes back in the reply, the bond less Shipped's 1% fee is credited to the wallet on Shipped's registry, where the worker CLI's \`bond claim\` collects it; if not, the bond goes to ${MISSED_TO}. ` +
-        `A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires. ` +
+        `A worker's settled bonds, delivered and missed, are part of what BrainChain reads at later hires. ` +
         `The amount is at least the task's bounty and ${formatUnits(MIN_BOND)} USDG, at most ${cap} per task, and counts against this server's budget and daily limit like a post. ` +
         `The wallet needs the USDG and a little ETH on Robinhood Chain. Never bond a task this wallet posted or paid for. Returns the bond, its transaction and its deadline; follow it with ${BOND_STATUS_NAME}. ` +
         `If the reply says possiblyBonded, the bond may have been placed and could not be confirmed: read the task with ${BOND_STATUS_NAME} and do not bond it again.`,
@@ -152,7 +152,7 @@ const POST_TASK_INPUT: Tool["inputSchema"] = {
 /** Given a configuration error instead of terms, the description leads with it. */
 export function postTaskTool(terms: Terms | string): Tool {
   const about =
-    `Pay for a task on BrainChain. Jev, a decision model from TypeSafe, hires a frontier model or an outside worker for the brief, grades the result against your quality levels and pays it only if the work reaches your pass level: with three quality levels, the second or better; with two, only the first. ` +
+    `Pay for a task on BrainChain, whose decision model is served by TypeSafe. BrainChain hires a frontier model or an outside worker for the brief, grades the result against your quality levels and pays it only if the work reaches your pass level: with three quality levels, the second or better; with two, only the first. ` +
     `Briefs and results are public, so never include credentials or code that cannot be published. ` +
     `A brief can be up to 32,000 UTF-16 units (${UNITS}), and the whole task at most 64,000 bytes as JSON. `;
   return {
@@ -163,7 +163,7 @@ export function postTaskTool(terms: Terms | string): Tool {
         ? `${invalidSetting(terms)}${about}`
         : (terms.problem ? invalidSetting(terms.problem) : "") +
           about +
-          `Each task costs ${terms.cost}, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. ${terms.refuses?.task ? `${terms.refuses.task} ` : ""}The result is delivered only if Jev accepts the work. If Jev rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. If no model delivers within 24 hours, the full amount is refunded. ` +
+          `Each task costs ${terms.cost}, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. ${terms.refuses?.task ? `${terms.refuses.task} ` : ""}The result is delivered only if BrainChain accepts the work. If it rejects the work, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading, unless the model disputes the grade and a ruling pays it. If no model delivers within 24 hours, the full amount is refunded. ` +
           `Returns an order id for ${GET_TASK_NAME}; results usually arrive within minutes. If the reply says possiblyCharged, do not post the task again: read the order with ${GET_TASK_NAME}. ` +
           `While this server keeps running, an identical post within ${REPOST_AFTER_MINUTES} minutes returns the first post's order, marked duplicate, instead of paying again, unless ${GET_TASK_NAME} has read that order's payment as failed.`,
     inputSchema: POST_TASK_INPUT,
@@ -174,7 +174,7 @@ export function postTaskTool(terms: Terms | string): Tool {
 const GRADE_INPUT: Tool["inputSchema"] = {
   type: "object",
   properties: {
-    brief: { type: "string", minLength: 1, maxLength: 32000, description: `What the work had to do, as the worker was told. Jev knows nothing else about the job. Up to 32,000 UTF-16 units: ${UNITS}.` },
+    brief: { type: "string", minLength: 1, maxLength: 32000, description: `What the work had to do, as the worker was told. BrainChain's decision model knows nothing else about the job. Up to 32,000 UTF-16 units: ${UNITS}.` },
     result: { type: "string", minLength: 1, description: "The delivered work as text, at most 100,000 bytes." },
     title: { type: "string", minLength: 1, maxLength: 120, description: "Optional: one line naming the job." },
     levels: {
@@ -183,7 +183,7 @@ const GRADE_INPUT: Tool["inputSchema"] = {
       minItems: 2,
       maxItems: 5,
       uniqueItems: true,
-      description: "Optional: two to five quality levels of your own, best first. Without them Jev uses three general levels.",
+      description: "Optional: two to five quality levels of your own, best first. Without them BrainChain uses three general levels.",
     },
     pass: { type: "integer", minimum: 0, maximum: 3, description: "Optional, with levels: the index of the lowest level that passes, 0 being the best. The last level never passes." },
   },
@@ -194,9 +194,9 @@ const GRADE_INPUT: Tool["inputSchema"] = {
 /** Grading work delivered elsewhere: a market whose poster approves the work can read Jev's verdict first. */
 export function gradeTool(terms: Terms | string): Tool {
   const about =
-    `Have Jev grade work delivered somewhere else, such as a job on another agent market, against the brief it answered. ` +
-    `Returns Jev's verdict: whether the work passes, the probability it reaches a passing level (the lower of Jev's and a second model's), and a public decision record. ` +
-    `The brief is published in the record, and the result once Jev accepts it, so never include credentials or text that cannot be published. ` +
+    `Have BrainChain grade work delivered somewhere else, such as a job on another agent market, against the brief it answered. ` +
+    `Returns the verdict: whether the work passes, the probability it reaches a passing level (the lower of what BrainChain's decision model and a second model each give), and a public decision record. ` +
+    `The brief is published in the record, and the result once it is accepted, so never include credentials or text that cannot be published. ` +
     `This tool only grades: nothing is paid to the worker and no task is posted. `;
   return {
     name: GRADE_NAME,
@@ -208,7 +208,7 @@ export function gradeTool(terms: Terms | string): Tool {
           about +
           `Each grade costs ${terms.gradeCost} whatever the verdict, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, and counts against its budget and daily limit. ` +
           (terms.refuses?.grade ? `${terms.refuses.grade} ` : "") +
-          `Jev usually answers within seconds; if the reply is not done, read it with ${GET_GRADE_NAME}. If the reply says possiblyCharged, do not send it again: read it with ${GET_GRADE_NAME}. ` +
+          `BrainChain usually answers within seconds; if the reply is not done, read it with ${GET_GRADE_NAME}. If the reply says possiblyCharged, do not send it again: read it with ${GET_GRADE_NAME}. ` +
           `While this server keeps running, an identical request within ${REPOST_AFTER_MINUTES} minutes returns the first grade, marked duplicate, instead of paying again.`,
     inputSchema: GRADE_INPUT,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
@@ -218,7 +218,7 @@ export function gradeTool(terms: Terms | string): Tool {
 export const GET_GRADE_TOOL: Tool = {
   name: GET_GRADE_NAME,
   title: "Read a BrainChain grade",
-  description: "Read a grade from brainchain_grade: Jev's verdict, the pass probability, each level's probability and the decision record. Free, no key. Call again after `retryAfterSeconds` until `done` is true.",
+  description: "Read a grade from brainchain_grade: the verdict, the pass probability, each level's probability and the decision record. Free, no key. Call again after `retryAfterSeconds` until `done` is true.",
   inputSchema: {
     type: "object",
     properties: { grade: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$", description: "Grade id returned by brainchain_grade." } },
@@ -232,7 +232,7 @@ export const GET_TASK_TOOL: Tool = {
   name: GET_TASK_NAME,
   title: "Read a BrainChain order",
   description:
-    "Read an order from brainchain_post_task: the payment, the task's status on BrainChain, Jev's grade, the result text once the work is accepted, and the refund transaction if it is not. " +
+    "Read an order from brainchain_post_task: the payment, the task's status on BrainChain, the grade, the result text once the work is accepted, and the refund transaction if it is not. " +
     `A result over ${RESULT_LIMIT.toLocaleString("en-US")} UTF-16 units (${UNITS}) is cut there, ending with a link to the full text. ` +
     "Call again after `retryAfterSeconds` until `done` is true. `next` says what the order's state means and what to do. A rejected task stays not done until the refund is sent, when the dispute window closes. Two things end it without a refund transaction: a ruling that pays the model, and a refund the desk gives up sending, when `state` reads `refund-failed` and `next` says who to write to.",
   inputSchema: {

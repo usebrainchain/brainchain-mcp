@@ -842,11 +842,11 @@ interface Unopened {
 export function gradeGuidance(view: Record<string, unknown>): Guidance {
   if (view.state === "graded") {
     const pass = typeof view.passProbability === "number" ? ` at ${Math.round(view.passProbability * 100)}%` : "";
-    return { done: true, next: view.accepted === true ? `Jev accepts the work${pass}. The record is at decision.page.` : `Jev does not accept the work${pass}. The record is at decision.page.` };
+    return { done: true, next: view.accepted === true ? `BrainChain accepts the work${pass}. The record is at decision.page.` : `BrainChain does not accept the work${pass}. The record is at decision.page.` };
   }
   if (view.state === "failed") return { done: true, next: "The payment did not go through, so nothing was charged and the work was not graded. Send it again with brainchain_grade." };
   if (view.state === "unconfirmed") return { done: false, next: "The desk is confirming the payment on chain. Read the grade with brainchain_get_grade after retryAfterSeconds; do not send it again.", retryAfterSeconds: 30 };
-  return { done: false, next: "Jev is still grading the work. Read the grade with brainchain_get_grade after retryAfterSeconds; reading it is free.", retryAfterSeconds: 20 };
+  return { done: false, next: "BrainChain is still grading the work. Read the grade with brainchain_get_grade after retryAfterSeconds; reading it is free.", retryAfterSeconds: 20 };
 }
 
 interface Guidance {
@@ -873,11 +873,11 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "te
   const link = !fetched && typeof view.result === "string" && view.resultError === undefined ? view.result : undefined;
   const result = fetched ? " The result follows this summary." : link ? ` The result is at ${link}.` : "";
   // Accepted comes from the grade alone: a ruling can pay work the grade rejected.
-  const paid = (): Guidance => ({ done: true, next: `${task.accepted === true ? "Jev accepted the work and the model was paid" : "The model was paid"}.${result}` });
+  const paid = (): Guidance => ({ done: true, next: `${task.accepted === true ? "BrainChain accepted the work and the model was paid" : "The model was paid"}.${result}` });
   // Not done: the caller is owed a refund transaction, and the model can still dispute.
   // The caller hears the verdict now and comes back once, when the window has closed.
   const rejected = (): Guidance => {
-    const start = "Jev did not accept the work, so the result is withheld.";
+    const start = "BrainChain did not accept the work, so the result is withheld.";
     const closes = due === undefined ? NaN : Date.parse(due);
     const left = Number.isFinite(closes) ? Math.ceil((closes - now) / 1000) : undefined;
     // The desk sends the refund within a minute or two of the window closing.
@@ -918,26 +918,26 @@ export function guidance(view: Record<string, unknown>, config: Pick<Config, "te
       return wait(60, `${why}${refunding}`);
     // A dispute, a ruling under its appeal window and an appeal can each still change a grade, accepted or not.
     case "disputed":
-      return wait(600, `The grade is disputed; Jev rules on it${by}. If no ruling comes, the grade stands.${result}`);
+      return wait(600, `The grade is disputed; BrainChain rules on it${by}. If no ruling comes, the grade stands.${result}`);
     case "ruled":
-      return wait(900, `Jev ruled on the dispute. The ruling settles when its appeal window closes${due ? ` at ${due}` : ""}, unless the side it went against appeals.${result}`);
+      return wait(900, `BrainChain ruled on the dispute. The ruling settles when its appeal window closes${due ? ` at ${due}` : ""}, unless the side it went against appeals.${result}`);
     case "appealed":
-      return wait(600, `The ruling was appealed; Jev rules again${by}. If no second ruling comes, the first one stands.${result}`);
+      return wait(600, `The ruling was appealed; BrainChain rules again${by}. If no second ruling comes, the first one stands.${result}`);
     case "graded":
       if (task.accepted === true) {
         // The caller has what it paid for, and on a desk task only the model could still dispute, against its own payment.
-        if (result) return { done: true, next: `Jev accepted the work.${result} The payment becomes final when the dispute window closes, ${config.terms.finalAfter} after grading.` };
-        return wait(60, typeof view.resultError === "string" ? "Jev accepted the work, but the result could not be read just now." : "Jev accepted the work; the result is being prepared.");
+        if (result) return { done: true, next: `BrainChain accepted the work.${result} The payment becomes final when the dispute window closes, ${config.terms.finalAfter} after grading.` };
+        return wait(60, typeof view.resultError === "string" ? "BrainChain accepted the work, but the result could not be read just now." : "BrainChain accepted the work; the result is being prepared.");
       }
       if (task.accepted === false) return rejected();
-      return wait(60, "Jev graded the work; the verdict is being recorded.");
+      return wait(60, "BrainChain graded the work; the verdict is being recorded.");
     case "open":
-      return wait(60, `Waiting for Jev to hire a model.${unless("no model is hired")}`);
+      return wait(60, `Waiting for BrainChain to hire a model.${unless("no model is hired")}`);
     case "hired":
       return wait(60, `A model is working on the task.${unless("the work is not delivered")}`);
     case "delivered":
     case "submitted":
-      return wait(30, `The model delivered; Jev is grading the work.${unless("Jev has not graded it")}`);
+      return wait(30, `The model delivered; BrainChain is grading the work.${unless("it is not graded")}`);
   }
   // The order can read posted a moment before the task's status reaches it.
   if (view.state === "posted" && task.status === undefined) return wait(20, "The task is posted; its status shows here shortly.");

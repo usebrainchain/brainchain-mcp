@@ -19,7 +19,7 @@ from agent_framework.openai import OpenAIChatCompletionClient
 
 INSTRUCTIONS = """You hand scoped work to BrainChain, which hires a worker and grades the result.
 Post the user's brief with brainchain_post_task. Then read the task with brainchain_get_task, calling wait with the
-seconds the reply asks for between reads, until done is true or next says Jev did not accept the work.
+seconds the reply asks for between reads, until done is true or next says BrainChain did not accept the work.
 Accepted: report the result and the decision page. Not accepted: report that at once, with the order id. The refund is
 sent when the dispute window closes, hours later, and a read of the order after that gives its transaction.
 If wait says to stop, report where the task stands and its order id. Never post the same brief twice: a reply that

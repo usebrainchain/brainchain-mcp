@@ -72,7 +72,7 @@ describe("grading", () => {
   });
 
   it("treats any reply to a signed payment other than 400 or 402 as possibly charged, with the grade's id", async () => {
-    const { fetchImpl, seen } = fakeDesk(() => new Response(JSON.stringify({ error: "Jev could not grade the work just now." }), { status: 502 }));
+    const { fetchImpl, seen } = fakeDesk(() => new Response(JSON.stringify({ error: "BrainChain could not grade the work just now." }), { status: 502 }));
     const reply = (await desk(fetchImpl).grade(request)) as Record<string, unknown>;
     expect(reply).toMatchObject({ grade: orderIdOf(seen[0]!), possiblyCharged: true });
     expect(reply.error).toMatch(/brainchain_get_grade; do not send it again/);

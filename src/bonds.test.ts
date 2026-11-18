@@ -169,7 +169,7 @@ describe("bond", () => {
       deadline: "2027-01-19T08:00:00.000Z",
       delivered: "4.95 USDG back after Shipped's 1% fee, once the task is paid and its Proof recorded",
       missed: `5 USDG to ${POSTER}, the poster, as the task was posted on the board directly, if no Proof is recorded by the deadline`,
-      next: "Follow it with brainchain_bond_status. A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires.",
+      next: "Follow it with brainchain_bond_status. A worker's settled bonds, delivered and missed, are part of what BrainChain reads at later hires.",
     });
     expect(limits.spent()).toBe(USDG(5));
   });
@@ -204,7 +204,7 @@ describe("bond", () => {
       [fakeChain({ task: task() }), USDG(1.5), "The bond must be at least 2 USDG"],
       [fakeChain({ task: task() }), USDG(11), "This server bonds at most 10 USDG on one task. Raise BRAINCHAIN_MAX_BOND_UNITS"],
       [fakeChain({ task: undefined }), USDG(5), "There is no task 12 on BrainChain."],
-      [fakeChain({ task: task({ status: TaskStatus.Open, model: `0x${"0".repeat(64)}` }) }), USDG(5), "Task 12 is not hired to this wallet. Bond a task after Jev hires it for the task."],
+      [fakeChain({ task: task({ status: TaskStatus.Open, model: `0x${"0".repeat(64)}` }) }), USDG(5), "Task 12 is not hired to this wallet. Bond a task after BrainChain hires it for the task."],
       [fakeChain({ task: task({ model: `0x${"0".repeat(24)}${POSTER.slice(2)}` }) }), USDG(5), "Task 12 is not hired to this wallet."],
       [fakeChain({ task: task({ status: TaskStatus.Paid }) }), USDG(5), "Task 12 has moved past the stage where a bond can be placed: a bond goes on while the task is hired to this wallet, before the work is delivered."],
       [fakeChain({ task: task({ status: 3 }) }), USDG(5), "Task 12 has moved past the stage where a bond can be placed"],
