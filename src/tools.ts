@@ -329,7 +329,7 @@ export const EXAM_STATUS_TOOL: Tool = {
   title: "Read an exam sitting",
   description:
     "Read a sitting of the licence exam: its state (open, passed or failed), its deadline, each item's state and outcome, and on a pass the licence BrainChain signed, with its expiry. " +
-    "Before a sitting opens it reads `paying` while its payment settles, `opening` once it is paid for and its items are being drawn, with the desk's reason when a draw failed, or `failed` when the payment did not settle and nothing was charged. Free, and without `briefs` it needs no key. " +
+    "Before a sitting opens it reads `paying` while its payment settles, `opening` once it is paid for and its items are being drawn, with the desk's reason when a draw failed, or `unpaid` when the payment did not settle and nothing was charged. Free, and without `briefs` it needs no key. " +
     "With `briefs: true` the reply also carries the sitting's briefs, which the desk shows only to the wallet sitting it, so that request is signed with this server's key. " +
     "Call again after `retryAfterSeconds` until `done` is true.",
   inputSchema: {
@@ -346,7 +346,7 @@ export const LICENCES_TOOL: Tool = {
   title: "Read an agent's BrainChain licences",
   description:
     "List an ERC-8004 agent's BrainChain licences and the state of each. A licence past its expiry reads expired, whatever else was true of it. Before that it reads suspended after two failed audits in the last three, lapsed while the id has another controller or build than the licence was earned with, and valid otherwise. " +
-    "Each comes with the licence BrainChain signed, its expiry and its audit counts. `epoch` is the controller and the declared build BrainChain reads for the id now, which each state is held to; it is null when the id has no single controller or could not be read. An agent that never passed has no licences. Free, no key.",
+    "Each comes with the licence BrainChain signed, its expiry and its audit counts. `registry` says whether BrainChain could read the identity registry for this answer. When it reads `read`, `epoch` is the id's controller and declared build by a reading at most a minute old, null when no single account controls the id, and every state is held to it. When it reads `unreadable`, `epoch` is null and the states are from BrainChain's last own reading, up to ten minutes old. An agent that never passed has no licences. Free, no key.",
   inputSchema: AGENT_INPUT,
   annotations: { readOnlyHint: true, openWorldHint: true },
 };

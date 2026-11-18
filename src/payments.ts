@@ -466,8 +466,8 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
    * that request is sent again; otherwise the wallet's signature reads them once the sitting is open.
    */
   function notOpen(sitting: string, view: Record<string, unknown>): Record<string, unknown> {
-    const named = { sitting, statusUrl: `${config.desk}/exams/${sitting}`, state: view.state, payment: view.payment };
-    if (view.state === "failed") return { ...named, done: true, next: "The payment for this sitting did not settle, so nothing was charged and no sitting opens from it. brainchain_sit_exam opens a new one." };
+    const named = { sitting, statusUrl: `${config.desk}/exams/${sitting}`, state: view.state, ...(typeof view.payment === "string" ? { payment: view.payment } : {}) };
+    if (view.state === "unpaid") return { ...named, done: true, next: "The payment for this sitting did not settle, so nothing was charged and no sitting opens from it. brainchain_sit_exam opens a new one." };
     const reason = typeof view.reason === "string" && view.reason.trim() ? view.reason.trim() : undefined;
     const kept = [...unopened.values()].some((paidFor) => paidFor.id === sitting);
     const how = kept
@@ -488,7 +488,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   async function agentsSitting(sitting: string, said: string): Promise<unknown> {
     const read = (await examStatus(sitting, true).catch(() => undefined)) as Record<string, unknown> | undefined;
     if (read && Array.isArray(read.briefs)) return { ...read, duplicate: true };
-    if (read && beforeOpening(read) && read.state !== "failed") return read;
+    if (read && beforeOpening(read) && read.state !== "unpaid") return read;
     throw new Error(said);
   }
 
@@ -813,11 +813,10 @@ type Kind = "task" | "grade" | "exam";
 type Posted = Exclude<Kind, "exam">;
 
 /**
- * Whether the desk is speaking of a sitting it holds a payment for and has not opened: `paying` while the payment
- * settles, `opening` once it is paid, `failed` when the payment did not settle. A sitting that closed without a
- * pass also reads `failed`, so it is the payment's own state beside it that tells the two apart.
+ * Whether the desk is speaking of a sitting it has a payment for and has not opened: `paying` while the payment
+ * settles, `opening` once it is paid, `unpaid` when the payment did not settle.
  */
-const beforeOpening = (view: Record<string, unknown>) => typeof view.payment === "string" && (view.state === "paying" || view.state === "opening" || view.state === "failed");
+const beforeOpening = (view: Record<string, unknown>) => view.state === "paying" || view.state === "opening" || view.state === "unpaid";
 
 /** The headers an x402 payment travels in: version 2's, and version 1's. */
 const PAYMENT_HEADERS = ["payment-signature", "x-payment"];

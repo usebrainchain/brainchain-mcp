@@ -548,7 +548,7 @@ describe("reading a sitting", () => {
     "Through the paid route only the request that paid for the sitting reads its briefs, and this server does not hold that request. " +
     "Once the sitting is open, brainchain_exam_status with briefs: true reads them for the wallet that sits it.";
 
-  it("reads a sitting before it opens by the state the desk gives it: paying, opening or failed", async () => {
+  it("reads a sitting before it opens by the state the desk gives it alone: paying, opening or unpaid", async () => {
     const named = { sitting: SITTING, statusUrl: `${config.desk}/exams/${SITTING}` };
     expect(await reader(() => waiting({ reason: "the pool has no item left to draw" })).d.examStatus(SITTING, false)).toEqual({
       ...named,
@@ -569,15 +569,18 @@ describe("reading a sitting", () => {
         retryAfterSeconds: 30,
       });
     }
-    expect(await reader(() => waiting({ state: "failed", payment: "failed", message: "The payment for this sitting did not settle. Nothing was charged." })).d.examStatus(SITTING, false)).toEqual({
+    expect(await reader(() => waiting({ state: "unpaid", payment: "failed", message: "The payment for this sitting did not settle. Nothing was charged." })).d.examStatus(SITTING, false)).toEqual({
       ...named,
-      state: "failed",
+      state: "unpaid",
       payment: "failed",
       done: true,
       next: "The payment for this sitting did not settle, so nothing was charged and no sitting opens from it. brainchain_sit_exam opens a new one.",
     });
-    // A sitting that closed without a pass reads failed too: it has items and no payment state beside it.
-    const closed = (await reader(() => json(view(SITTING, { state: "failed" }))).d.examStatus(SITTING, false)) as Record<string, unknown>;
+    // The state alone says it: a reply that leaves the payment's own state out reads the same.
+    expect(await reader(() => json({ sitting: SITTING, state: "unpaid" })).d.examStatus(SITTING, false)).toMatchObject({ state: "unpaid", done: true });
+    expect(await reader(() => json({ sitting: SITTING, state: "paying" })).d.examStatus(SITTING, false)).toMatchObject({ state: "paying", done: false });
+    // Failed is only ever a sitting that closed without a pass, whatever else the reply carries.
+    const closed = (await reader(() => json(view(SITTING, { state: "failed", payment: "paid" }))).d.examStatus(SITTING, false)) as Record<string, unknown>;
     expect(closed.next).toMatch(/^Failed, with 0 of 5 accepted/);
   });
 
@@ -672,12 +675,12 @@ describe("the exam and the licences as the desk states them", () => {
   });
 
   it("lists an agent's licences on the chain its id is on, and says when it has none", async () => {
-    const held = { agent: { chainId: 46630, id: "20424" }, epoch: { id: `0x${"cd".repeat(32)}`, controller: signer.address, build: "atlas 2.1" }, licences: [{ class: "code", state: "valid", licence: { licence: { expiresAt: 1_805_184_000 }, signature: "0x01" }, audits: { passed: 1, failed: 0 } }] };
-    const { d, urls } = at({ "/licences/46630/20424": json(held), "/licences/46630/7": json({ agent: { chainId: 46630, id: "7" }, epoch: null, licences: [] }) });
-    // The epoch the states are held to comes with them, as the desk reads it.
+    const held = { agent: { chainId: 46630, id: "20424" }, registry: "read", epoch: { id: `0x${"cd".repeat(32)}`, controller: signer.address, build: "atlas 2.1" }, licences: [{ class: "code", state: "valid", licence: { licence: { expiresAt: 1_805_184_000 }, signature: "0x01" }, audits: { passed: 1, failed: 0 } }] };
+    const { d, urls } = at({ "/licences/46630/20424": json(held), "/licences/46630/7": json({ agent: { chainId: 46630, id: "7" }, registry: "unreadable", epoch: null, licences: [] }) });
+    // Whether the registry was read, and the epoch the states are held to, come with them as the desk says them.
     expect(await d.licences("20424")).toEqual(held);
     expect(urls).toEqual([`${config.desk}/licences/46630/20424`]);
-    expect(await d.licences("7")).toMatchObject({ epoch: null, licences: [], next: "Agent 7 holds no licence. brainchain_exam_info says what a sitting takes, and brainchain_sit_exam opens one." });
+    expect(await d.licences("7")).toMatchObject({ registry: "unreadable", epoch: null, licences: [], next: "Agent 7 holds no licence. brainchain_exam_info says what a sitting takes, and brainchain_sit_exam opens one." });
     await expect(at({}).d.licences("20424")).rejects.toThrow("The licence exam is not open");
   });
 
@@ -802,8 +805,9 @@ describe("the exam tools", () => {
     expect(sit).toContain("An agent that already has a sitting gets that sitting in place of a second one: with its briefs, marked duplicate, when it is open and this wallet sits it, or with where it stands when it is paid for and not open yet.");
     expect(sit).toContain("Past that the reply says to call again after retryAfterSeconds, and nothing was signed.");
     expect(sit).toContain("A server that was restarted no longer holds that request. Its reply then names the sitting that is paid for, and brainchain_exam_status with briefs: true reads the briefs once that sitting is open.");
-    expect(EXAM_STATUS_TOOL.description).toContain("Before a sitting opens it reads `paying` while its payment settles, `opening` once it is paid for and its items are being drawn, with the desk's reason when a draw failed, or `failed` when the payment did not settle and nothing was charged.");
-    expect(LICENCES_TOOL.description).toContain("`epoch` is the controller and the declared build BrainChain reads for the id now, which each state is held to; it is null when the id has no single controller or could not be read.");
+    expect(EXAM_STATUS_TOOL.description).toContain("Before a sitting opens it reads `paying` while its payment settles, `opening` once it is paid for and its items are being drawn, with the desk's reason when a draw failed, or `unpaid` when the payment did not settle and nothing was charged.");
+    expect(LICENCES_TOOL.description).toContain("`registry` says whether BrainChain could read the identity registry for this answer.");
+    expect(LICENCES_TOOL.description).toContain("When it reads `unreadable`, `epoch` is null and the states are from BrainChain's last own reading, up to ten minutes old.");
     // A licence's states in the order the desk reads them: an expiry first, whatever else was true.
     expect(LICENCES_TOOL.description).toContain("A licence past its expiry reads expired, whatever else was true of it. Before that it reads suspended after two failed audits in the last three, lapsed while");
     expect(sitExamTool("BRAINCHAIN_NETWORK must be mainnet or testnet.").description).toMatch(/^Invalid setting: BRAINCHAIN_NETWORK must be mainnet or testnet\. Until the operator fixes it, this tool only returns that error\. Open a sitting/);
