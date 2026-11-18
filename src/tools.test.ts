@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { formatUnits, resolveConfig } from "./config.js";
-import { CustodyError } from "./custody.js";
+import { CustodyError, type CustodyToken } from "./custody.js";
 import { ChainError, STILL_READING } from "./history.js";
 import type { MakerBoard } from "./makers.js";
 import { bondsClosed, type Bonds } from "./bonds.js";
@@ -19,6 +19,11 @@ const desk: Desk = {
 function body(result: Awaited<ReturnType<typeof callTool>>): unknown {
   return JSON.parse((result.content[0] as { text: string }).text);
 }
+
+/** BitGo's lists, for a test that sends no symbol: one that does gets told so instead of reading GitHub. */
+const noLookup = async (): Promise<never> => {
+  throw new Error("This test looks nothing up.");
+};
 
 describe("bond tools", () => {
   const bonds: Bonds = {
@@ -495,7 +500,7 @@ describe("market maker holdings", () => {
   const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
   const WALLET = "0xB97e4298c7F5f55360d207a6196125376675B3eA";
   const board: MakerBoard = { chain: "Robinhood Chain", token: { contract: CASHCAT, decimals: 18, totalSupply: "1000000000" }, readAt: "2026-11-16T14:40:50.000Z", wallets: [] };
-  const call = (args: unknown, makers: (token: string, wallet?: string) => Promise<MakerBoard>) => callTool(desk, "brainchain_market_maker_holdings", args, undefined, undefined, undefined, { makers });
+  const call = (args: unknown, makers: (token: string, wallet?: string) => Promise<MakerBoard>) => callTool(desk, "brainchain_market_maker_holdings", args, undefined, undefined, undefined, { makers, listed: noLookup });
 
   it("serves the board without a desk or a key, for the wallets it knows unless given another", async () => {
     const asked: [string, string | undefined][] = [];
@@ -518,9 +523,8 @@ describe("market maker holdings", () => {
       [undefined, "token is required."],
       [{ token: 4663 }, "token must be a string, not a number."],
       [{ token: " " }, "token is empty."],
-      [{ token: "cashcat" }, shape("token")],
-      [{ token: "hoodeth:cashcat" }, shape("token")],
       [{ token: CASHCAT.slice(0, -1) }, shape("token")],
+      [{ token: "0xcashcat" }, shape("token")],
       [{ token: `${CASHCAT}0` }, shape("token")],
       [{ token: CASHCAT.replace("0x", "") }, shape("token")],
       [{ token: CASHCAT.replace("bfC", "bFc") }, checksum("token")],
@@ -601,7 +605,7 @@ describe("market maker holdings", () => {
 describe("token readiness", () => {
   const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
   const board = { chain: "Robinhood Chain" as const, token: { contract: CASHCAT as `0x${string}` }, readAt: "2026-11-16T21:00:00.000Z", deployed: false };
-  const call = (args: unknown, readiness: (token: string) => Promise<typeof board>) => callTool(desk, "brainchain_token_readiness", args, undefined, undefined, undefined, { readiness });
+  const call = (args: unknown, readiness: (token: string) => Promise<typeof board>) => callTool(desk, "brainchain_token_readiness", args, undefined, undefined, undefined, { readiness, listed: noLookup });
 
   it("serves the board without a desk or a key, for the address as its checksum writes it", async () => {
     const asked: string[] = [];
@@ -618,7 +622,7 @@ describe("token readiness", () => {
     const read = async () => (reads++, board);
     for (const [args, said] of [
       [{}, "token is required."],
-      [{ token: "CASHCAT" }, "token must be an address on Robinhood Chain: 0x followed by 40 hex characters."],
+      [{ token: "0xCASHCAT" }, "token must be an address on Robinhood Chain: 0x followed by 40 hex characters."],
       [{ token: CASHCAT, wallet: CASHCAT }, "Unknown field: wallet. This tool takes only token."],
     ] as const) {
       const result = await call(args, read);
@@ -644,7 +648,7 @@ describe("token readiness", () => {
 describe("token sightings", () => {
   const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
   const board = { chain: "Robinhood Chain" as const, token: { contract: CASHCAT as `0x${string}` }, readAt: "2026-11-16T22:00:00.000Z", lists: [], exchanges: [], robinhood: [], unread: [] };
-  const call = (args: unknown, sightings: (token: string) => Promise<typeof board>) => callTool(desk, "brainchain_token_sightings", args, undefined, undefined, undefined, { sightings });
+  const call = (args: unknown, sightings: (token: string) => Promise<typeof board>) => callTool(desk, "brainchain_token_sightings", args, undefined, undefined, undefined, { sightings, listed: noLookup });
 
   it("serves the board without a desk or a key, and refuses what is not an address before reading anything", async () => {
     const asked: string[] = [];
@@ -652,7 +656,7 @@ describe("token sightings", () => {
     expect(body(await call({ token: CASHCAT.toLowerCase() }, read))).toEqual(board);
     for (const [args, said] of [
       [{}, "token is required."],
-      [{ token: "CASHCAT" }, "token must be an address on Robinhood Chain: 0x followed by 40 hex characters."],
+      [{ token: "0xCASHCAT" }, "token must be an address on Robinhood Chain: 0x followed by 40 hex characters."],
       [{ token: CASHCAT, symbol: "CASHCAT" }, "Unknown field: symbol. This tool takes only token."],
     ] as const) {
       const result = await call(args, read);
@@ -672,5 +676,93 @@ describe("token sightings", () => {
       expect(result.isError).toBe(true);
       expect(body(result)).toEqual({ error: said });
     }
+  });
+});
+
+describe("a token by symbol", () => {
+  const RLUSD = "0x8d58C0C60B8D6b88Fa98B291a646dB34d0F98258";
+  const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
+  const TWIN = "0x0000000000000000000000000000000000000Ca7";
+  // BitGo's own ids and names, as its lists held them on 2026-11-18; the second Cash Cat is made up.
+  const LISTED: CustodyToken[] = [
+    { id: "hoodeth:rlusd", name: "Ripple USD", contract: RLUSD, decimals: 18 },
+    { id: "hoodeth:cashcat", name: "Cash Cat", contract: CASHCAT, decimals: 18 },
+    { id: "hoodeth:tsla", name: "Tesla • Robinhood", contract: "0x322F0c7BE2B2Aa2d1E4f0F6F3fAAB0C7C3E00DDc" as `0x${string}`, decimals: 18 },
+  ];
+  const twins: CustodyToken[] = [...LISTED, { id: "hoodeth:cashcat2", name: "Cash Cat", contract: TWIN, decimals: 18 }];
+  const boards = { makers: { chain: "Robinhood Chain", token: { contract: RLUSD }, readAt: "x", wallets: [] }, readiness: { chain: "Robinhood Chain", deployed: true }, sightings: { chain: "Robinhood Chain", lists: [] } };
+  const tools = [
+    ["brainchain_market_maker_holdings", "makers"],
+    ["brainchain_token_readiness", "readiness"],
+    ["brainchain_token_sightings", "sightings"],
+  ] as const;
+
+  it("reads the one token a symbol, an id or a name stands for, and says which contract it was", async () => {
+    for (const [name, reader] of tools) {
+      for (const [asked, id, contract] of [
+        ["RLUSD", "hoodeth:rlusd", RLUSD],
+        ["$rlusd", "hoodeth:rlusd", RLUSD],
+        ["hoodeth:rlusd", "hoodeth:rlusd", RLUSD],
+        ["  ripple   USD ", "hoodeth:rlusd", RLUSD],
+        ["TSLA", "hoodeth:tsla", LISTED[2]!.contract],
+      ] as const) {
+        const read: string[] = [];
+        const result = await callTool(desk, name, { token: asked }, undefined, undefined, undefined, { [reader]: async (token: string) => (read.push(token), boards[reader]), listed: async () => LISTED });
+        expect(result.isError, `${name} ${asked}`).toBe(false);
+        expect(read).toEqual([contract]);
+        const answer = body(result) as Record<string, unknown>;
+        expect(Object.keys(answer)[0]).toBe("lookup");
+        expect(answer.lookup).toEqual({ asked: asked.trim(), id, name: LISTED.find((token) => token.id === id)!.name, contract });
+        expect(answer).toMatchObject(boards[reader]);
+      }
+    }
+  });
+
+  it("lists the tokens a symbol several go by, and reads none of them", async () => {
+    for (const [name, reader] of tools) {
+      let reads = 0;
+      const result = await callTool(desk, name, { token: "cash cat" }, undefined, undefined, undefined, { [reader]: async () => (reads++, boards[reader]), listed: async () => twins });
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({
+        error: '2 tokens on BitGo\'s lists for Robinhood Chain go by "cash cat", so nothing was read. Pass the contract address of the one you mean, from `candidates`.',
+        candidates: [twins[1], twins[3]],
+      });
+      expect(reads).toBe(0);
+    }
+  });
+
+  it("says so when no token goes by the symbol, or BitGo gives the one that does no contract", async () => {
+    for (const [name, reader] of tools) {
+      let reads = 0;
+      const ask = (token: string, listed: () => Promise<CustodyToken[]>) => callTool(desk, name, { token }, undefined, undefined, undefined, { [reader]: async () => (reads++, boards[reader]), listed });
+      expect(body(await ask("DOGE", async () => LISTED))).toEqual({ error: 'No token on BitGo\'s lists for Robinhood Chain has the id or name "DOGE". Pass the token\'s contract address instead.' });
+      expect(body(await ask("deed", async () => [{ id: "hoodeth:deed" }]))).toEqual({ error: "BitGo lists hoodeth:deed in a form this tool does not read, so it has no contract address for it. Pass the token's contract address instead." });
+      expect(body(await ask("x".repeat(81), async () => LISTED))).toEqual({ error: "token must be a contract address on Robinhood Chain, or a symbol or name of one line and at most 80 characters." });
+      expect(body(await ask("Cash\nCat", async () => LISTED))).toEqual({ error: "token must be a contract address on Robinhood Chain, or a symbol or name of one line and at most 80 characters." });
+      expect(reads).toBe(0);
+    }
+  });
+
+  it("passes on why BitGo's lists could not be read, and looks nothing up for an address", async () => {
+    const said = [
+      [new TypeError("fetch failed"), "BitGo's code on GitHub could not be read just now to look up the symbol: fetch failed. Pass the token's contract address, or try again in a minute."],
+      [new CustodyError("GitHub is temporarily refusing requests from this IP address. Try again in a minute."), "GitHub is temporarily refusing requests from this IP address. Try again in a minute."],
+    ] as const;
+    for (const [name, reader] of tools) {
+      for (const [error, message] of said) {
+        const result = await callTool(desk, name, { token: "RLUSD" }, undefined, undefined, undefined, { [reader]: async () => boards[reader], listed: async () => Promise.reject(error) });
+        expect(body(result)).toEqual({ error: message });
+      }
+      const result = await callTool(desk, name, { token: RLUSD.toLowerCase() }, undefined, undefined, undefined, { [reader]: async () => boards[reader], listed: noLookup });
+      expect(result.isError).toBe(false);
+      expect(body(result)).not.toHaveProperty("lookup");
+    }
+  });
+
+  it("checks the rest of a market maker call before it looks a symbol up", async () => {
+    let lookups = 0;
+    const result = await callTool(desk, "brainchain_market_maker_holdings", { token: "RLUSD", atBlock: -1 }, undefined, undefined, undefined, { listed: async () => (lookups++, LISTED) });
+    expect(body(result)).toEqual({ error: "atBlock must be a block number: a whole number from 0." });
+    expect(lookups).toBe(0);
   });
 });

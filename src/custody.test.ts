@@ -10,10 +10,12 @@ import {
   CustodyError,
   KEEP_MS,
   listChanges,
+  listedTokens,
   MAX_DAYS,
   MAX_KEPT,
   MAX_PAGES,
   MOVED,
+  named,
   PAGE,
   REFUSED_MS,
   TOKEN_LISTS,
@@ -431,6 +433,50 @@ describe("custodyAdditions", () => {
     await expect(custodyAdditions(naming(tokenListOf(["usdg"]), { tokens: new Map(), mentioned: new Set(["cashcat"]) }), 30, NOW)).rejects.toStrictEqual(new CustodyError(MOVED));
     // The generated list also holds entries for other chains, and one of those may point at a Robinhood Chain token the other list holds.
     await expect(custodyAdditions(naming(tokenListOf(["usdg", "cashcat"]), { tokens: new Map(), mentioned: new Set(["cashcat"]) }), 30, NOW)).resolves.toMatchObject({ additions: [] });
+  });
+});
+
+describe("listedTokens", () => {
+  it("gives every token on both lists at master's newest commit, from one page of changes", async () => {
+    const { reader, reads } = master(OPENING, [
+      { at: "2026-06-01T00:00:00Z", lists: { [EDITED]: ["usdg", "cashcat"], [GENERATED]: [] } },
+      { at: "2026-08-01T00:00:00Z", lists: { [EDITED]: ["usdg", "cashcat"], [GENERATED]: ["ansemcat"] } },
+    ]);
+    expect(await listedTokens(reader)).toEqual([answered("usdg"), answered("cashcat"), answered("ansemcat")]);
+    expect(reads.sort()).toEqual(["changes 1", "edited 2", "generated 2"]);
+  });
+
+  it("says BitGo moved when master has no changes or the lists hold nothing", async () => {
+    await expect(listedTokens({ changes: async () => ({ changes: [], readAt: 0 }), list: async () => tokenListOf(["usdg"]) })).rejects.toStrictEqual(new CustodyError(MOVED));
+    await expect(listedTokens(master({ [EDITED]: [], [GENERATED]: [] }, [{ at: "2026-08-01T00:00:00Z", lists: { [EDITED]: [], [GENERATED]: [] } }]).reader)).rejects.toStrictEqual(new CustodyError(MOVED));
+  });
+});
+
+describe("named", () => {
+  const tokens = [
+    { id: "hoodeth:rlusd", name: "Ripple USD" },
+    { id: "hoodeth:tsla", name: "Tesla • Robinhood" },
+    { id: "hoodeth:cashcat", name: "Cash Cat" },
+    { id: "hoodeth:cat", name: "CASHCAT" },
+    { id: "hoodeth:deed" },
+  ];
+  const ids = (asked: string) => named(tokens, asked).map(({ id }) => id);
+
+  it("matches BitGo's id, with or without hoodeth:, and BitGo's name, in any case and spacing", () => {
+    expect(ids("RLUSD")).toEqual(["hoodeth:rlusd"]);
+    expect(ids("$rlusd")).toEqual(["hoodeth:rlusd"]);
+    expect(ids("HOODETH:RLUSD")).toEqual(["hoodeth:rlusd"]);
+    expect(ids(" ripple\tusd ")).toEqual(["hoodeth:rlusd"]);
+    expect(ids("ＴＳＬＡ")).toEqual(["hoodeth:tsla"]);
+    expect(ids("deed")).toEqual(["hoodeth:deed"]);
+  });
+
+  it("matches whole words only, and every token that goes by them", () => {
+    expect(ids("Tesla")).toEqual([]);
+    expect(ids("rlus")).toEqual([]);
+    expect(ids("cashcat")).toEqual(["hoodeth:cashcat", "hoodeth:cat"]);
+    expect(ids("")).toEqual([]);
+    expect(ids("$")).toEqual([]);
   });
 });
 

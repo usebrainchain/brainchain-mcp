@@ -225,6 +225,31 @@ export async function custodyAdditions(reader: BitGoReader, period: number | Dat
   };
 }
 
+/** Every Robinhood Chain token on BitGo's lists as master stands now. */
+export async function listedTokens(reader: BitGoReader): Promise<CustodyToken[]> {
+  const { changes } = await reader.changes();
+  if (!changes[0]) throw new CustodyError(MOVED);
+  const held = await tokensAt(reader, changes[0].after);
+  if (held.size === 0) throw new CustodyError(MOVED);
+  return [...held].map(([id, token]) => ({ id: `hoodeth:${id}`, ...token }));
+}
+
+/** The input of the tools that take a token. */
+export const TOKEN_INPUT = { type: "string", description: "The token's contract address on Robinhood Chain, 0x followed by 40 hex characters, or its symbol or name as BitGo lists it, such as RLUSD." } as const;
+
+/** How the tools that take a token say they take a symbol too. */
+export const BY_SYMBOL =
+  "`token` can also be a symbol or name, such as RLUSD or Ripple USD, looked up on BitGo's lists for Robinhood Chain: when exactly one token goes by it, `lookup` in the answer names the `contract` it stands for, and when several do, the answer lists them as `candidates` and reads nothing more. ";
+
+const fold = (text: string) => text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+
+/** The tokens `asked` names, by BitGo's id with or without `hoodeth:`, or by BitGo's name, in any case and with or without a leading `$`. */
+export function named(tokens: readonly CustodyToken[], asked: string): CustodyToken[] {
+  const wanted = fold(asked.replace(/^\$/, ""));
+  if (!wanted) return [];
+  return tokens.filter(({ id, name }) => [id, id.slice("hoodeth:".length), ...(name ? [name] : [])].some((key) => fold(key) === wanted));
+}
+
 const SHA = /^[0-9a-f]{40}$/;
 const NOT_CHANGES = "GitHub's answer was not a list of changes to a branch.";
 
@@ -356,6 +381,11 @@ export async function within<T>(ms: number, work: Promise<T>, late: Error): Prom
 }
 
 let reader: BitGoReader | undefined;
+
+export function readListedTokens(): Promise<CustodyToken[]> {
+  reader ??= bitGoReader();
+  return within(ANSWER_MS, listedTokens(reader), new CustodyError("BitGo's code on GitHub is taking too long to read. Try again in a minute."));
+}
 
 /** `period` is a number of days back, or the time the period starts. */
 export function readCustodyAdditions(period: number | Date): Promise<CustodyBoard> {

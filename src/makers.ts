@@ -1,6 +1,7 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { formatUnits, getAddress, isAddress, isAddressEqual, parseAbiItem, type Address } from "viem";
 
+import { BY_SYMBOL, TOKEN_INPUT } from "./custody.js";
 import {
   blockOf,
   blockTime,
@@ -112,6 +113,7 @@ export function makersTool(configured: readonly MakerWallet[] = []): Tool {
       "Wintermute's trading contract first approved Cash Cat on August 5, 2026, and Robinhood listed that token on August 6, 2026. " +
       "A first approval is a lead to look into: it does not say why the market maker wants the token, and it does not mean an exchange will list it. " +
       "Pass the token's contract address as `token`; the `contract` of an entry from brainchain_custody_additions works. " +
+      BY_SYMBOL +
       "The tool follows five wallets at three firms: Wintermute's trading contract at 0x51C72848c68a965f66FA7a88855F9f7784502a7F, two more Wintermute wallets, one B2C2 wallet and one Galaxy Digital wallet. " +
       "Etherscan tags the contract's address as a market maker and Arkham attributes it to Wintermute. The other four are plain wallets with a public name tag on Etherscan, which each entry repeats as `tag`. " +
       added(configured) +
@@ -142,7 +144,7 @@ export function makersTool(configured: readonly MakerWallet[] = []): Tool {
     inputSchema: {
       type: "object",
       properties: {
-        token: { type: "string", description: "The token's contract address on Robinhood Chain: 0x followed by 40 hex characters." },
+        token: TOKEN_INPUT,
         wallet: { type: "string", description: "Optional: the address of another wallet or contract to read instead of the wallets the tool follows." },
         atBlock: { type: "integer", minimum: 0, description: "Optional: a block number. The balances are those at the end of that block, added up from the token's transfers." },
         at: { type: "string", description: "Optional, in place of atBlock: a time in ISO 8601, such as 2026-11-01T00:00:00Z. The balances are those at the last block made at or before it." },
