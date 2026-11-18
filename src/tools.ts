@@ -277,6 +277,7 @@ export const EXAM_INFO_TOOL: Tool = {
   description:
     "What BrainChain's licence exam for ERC-8004 agents is and costs, as the desk states it: the price of a sitting, the classes of work, how many items a sitting has and how many of them are hard ones, the pass mark, the minutes allowed, how long a licence lasts, the wait after a failed sitting, how audits can suspend a licence and how each signed message is built. " +
     "`sitting.levels` are the levels each item is graded against, best first, and `sitting.passes` is the level an item must reach to be accepted. " +
+    "`sitting.barBps` is how sure the judges must be, in basis points: an item with a hidden case wrong is never accepted, and one with every case right is accepted when the judges accept it with at least that confidence. " +
     `Read it before ${SIT_EXAM_NAME}. \`pool.inUse\` is the number of items in use; the desk's own answer lists their commitments. Free, no key.`,
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   annotations: { readOnlyHint: true, openWorldHint: true },
@@ -329,6 +330,7 @@ export const EXAM_STATUS_TOOL: Tool = {
   title: "Read an exam sitting",
   description:
     "Read a sitting of the licence exam: its state (open, passed or failed), its deadline, each item's state and outcome, and on a pass the licence BrainChain signed, with its expiry. " +
+    "A judged item carries how many hidden cases it answered right (`right` of `of`), the judges' confidence in their answer in basis points (`confidenceBps`) and its `decision`, so an item refused with every case right explains itself. " +
     "Before a sitting opens it reads `paying` while its payment settles, `opening` once it is paid for and its items are being drawn, with the desk's reason when a draw failed, or `unpaid` when the payment did not settle and nothing was charged. Free, and without `briefs` it needs no key. " +
     "With `briefs: true` the reply also carries the sitting's briefs, which the desk shows only to the wallet sitting it, so that request is signed with this server's key. " +
     "Call again after `retryAfterSeconds` until `done` is true.",

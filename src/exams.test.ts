@@ -540,6 +540,14 @@ describe("reading a sitting", () => {
     expect(passed.next).toBe("Passed, with 4 of 5 accepted. The licence is in licence. It is valid until 2100-03-02T00:00:00Z, for as long as the agent's id keeps its controller and its build.");
     const failed = (await reader(() => json(view(SITTING, { state: "failed", items: judged(3) }))).d.examStatus(SITTING, false)) as Record<string, unknown>;
     expect(failed).toMatchObject({ done: true, next: "Failed, with 3 of 5 accepted, and a pass takes 4. brainchain_exam_info says how long the agent waits before it may sit again." });
+    // An item refused with every hidden case right comes with the judges' confidence, and the reply says so in words.
+    const doubted = judged(3).map((item, i) => (i === 3 ? { ...item, right: 18, of: 18, confidenceBps: 4900, decision: "886" } : i === 4 ? { ...item, right: 17, of: 18, confidenceBps: 9900 } : item));
+    const refused = (await reader(() => json(view(SITTING, { state: "failed", items: doubted }))).d.examStatus(SITTING, false)) as { items: Record<string, unknown>[]; next: string };
+    expect(refused.items[3]).toMatchObject({ accepted: false, right: 18, of: 18, confidenceBps: 4900, decision: "886" });
+    expect(refused.next).toBe(
+      "Failed, with 3 of 5 accepted, and a pass takes 4. brainchain_exam_info says how long the agent waits before it may sit again. Item 3 answered every hidden case right and was not accepted: the judges were 49% sure of their answer.",
+    );
+    expect(EXAM_STATUS_TOOL.description).toContain("the judges' confidence in their answer in basis points (`confidenceBps`)");
   });
 
   const drawing = "The sitting is paid for and its items are being drawn. Send the request that paid for it again to read it; it is not charged twice.";
@@ -652,6 +660,7 @@ describe("the exam and the licences as the desk states them", () => {
       passMark: 4,
       levels: ["Returns the right answer on every hidden case, with clear code", "Returns the right answer on every hidden case", "Returns a wrong answer on a hidden case"],
       passes: "Returns the right answer on every hidden case",
+      barBps: 5000,
       minutes: 120,
       licenceDays: 60,
       waitAfterFailingDays: 7,
@@ -670,7 +679,8 @@ describe("the exam and the licences as the desk states them", () => {
   it("returns the exam as the desk describes it, with the items in use counted", async () => {
     // The hard items, the levels and the level an item must reach come through as the desk states them.
     expect(await at({ "/exams": json(info) }).d.examInfo()).toEqual({ ...info, pool: { usesPerItem: 3, inUse: 2, retired: 4 } });
-    for (const field of ["`sitting.levels`", "`sitting.passes`", "how many of them are hard ones"]) expect(EXAM_INFO_TOOL.description).toContain(field);
+    for (const field of ["`sitting.levels`", "`sitting.passes`", "`sitting.barBps`", "how many of them are hard ones"]) expect(EXAM_INFO_TOOL.description).toContain(field);
+    expect(EXAM_INFO_TOOL.description).toContain("an item with a hidden case wrong is never accepted, and one with every case right is accepted when the judges accept it with at least that confidence");
     await expect(at({}).d.examInfo()).rejects.toThrow(`The licence exam is not open at ${config.desk}.`);
   });
 
