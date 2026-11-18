@@ -8,6 +8,7 @@ import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, within, type CustodyBoard, type CustodyToken } from "./custody.js";
 import type { SymbolRow } from "./dataset/format.js";
 import { datasetReader, DatasetError, type Dataset, type DatasetRef } from "./dataset/published.js";
+import { RECORD_PAGE } from "./exams.js";
 import { blockOf, ChainError, inTurn, tokenFacts, type Moment } from "./history.js";
 import { MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
 import { MARKET_CAP_NAME, MARKET_CAP_TOOL, readMarketCap, type MarketCapBoard } from "./marketcap.js";
@@ -25,6 +26,8 @@ export interface Terms {
   cost: string;
   /** The same for a grade, for example "0.25 USDG". */
   gradeCost: string;
+  /** The most this server pays in one run, which the price of an exam sitting has to fit, for example "10 USDG". */
+  budget: string;
   /** Set when BRAINCHAIN_MAX_PRICE_UNITS is under the desk's price: why posts, and grades if their price is above it too, are refused. */
   refuses?: { task?: string; grade?: string };
   /** Where the payment is taken and refunds land, for example "Robinhood Chain". */
@@ -45,8 +48,14 @@ export const BOND_TASK_NAME = "brainchain_bond_task";
 export const BOND_STATUS_NAME = "brainchain_bond_status";
 export const GRADE_NAME = "brainchain_grade";
 export const GET_GRADE_NAME = "brainchain_get_grade";
-/** The desk's cap on a delivered result sent for a grade. */
+/** The desk's cap on a delivered result sent for a grade, and on the work for one item of an exam sitting. */
 export const MAX_RESULT_BYTES = 100_000;
+export const EXAM_INFO_NAME = "brainchain_exam_info";
+export const SIT_EXAM_NAME = "brainchain_sit_exam";
+export const EXAM_SUBMIT_NAME = "brainchain_exam_submit";
+export const EXAM_STATUS_NAME = "brainchain_exam_status";
+export const LICENCES_NAME = "brainchain_licences";
+export const AGENT_RECORD_NAME = "brainchain_agent_record";
 
 /** What a length in UTF-16 units, which the desk counts in, means to someone writing a brief. */
 const UNITS = "most characters take one, an emoji two or more";
@@ -235,10 +244,129 @@ export const GET_TASK_TOOL: Tool = {
   annotations: { readOnlyHint: true, openWorldHint: true },
 };
 
+const AGENT_ID = {
+  type: "string",
+  pattern: "^(0|[1-9][0-9]{0,19})$",
+  description: "The agent's ERC-8004 id, a whole number written as a string, such as \"20424\". It is read on Robinhood Chain, or on Robinhood Chain testnet when this server runs on testnet.",
+} as const;
+const SITTING_ID = { type: "string", pattern: "^0x[0-9a-fA-F]{64}$", description: `Sitting id returned by ${SIT_EXAM_NAME}.` } as const;
+const SIT_EXAM_INPUT: Tool["inputSchema"] = {
+  type: "object",
+  properties: {
+    agentId: AGENT_ID,
+    class: { type: "string", pattern: "^[a-z][a-z0-9-]{0,31}$", description: `Optional: the class of work to be examined in, one of those ${EXAM_INFO_NAME} lists. "code" when left out.` },
+  },
+  required: ["agentId"],
+  additionalProperties: false,
+};
+const EXAM_SUBMIT_INPUT: Tool["inputSchema"] = {
+  type: "object",
+  properties: {
+    sitting: SITTING_ID,
+    item: { type: "integer", minimum: 0, maximum: 9, description: "The item's index, as the sitting lists it, from 0." },
+    text: { type: "string", minLength: 1, description: "The finished work for the item, at most 100,000 bytes. For the code class, one Python code block that defines the function the brief asks for." },
+  },
+  required: ["sitting", "item", "text"],
+  additionalProperties: false,
+};
+const AGENT_INPUT: Tool["inputSchema"] = { type: "object", properties: { agentId: AGENT_ID }, required: ["agentId"], additionalProperties: false };
+
+export const EXAM_INFO_TOOL: Tool = {
+  name: EXAM_INFO_NAME,
+  title: "Read BrainChain's licence exam",
+  description:
+    "What BrainChain's licence exam for ERC-8004 agents is and costs, as the desk states it: the price of a sitting, the classes of work, how many items a sitting has, the pass mark, the minutes allowed, how long a licence lasts, the wait after a failed sitting, how audits can suspend a licence and how each signed message is built. " +
+    `Read it before ${SIT_EXAM_NAME}. \`pool.inUse\` is the number of items in use; the desk's own answer lists their commitments. Free, no key.`,
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  annotations: { readOnlyHint: true, openWorldHint: true },
+};
+
+/** Sitting the exam: the one paid tool whose price can be above the limit per payment, so it says how far that limit moves. */
+export function sitExamTool(terms: Terms | string): Tool {
+  const about =
+    `Open a sitting of BrainChain's licence exam for an ERC-8004 agent. This server's wallet signs the request, so it must hold the agent's id on Robinhood Chain (Robinhood Chain testnet on testnet), as the id's controller or as its registered wallet. ` +
+    `A sitting draws its items when it opens, each a brief that asks for one piece of work, with one deadline for all of them. Enough accepted items is a pass, and a pass is a licence BrainChain signs. ${EXAM_INFO_NAME} gives the counts, the pass mark, the time allowed and the price. ` +
+    `Nothing is refunded, whatever the outcome. `;
+  return {
+    name: SIT_EXAM_NAME,
+    title: "Sit BrainChain's licence exam",
+    description:
+      typeof terms === "string"
+        ? `${invalidSetting(terms)}${about}`
+        : (terms.problem ? invalidSetting(terms.problem) : "") +
+          about +
+          `The tool reads the price from the desk and pays exactly that from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. The price can be above this server's limit per payment (BRAINCHAIN_MAX_PRICE_UNITS), so for this one call that limit is set to the price the desk states, and no further. ` +
+          `The payment counts against the budget and the daily limit, and a price above this server's budget of ${terms.budget} per run is refused with nothing charged. ` +
+          `If the desk refuses the sitting, for example because the wallet does not hold the id, a sitting is already open, a licence is still valid or a failed sitting is too recent, the reply is the desk's own reason and nothing was charged. ` +
+          `Returns the sitting id, the deadline and the briefs. Deliver each item with ${EXAM_SUBMIT_NAME} and follow the sitting with ${EXAM_STATUS_NAME}. ` +
+          `A reply that carries no briefs means the sitting is paid for and the desk has not opened it yet: call this tool again with the same agentId and class. While this server keeps running, that sends the same request with the same payment, which the desk does not charge twice.`,
+    inputSchema: SIT_EXAM_INPUT,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  };
+}
+
+/** Delivering an item needs the key and nothing else, so only a key that cannot be used stops it. */
+export function examSubmitTool(invalid?: string): Tool {
+  return {
+    name: EXAM_SUBMIT_NAME,
+    title: "Deliver one item of an exam sitting",
+    description:
+      (invalid ? invalidSetting(invalid) : "") +
+      `Deliver the work for one item of a sitting opened with ${SIT_EXAM_NAME}. This server's wallet signs it, and the desk takes it only from the wallet that opened the sitting. ` +
+      `An item takes one delivery: once sent, the work cannot be replaced or sent again, so send only finished work, before the sitting's deadline. ` +
+      `Free. Returns the item's state; read its outcome with ${EXAM_STATUS_NAME}.`,
+    inputSchema: EXAM_SUBMIT_INPUT,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  };
+}
+
+export const EXAM_STATUS_TOOL: Tool = {
+  name: EXAM_STATUS_NAME,
+  title: "Read an exam sitting",
+  description:
+    "Read a sitting of the licence exam: its state (open, passed or failed), its deadline, each item's state and outcome, and on a pass the licence BrainChain signed, with its expiry. Free, and without `briefs` it needs no key. " +
+    "With `briefs: true` the reply also carries the sitting's briefs, which the desk shows only to the wallet sitting it, so that request is signed with this server's key. " +
+    "Call again after `retryAfterSeconds` until `done` is true.",
+  inputSchema: {
+    type: "object",
+    properties: { sitting: SITTING_ID, briefs: { type: "boolean", description: "Optional: true to read the briefs again, signed with this server's key." } },
+    required: ["sitting"],
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: true, openWorldHint: true },
+};
+
+export const LICENCES_TOOL: Tool = {
+  name: LICENCES_NAME,
+  title: "Read an agent's BrainChain licences",
+  description:
+    "List an ERC-8004 agent's BrainChain licences and the state of each: valid, expired, suspended (two failed audits in the last three) or lapsed (the id has another controller or build than the licence was earned with). " +
+    "Each comes with the licence BrainChain signed, its expiry and its audit counts. An agent that never passed has none. Free, no key.",
+  inputSchema: AGENT_INPUT,
+  annotations: { readOnlyHint: true, openWorldHint: true },
+};
+
+export const AGENT_RECORD_TOOL: Tool = {
+  name: AGENT_RECORD_NAME,
+  title: "Read an agent's record on BrainChain",
+  description:
+    `Read what BrainChain has on record for an ERC-8004 agent. \`record\` has the signed head of the agent's numbered record and its first ${RECORD_PAGE} entries: tasks, exam sittings and audits, each accepted, rejected or undelivered, with \`next\` naming where the rest is. ` +
+    "`papers` sums up the agent's Papers, the file BrainChain signs for it: the epoch its id is in now (its controller and declared build), its licences, and its ceiling, the most it may hold in flight, counted in units of a 6-decimal dollar token. " +
+    "`verify` is the command that checks the whole record end to end, from its first entry to the signed head: `npx brainchain-verify <network> --record <agentId>`. Free, no key.",
+  inputSchema: AGENT_INPUT,
+  annotations: { readOnlyHint: true, openWorldHint: true },
+};
+
 export interface TaskRequest {
   title: string;
   brief: string;
   levels: string[];
+}
+
+/** A sitting of the licence exam, for an agent whose id the paying wallet holds. */
+export interface SittingRequest {
+  agentId: string;
+  class: string;
 }
 
 /** Work delivered somewhere else, sent for Jev's verdict against the brief it answered. */
@@ -255,6 +383,12 @@ export interface Desk {
   get(order: string): Promise<unknown>;
   grade(request: GradeRequest): Promise<unknown>;
   getGrade(id: string): Promise<unknown>;
+  examInfo(): Promise<unknown>;
+  sit(request: SittingRequest): Promise<unknown>;
+  submitExam(sitting: string, item: number, text: string): Promise<unknown>;
+  examStatus(sitting: string, briefs: boolean): Promise<unknown>;
+  licences(agentId: string): Promise<unknown>;
+  agentRecord(agentId: string): Promise<unknown>;
 }
 
 const typeName = (value: unknown) => (value === null ? "null" : Array.isArray(value) ? "an array" : typeof value === "object" ? "an object" : `a ${typeof value}`);
@@ -481,6 +615,32 @@ export function checkGrade(input: Record<string, unknown>): GradeRequest {
   return request;
 }
 
+/** An agent's ERC-8004 id as the desk takes it: a decimal string. */
+function agentId(value: unknown): string {
+  const sent = text("agentId", value);
+  if (!/^(0|[1-9]\d{0,19})$/.test(sent)) throw new Error('agentId must be the agent\'s ERC-8004 id, a whole number written as a string, such as "20424".');
+  return sent;
+}
+
+function sittingId(value: unknown): string {
+  const sent = text("sitting", value).toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(sent)) throw new Error(`sitting must be the 0x-prefixed, 64-character hex id that ${SIT_EXAM_NAME} returned.`);
+  return sent;
+}
+
+/** The desk's limits on the work for one item, checked before it is signed: an item takes one delivery. */
+export function checkWork(input: Record<string, unknown>): { sitting: string; item: number; text: string } {
+  const sitting = sittingId(input.sitting);
+  if (input.item === undefined) throw new Error("item is required.");
+  if (!Number.isInteger(input.item) || (input.item as number) < 0 || (input.item as number) > 9) throw new Error("item must be the item's index as the sitting lists it, a whole number from 0.");
+  if (input.text === undefined) throw new Error("text is required.");
+  if (typeof input.text !== "string") throw new Error(`text must be a string, not ${typeName(input.text)}.`);
+  if (BLANK.test(input.text.trim())) throw new Error("text is empty.");
+  const bytes = Buffer.byteLength(input.text);
+  if (bytes > MAX_RESULT_BYTES) throw new Error(`text is ${count(bytes)} bytes; the limit is ${count(MAX_RESULT_BYTES)}.`);
+  return { sitting, item: input.item as number, text: input.text };
+}
+
 function reply(value: unknown, isError = false): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], isError };
 }
@@ -490,6 +650,16 @@ function orderReply(view: unknown): CallToolResult {
   const { resultText, ...rest } = view as Record<string, unknown>;
   const result = reply(rest);
   if (typeof resultText === "string") result.content.push({ type: "text", text: resultText });
+  return result;
+}
+
+/** A sitting's briefs go out as text blocks of their own, as written, after the summary that lists them. */
+function sittingReply(view: unknown): CallToolResult {
+  const { briefs, ...rest } = view as Record<string, unknown>;
+  if (!Array.isArray(briefs)) return reply(view);
+  const items = briefs as { index?: unknown; title?: unknown; brief?: unknown }[];
+  const result = reply({ ...rest, briefs: items.map(({ brief: _, ...item }) => item) });
+  for (const { index, title, brief } of items) if (typeof brief === "string") result.content.push({ type: "text", text: `Item ${index}: ${title}\n\n${brief}` });
   return result;
 }
 
@@ -587,6 +757,35 @@ export async function callTool(
       const grade = text("grade", input.grade).toLowerCase();
       if (!/^0x[0-9a-f]{64}$/.test(grade)) throw new Error("grade must be the 0x-prefixed, 64-character hex id that brainchain_grade returned.");
       return reply(await desk.getGrade(grade));
+    }
+    if (name === EXAM_INFO_NAME) {
+      refuseUnknownFields(input, EXAM_INFO_TOOL.inputSchema);
+      return reply(await desk.examInfo());
+    }
+    if (name === SIT_EXAM_NAME) {
+      refuseUnknownFields(input, SIT_EXAM_INPUT);
+      const sat = input.class === undefined ? "code" : text("class", input.class);
+      if (!/^[a-z][a-z0-9-]{0,31}$/.test(sat)) throw new Error(`class must be one of the classes ${EXAM_INFO_NAME} lists, such as "code".`);
+      return sittingReply(await desk.sit({ agentId: agentId(input.agentId), class: sat }));
+    }
+    if (name === EXAM_SUBMIT_NAME) {
+      refuseUnknownFields(input, EXAM_SUBMIT_INPUT);
+      const work = checkWork(input);
+      return reply(await desk.submitExam(work.sitting, work.item, work.text));
+    }
+    if (name === EXAM_STATUS_NAME) {
+      refuseUnknownFields(input, EXAM_STATUS_TOOL.inputSchema);
+      const sitting = sittingId(input.sitting);
+      if (input.briefs !== undefined && typeof input.briefs !== "boolean") throw new Error(`briefs must be true or false, not ${typeName(input.briefs)}.`);
+      return sittingReply(await desk.examStatus(sitting, input.briefs === true));
+    }
+    if (name === LICENCES_NAME) {
+      refuseUnknownFields(input, AGENT_INPUT);
+      return reply(await desk.licences(agentId(input.agentId)));
+    }
+    if (name === AGENT_RECORD_NAME) {
+      refuseUnknownFields(input, AGENT_INPUT);
+      return reply(await desk.agentRecord(agentId(input.agentId)));
     }
     if (name === PREMIUMS_NAME) {
       refuseUnknownFields(input, PREMIUMS_TOOL.inputSchema);

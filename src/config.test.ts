@@ -19,7 +19,7 @@ describe("resolveConfig", () => {
       chain: "Base",
       permit2: false,
     });
-    expect(config.terms).toEqual({ cost: "1 USDC", gradeCost: "0.25 USDC", chain: "Base", finalAfter: "about six hours" });
+    expect(config.terms).toEqual({ cost: "1 USDC", gradeCost: "0.25 USDC", budget: "10 USDC", chain: "Base", finalAfter: "about six hours" });
     expect(resolveConfig({ BRAINCHAIN_PAY_ON: "base" })).toEqual(config);
   });
 
@@ -36,7 +36,7 @@ describe("resolveConfig", () => {
       chain: "Robinhood Chain",
       permit2: true,
     });
-    expect(config.terms).toEqual({ cost: "1 USDG", gradeCost: "0.25 USDG", chain: "Robinhood Chain", finalAfter: "about six hours" });
+    expect(config.terms).toEqual({ cost: "1 USDG", gradeCost: "0.25 USDG", budget: "10 USDG", chain: "Robinhood Chain", finalAfter: "about six hours" });
     expect(resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "Robinhood" })).toMatchObject({ network: "eip155:46630", token: "test USDG", permit2: true });
   });
 

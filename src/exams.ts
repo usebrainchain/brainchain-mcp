@@ -1,0 +1,49 @@
+// The licence exam, as the desk's GET /exams describes it: an agent pays for a
+// sitting of five items, delivers each once inside the sitting's time, and
+// holds a licence when four are accepted. Every message is signed with
+// personal_sign by the wallet that holds the agent's ERC-8004 id.
+import { keccak256, toBytes } from "viem";
+
+/** How many of a record's entries one read returns, counted from the first. */
+export const RECORD_PAGE = 20;
+
+export const sittingMessage = (chainId: number, agent: { chainId: number; id: string }, examClass: string, at: number): string =>
+  `BrainChain exam v1\nchain ${chainId}\nagent ${agent.chainId}:${agent.id}\nclass ${examClass}\nat ${at}`;
+
+export const resultMessage = (chainId: number, sitting: string, index: number, text: string): string =>
+  `BrainChain exam result v1\nchain ${chainId}\nsitting ${sitting.toLowerCase()}\nitem ${index}\nhash ${keccak256(toBytes(text))}`;
+
+export const briefsMessage = (chainId: number, sitting: string, at: number): string => `BrainChain exam briefs v1\nchain ${chainId}\nsitting ${sitting.toLowerCase()}\nat ${at}`;
+
+interface Guidance {
+  done: boolean;
+  next: string;
+  retryAfterSeconds?: number;
+}
+
+const utc = (seconds: number) => new Date(seconds * 1000).toISOString().replace(".000Z", "Z");
+const list = (numbers: number[]) => (numbers.length < 2 ? numbers.join("") : `${numbers.slice(0, -1).join(", ")} and ${numbers.at(-1)}`);
+
+/** What a sitting's state means for the agent sitting it, and when to look again. */
+export function sittingGuidance(view: Record<string, unknown>, now = Date.now()): Guidance {
+  const items = Array.isArray(view.items) ? (view.items as { index?: unknown; state?: unknown; accepted?: unknown }[]) : [];
+  const accepted = `${items.filter((item) => item.accepted === true).length} of ${items.length} accepted`;
+  if (view.state === "passed") {
+    const expiresAt = (view.licence as { licence?: { expiresAt?: unknown } } | undefined)?.licence?.expiresAt;
+    const until = typeof expiresAt === "number" ? ` It is valid until ${utc(expiresAt)}, for as long as the agent's id keeps its controller and its build.` : "";
+    return { done: true, next: `Passed, with ${accepted}. The licence is in licence.${until}` };
+  }
+  if (view.state === "failed") {
+    const mark = typeof view.passMark === "number" ? `, and a pass takes ${view.passMark}` : "";
+    return { done: true, next: `Failed, with ${accepted}${mark}. brainchain_exam_info says how long the agent waits before it may sit again.` };
+  }
+  if (view.state !== "open") return { done: false, next: "The sitting is in progress.", retryAfterSeconds: 60 };
+  const open = items.flatMap((item) => (item.state === "open" && typeof item.index === "number" ? [item.index] : []));
+  const deadline = typeof view.deadline === "number" ? view.deadline : undefined;
+  if (open.length === 0) return { done: false, next: "Every item is delivered or missed, and the desk is judging what was delivered. Read the sitting again after retryAfterSeconds.", retryAfterSeconds: 30 };
+  if (deadline !== undefined && now / 1000 > deadline) {
+    return { done: false, next: `The sitting's time ran out at ${utc(deadline)}, so ${open.length === 1 ? `item ${list(open)} was` : `items ${list(open)} were`} missed. Read the sitting again after retryAfterSeconds for the outcome.`, retryAfterSeconds: 60 };
+  }
+  const by = deadline === undefined ? "" : ` before ${utc(deadline)}`;
+  return { done: false, next: `Deliver ${open.length === 1 ? "item" : "items"} ${list(open)} with brainchain_exam_submit${by}. Each item takes one delivery, so send the finished work.` };
+}
