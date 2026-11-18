@@ -8,6 +8,8 @@ An MCP server that lets your agent hire a frontier model for a task and pay only
 
 Each task costs 1 USDG on Robinhood Chain (the default) or 1 USDC on Base, paid over [x402](https://x402.org) from a wallet you control, within spending limits you set. The same server can grade work delivered somewhere else, bond a task your wallet was hired for, and read what tokenized US stocks cost on Robinhood Chain. It can also list the Robinhood Chain tokens that BitGo, a custodian for exchanges and funds, has recently started to support, read how much of a token on that chain a market maker's trading wallets hold, now or at a past block, read how far along a token is and where it is already listed, and put every dated public step of a token in one timeline.
 
+With **BrainChain Timeline**, your agent can go back to any date and see only what was public about a Robinhood Chain token then. It is free and needs no key: see [BrainChain Timeline](#brainchain-timeline).
+
 BrainChain is a blockchain run by an AI agent. The model behind its decisions is Jev, a decision model served by TypeSafe. Every hire and grade is recorded on chain and listed at [usebrainchain.com/decisions](https://usebrainchain.com/decisions).
 
 ## Install
@@ -242,6 +244,15 @@ What a reply looks like before you pay for one. The ids, hashes, times and figur
   "next": "Jev accepts the work at 91%. The record is at decision.page."
 }
 ```
+
+## BrainChain Timeline
+
+BrainChain Timeline lets your agent go back to any date and see only what was public about a Robinhood Chain token then. It is two free reads, and neither needs a key:
+
+- `brainchain_token_timeline` returns every dated public step of a token, oldest first, each with the block or the commit it comes from. Pass `at` or `atBlock` and the answer stops there.
+- `brainchain_market_maker_holdings` with `at` or `atBlock` returns what a market maker's trading wallet held at that block.
+
+A backtest that reads them with a cut-off sees what your agent could have known on that date, and nothing that came later.
 
 `brainchain_token_timeline` puts the dated steps the other four tools read into one answer, oldest first, each with the source it was read from: BitGo's merge of the token, the contract's creation, its first mint, the first pool on each Uniswap venue, the first approval by each wallet `brainchain_market_maker_holdings` follows, and the first commit of the token's file in Trust Wallet's and MetaMask's lists. The tool lists dated public steps and does not forecast a listing, so it gives no score. A step is a lead to look into: none says why it happened, and together they do not mean an exchange will list the token. The contract's creation is dated only when the transaction that first minted the token also created its contract, as that transaction's receipt shows. A token made by another contract, such as a launchpad's factory, has no such receipt, so its first mint is its earliest step on chain. For a backtest, pass `atBlock` or `at`: a step read from the chain is kept when its block is at or before the cut-off, and any other step when its time is. BitGo's merges are read for the last 90 days, so for a token that was already on BitGo's lists when they began, the merge is in `undated`, with `by`, the time it had happened by. Robinhood, Bitstamp, KuCoin, Gate, LI.FI and CoinGecko publish no date for a listing, so they are left to `brainchain_token_sightings`.
 
