@@ -28,13 +28,23 @@ const list = (numbers: number[]) => (numbers.length < 2 ? numbers.join("") : `${
 
 /**
  * Why an item that answered every hidden case right was not accepted: the judges' answer, and how sure they were
- * of it. Said for a closed sitting, so a refusal with every case right explains itself; items judged before the
- * judges' confidence was kept have none to give.
+ * of it. An answer to accept counts only at the exam's bar or above, which is named when the sitting carries it.
+ * Said for a closed sitting, so a refusal with every case right explains itself. An item judged before the answer
+ * was kept has only how sure the judges were, and one judged before that has nothing to give.
  */
-function doubted(items: { index?: unknown; accepted?: unknown; right?: unknown; of?: unknown; confidenceBps?: unknown }[]): string {
+function doubted(items: { index?: unknown; accepted?: unknown; right?: unknown; of?: unknown; judges?: unknown; confidenceBps?: unknown }[], bar: number | undefined): string {
   return items
-    .filter((item) => item.accepted === false && typeof item.right === "number" && item.right === item.of && typeof item.confidenceBps === "number")
-    .map((item) => ` Item ${String(item.index)} answered every hidden case right and was not accepted: the judges were ${(item.confidenceBps as number) / 100}% sure of their answer.`)
+    .flatMap((item) => (item.accepted === false && typeof item.right === "number" && item.right === item.of && typeof item.confidenceBps === "number" ? [{ ...item, confidenceBps: item.confidenceBps }] : []))
+    .map(({ index, judges, confidenceBps }) => {
+      const sure = `${confidenceBps / 100}%`;
+      const said =
+        judges === "refuse"
+          ? `the judges refused it, ${sure} sure`
+          : judges === "accept"
+            ? `the judges accepted it at ${sure}${bar !== undefined && confidenceBps < bar ? `, under the ${bar / 100}% bar` : ""}`
+            : `the judges were ${sure} sure of their answer`;
+      return ` Item ${String(index)} answered every hidden case right and was not accepted: ${said}.`;
+    })
     .join("");
 }
 
@@ -42,14 +52,15 @@ function doubted(items: { index?: unknown; accepted?: unknown; right?: unknown; 
 export function sittingGuidance(view: Record<string, unknown>, now = Date.now()): Guidance {
   const items = Array.isArray(view.items) ? (view.items as { index?: unknown; state?: unknown; accepted?: unknown }[]) : [];
   const accepted = `${items.filter((item) => item.accepted === true).length} of ${items.length} accepted`;
+  const bar = typeof view.barBps === "number" ? view.barBps : undefined;
   if (view.state === "passed") {
     const expiresAt = (view.licence as { licence?: { expiresAt?: unknown } } | undefined)?.licence?.expiresAt;
     const until = typeof expiresAt === "number" ? ` It is valid until ${utc(expiresAt)}, for as long as the agent's id keeps its controller and its build.` : "";
-    return { done: true, next: `Passed, with ${accepted}. The licence is in licence.${until}${doubted(items)}` };
+    return { done: true, next: `Passed, with ${accepted}. The licence is in licence.${until}${doubted(items, bar)}` };
   }
   if (view.state === "failed") {
     const mark = typeof view.passMark === "number" ? `, and a pass takes ${view.passMark}` : "";
-    return { done: true, next: `Failed, with ${accepted}${mark}. brainchain_exam_info says how long the agent waits before it may sit again.${doubted(items)}` };
+    return { done: true, next: `Failed, with ${accepted}${mark}. brainchain_exam_info says how long the agent waits before it may sit again.${doubted(items, bar)}` };
   }
   if (view.state !== "open") return { done: false, next: "The sitting is in progress.", retryAfterSeconds: 60 };
   const open = items.flatMap((item) => (item.state === "open" && typeof item.index === "number" ? [item.index] : []));

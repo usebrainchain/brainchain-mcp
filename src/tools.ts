@@ -330,7 +330,7 @@ export const EXAM_STATUS_TOOL: Tool = {
   title: "Read an exam sitting",
   description:
     "Read a sitting of the licence exam: its state (open, passed or failed), its deadline, each item's state and outcome, and on a pass the licence BrainChain signed, with its expiry. " +
-    "A judged item carries how many hidden cases it answered right (`right` of `of`), the judges' confidence in their answer in basis points (`confidenceBps`) and its `decision`, so an item refused with every case right explains itself. " +
+    "A judged item carries how many hidden cases it answered right (`right` of `of`), the judges' answer (`judges`: accept or refuse), how sure they were of it in basis points (`confidenceBps`) and its `decision`, so an item refused with every case right explains itself. " +
     "Before a sitting opens it reads `paying` while its payment settles, `opening` once it is paid for and its items are being drawn, with the desk's reason when a draw failed, or `unpaid` when the payment did not settle and nothing was charged. Free, and without `briefs` it needs no key. " +
     "With `briefs: true` the reply also carries the sitting's briefs, which the desk shows only to the wallet sitting it, so that request is signed with this server's key. " +
     "Call again after `retryAfterSeconds` until `done` is true.",

@@ -540,14 +540,23 @@ describe("reading a sitting", () => {
     expect(passed.next).toBe("Passed, with 4 of 5 accepted. The licence is in licence. It is valid until 2100-03-02T00:00:00Z, for as long as the agent's id keeps its controller and its build.");
     const failed = (await reader(() => json(view(SITTING, { state: "failed", items: judged(3) }))).d.examStatus(SITTING, false)) as Record<string, unknown>;
     expect(failed).toMatchObject({ done: true, next: "Failed, with 3 of 5 accepted, and a pass takes 4. brainchain_exam_info says how long the agent waits before it may sit again." });
-    // An item refused with every hidden case right comes with the judges' confidence, and the reply says so in words.
-    const doubted = judged(3).map((item, i) => (i === 3 ? { ...item, right: 18, of: 18, confidenceBps: 4900, decision: "886" } : i === 4 ? { ...item, right: 17, of: 18, confidenceBps: 9900 } : item));
-    const refused = (await reader(() => json(view(SITTING, { state: "failed", items: doubted }))).d.examStatus(SITTING, false)) as { items: Record<string, unknown>[]; next: string };
-    expect(refused.items[3]).toMatchObject({ accepted: false, right: 18, of: 18, confidenceBps: 4900, decision: "886" });
-    expect(refused.next).toBe(
-      "Failed, with 3 of 5 accepted, and a pass takes 4. brainchain_exam_info says how long the agent waits before it may sit again. Item 3 answered every hidden case right and was not accepted: the judges were 49% sure of their answer.",
-    );
-    expect(EXAM_STATUS_TOOL.description).toContain("the judges' confidence in their answer in basis points (`confidenceBps`)");
+    // An item refused with every hidden case right comes with the judges' answer and how sure they were, and the reply says so in words.
+    const lead = "Failed, with 3 of 5 accepted, and a pass takes 4. brainchain_exam_info says how long the agent waits before it may sit again.";
+    const refusedAs = async (said: Record<string, unknown>, sitting: Record<string, unknown> = {}) => {
+      const items = judged(3).map((item, i) => (i === 3 ? { ...item, right: 18, of: 18, decision: "886", ...said } : i === 4 ? { ...item, right: 17, of: 18, judges: "accept", confidenceBps: 9900 } : item));
+      return (await reader(() => json(view(SITTING, { state: "failed", items, ...sitting }))).d.examStatus(SITTING, false)) as { items: Record<string, unknown>[]; next: string };
+    };
+    const under = await refusedAs({ judges: "accept", confidenceBps: 4900 });
+    expect(under.items[3]).toMatchObject({ accepted: false, right: 18, of: 18, judges: "accept", confidenceBps: 4900, decision: "886" });
+    expect(under.next).toBe(`${lead} Item 3 answered every hidden case right and was not accepted: the judges accepted it at 49%.`);
+    expect((await refusedAs({ judges: "refuse", confidenceBps: 9000 })).next).toBe(`${lead} Item 3 answered every hidden case right and was not accepted: the judges refused it, 90% sure.`);
+    // The bar is named when the sitting carries it, and only for an answer to accept that fell under it.
+    expect((await refusedAs({ judges: "accept", confidenceBps: 4900 }, { barBps: 5000 })).next).toBe(`${lead} Item 3 answered every hidden case right and was not accepted: the judges accepted it at 49%, under the 50% bar.`);
+    expect((await refusedAs({ judges: "refuse", confidenceBps: 9000 }, { barBps: 5000 })).next).toBe(`${lead} Item 3 answered every hidden case right and was not accepted: the judges refused it, 90% sure.`);
+    // A host that kept how sure the judges were before it kept their answer reads as it did.
+    expect((await refusedAs({ confidenceBps: 4900 })).next).toBe(`${lead} Item 3 answered every hidden case right and was not accepted: the judges were 49% sure of their answer.`);
+    expect((await refusedAs({})).next).toBe(lead);
+    expect(EXAM_STATUS_TOOL.description).toContain("the judges' answer (`judges`: accept or refuse), how sure they were of it in basis points (`confidenceBps`)");
   });
 
   const drawing = "The sitting is paid for and its items are being drawn. Send the request that paid for it again to read it; it is not charged twice.";
