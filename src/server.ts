@@ -16,6 +16,7 @@ import { createDesk, erc20, firstLine } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL } from "./premiums.js";
 import { READINESS_NAME, READINESS_TOOL } from "./readiness.js";
 import { SIGHTINGS_NAME, SIGHTINGS_TOOL } from "./sightings.js";
+import { readTokenTimeline, TIMELINE_NAME, TIMELINE_TOOL } from "./timeline.js";
 import {
   BOND_STATUS_NAME,
   BOND_TASK_NAME,
@@ -51,7 +52,7 @@ export const INSTRUCTIONS =
 const KEY_HELP =
   `Keep the key in a file only your account can read (chmod 600) and add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config ` +
   `(in Claude Code, \`claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp\`), then restart the server. ` +
-  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME} and ${SIGHTINGS_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
+  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME} and ${TIMELINE_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -232,7 +233,7 @@ interface Wiring {
   refused: Map<string, string>;
 }
 
-/** A setting the server cannot read at all: every tool answers with it but the three that read public data and need no setting. */
+/** A setting the server cannot read at all: every tool answers with it but those that read public data and need no setting. */
 function unreadable(problem: string): Wiring {
   const refuse = async (): Promise<never> => {
     throw new Error(problem);
@@ -328,15 +329,18 @@ export function createServer(env: Record<string, string | undefined>, version: s
   const problem = typeof terms === "string" ? terms : terms.problem;
   const log = options.log ?? console.error;
   if (problem) log(`brainchain-mcp has an invalid setting: ${problem}`);
-  // Only the tool that reads the wallets depends on them, so a bad list stops it and nothing else.
+  // Only the tools that read the wallets depend on them, so a bad list stops those and nothing else.
   const makers = followedMakers(env);
   if (makers.problem) {
     log(`brainchain-mcp has an invalid setting: ${makers.problem}`);
-    refused.set(MAKERS_NAME, makers.problem);
+    for (const name of [MAKERS_NAME, TIMELINE_NAME]) refused.set(name, makers.problem);
   }
-  const makersToolDef = makersTool(makers.configured);
+  const lead = (tool: Tool): Tool => (makers.problem ? { ...tool, description: invalidSetting(makers.problem) + tool.description } : tool);
   const followed = [...MARKET_MAKERS, ...makers.configured];
-  const readers: Partial<Readers> = { makers: (token, wallet, moment) => readMakerHoldings(token, wallet, moment, followed) };
+  const readers: Partial<Readers> = {
+    makers: (token, wallet, moment) => readMakerHoldings(token, wallet, moment, followed),
+    timeline: (token, until) => readTokenTimeline(token, until, followed),
+  };
   const tools = [
     postTaskTool(terms),
     GET_TASK_TOOL,
@@ -344,9 +348,10 @@ export function createServer(env: Record<string, string | undefined>, version: s
     GET_GRADE_TOOL,
     PREMIUMS_TOOL,
     CUSTODY_TOOL,
-    makers.problem ? { ...makersToolDef, description: invalidSetting(makers.problem) + makersToolDef.description } : makersToolDef,
+    lead(makersTool(makers.configured)),
     READINESS_TOOL,
     SIGHTINGS_TOOL,
+    lead(TIMELINE_TOOL),
     ...bondToolList,
   ];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });

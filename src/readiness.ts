@@ -150,3 +150,6 @@ const kept: ReadinessKept = { mints: new Map(), pools: new Map() };
 export function readTokenReadiness(token: Address): Promise<ReadinessBoard> {
   return inTurn((reader) => tokenReadiness(reader, token, kept));
 }
+
+/** What `readTokenReadiness` reads, in a turn another tool already holds, so both share what was read. */
+export const readinessIn = (reader: ChainHistory, token: Address) => tokenReadiness(reader, token, kept);

@@ -19,7 +19,7 @@ const REQUEST_MS = 15_000;
 /** How long one answer may take, the wait behind other answers included. */
 export const ANSWER_MS = 45_000;
 
-const READS = ["getBlock", "getBlockNumber", "getCode", "getLogs", "getTransaction", "readContract"] as const;
+const READS = ["getBlock", "getBlockNumber", "getCode", "getLogs", "getTransaction", "getTransactionReceipt", "readContract"] as const;
 /** What the tools that read the chain's past need of it. */
 export type ChainHistory = Pick<PublicClient, (typeof READS)[number]>;
 

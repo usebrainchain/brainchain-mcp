@@ -11,6 +11,7 @@ import { PREMIUMS_NAME, PREMIUMS_TOOL, readPremiums, type PremiumBoard } from ".
 import { READINESS_NAME, READINESS_TOOL, readTokenReadiness, type ReadinessBoard } from "./readiness.js";
 import { MIN_BOND, MISSED_TO } from "./shipped.js";
 import { readTokenSightings, SIGHTINGS_NAME, SIGHTINGS_TOOL, SightingsError, type SightingsBoard } from "./sightings.js";
+import { readTokenTimeline, TIMELINE_NAME, TIMELINE_TOOL, type TimelineBoard } from "./timeline.js";
 
 /** What the post tool tells the model about cost and settlement on the configured network. */
 export interface Terms {
@@ -443,9 +444,10 @@ export interface Readers {
   sightings(token: Address): Promise<SightingsBoard>;
   /** BitGo's tokens on Robinhood Chain, which a symbol is looked up in. */
   listed(): Promise<CustodyToken[]>;
+  timeline(token: Address, until?: Moment): Promise<TimelineBoard>;
 }
 
-const READERS: Readers = { custody: readCustodyAdditions, makers: readMakerHoldings, readiness: readTokenReadiness, sightings: readTokenSightings, listed: readListedTokens };
+const READERS: Readers = { custody: readCustodyAdditions, makers: readMakerHoldings, readiness: readTokenReadiness, sightings: readTokenSightings, listed: readListedTokens, timeline: readTokenTimeline };
 
 /** An answer for a token looked up by symbol leads with what it was looked up as. */
 const withLookup = (board: object, lookup: Lookup | undefined) => (lookup ? { lookup, ...board } : board);
@@ -460,7 +462,7 @@ export async function callTool(
   refused: ReadonlyMap<string, string> = new Map(),
   readers: Partial<Readers> = {},
 ): Promise<CallToolResult> {
-  const { custody, makers, readiness, sightings, listed } = { ...READERS, ...readers };
+  const { custody, makers, readiness, sightings, listed, timeline } = { ...READERS, ...readers };
   const input = (args ?? {}) as Record<string, unknown>;
   const refusal = refused.get(name);
   if (refusal !== undefined) return reply({ error: refusal }, true);
@@ -542,6 +544,16 @@ export async function callTool(
       const board = await sightings(token).catch((error: unknown) => {
         if (error instanceof SightingsError) throw error;
         throw new Error(`The lists could not be read just now: ${brief(error)} Try again in a minute.`);
+      });
+      return reply(withLookup(board, lookup));
+    }
+    if (name === TIMELINE_NAME) {
+      refuseUnknownFields(input, TIMELINE_TOOL.inputSchema);
+      const when = moment(input);
+      const { token, lookup } = await tokenOf(input.token, listed);
+      const board = await timeline(token, when).catch((error: unknown) => {
+        if (error instanceof ChainError) throw error;
+        throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
       });
       return reply(withLookup(board, lookup));
     }

@@ -98,7 +98,7 @@
         },
         {
           "name": "BRAINCHAIN_MAKER_WALLETS",
-          "description": "More wallets for brainchain_market_maker_holdings to follow beside its five, as Name=0xAddress separated by commas, at most 20. Their entries carry the name and source configured; nobody checks whose wallets they are.",
+          "description": "More wallets for brainchain_market_maker_holdings and brainchain_token_timeline to follow beside the five they follow, as Name=0xAddress separated by commas, at most 20. Their entries carry the name and source configured; nobody checks whose wallets they are.",
           "isRequired": false,
           "format": "string"
         },

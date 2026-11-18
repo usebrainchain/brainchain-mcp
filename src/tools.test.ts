@@ -690,11 +690,17 @@ describe("a token by symbol", () => {
     { id: "hoodeth:tsla", name: "Tesla • Robinhood", contract: "0x322F0c7BE2B2Aa2d1E4f0F6F3fAAB0C7C3E00DDc" as `0x${string}`, decimals: 18 },
   ];
   const twins: CustodyToken[] = [...LISTED, { id: "hoodeth:cashcat2", name: "Cash Cat", contract: TWIN, decimals: 18 }];
-  const boards = { makers: { chain: "Robinhood Chain", token: { contract: RLUSD }, readAt: "x", wallets: [] }, readiness: { chain: "Robinhood Chain", deployed: true }, sightings: { chain: "Robinhood Chain", lists: [] } };
+  const boards = {
+    makers: { chain: "Robinhood Chain", token: { contract: RLUSD }, readAt: "x", wallets: [] },
+    readiness: { chain: "Robinhood Chain", deployed: true },
+    sightings: { chain: "Robinhood Chain", lists: [] },
+    timeline: { chain: "Robinhood Chain", steps: [] },
+  };
   const tools = [
     ["brainchain_market_maker_holdings", "makers"],
     ["brainchain_token_readiness", "readiness"],
     ["brainchain_token_sightings", "sightings"],
+    ["brainchain_token_timeline", "timeline"],
   ] as const;
 
   it("reads the one token a symbol, an id or a name stands for, and says which contract it was", async () => {
@@ -764,5 +770,57 @@ describe("a token by symbol", () => {
     const result = await callTool(desk, "brainchain_market_maker_holdings", { token: "RLUSD", atBlock: -1 }, undefined, undefined, undefined, { listed: async () => (lookups++, LISTED) });
     expect(body(result)).toEqual({ error: "atBlock must be a block number: a whole number from 0." });
     expect(lookups).toBe(0);
+  });
+});
+
+describe("token timeline", () => {
+  const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
+  const board = { chain: "Robinhood Chain" as const, token: { contract: CASHCAT as `0x${string}` }, readAt: "2026-11-18T12:00:00.000Z", deployed: true, steps: [], undated: [], unread: [] };
+  const call = (args: unknown, timeline: (token: string, until?: unknown) => Promise<typeof board>) => callTool(desk, "brainchain_token_timeline", args, undefined, undefined, undefined, { timeline, listed: noLookup });
+
+  it("serves the board without a desk or a key, with a cut-off at a past block or time, or none", async () => {
+    const asked: unknown[][] = [];
+    const read = async (token: string, until?: unknown) => (asked.push([token, until]), board);
+    for (const args of [{ token: CASHCAT.toLowerCase() }, { token: CASHCAT, atBlock: 820_611 }, { token: CASHCAT, at: "2026-07-08T15:00:00Z" }]) {
+      const result = await call(args, read);
+      expect(result.isError).toBe(false);
+      expect(body(result)).toEqual(board);
+    }
+    expect(asked).toEqual([
+      [CASHCAT, undefined],
+      [CASHCAT, { block: 820_611n }],
+      [CASHCAT, { time: Date.parse("2026-07-08T15:00:00Z") }],
+    ]);
+  });
+
+  it("refuses what it cannot read, and fields it does not take, before reading anything", async () => {
+    let reads = 0;
+    const read = async () => (reads++, board);
+    for (const [args, said] of [
+      [{}, "token is required."],
+      [{ token: "0xCASHCAT" }, "token must be an address on Robinhood Chain: 0x followed by 40 hex characters."],
+      [{ token: CASHCAT, atBlock: -5 }, "atBlock must be a block number: a whole number from 0."],
+      [{ token: CASHCAT, at: "2026-07-08T15:00" }, "at must be a time in ISO 8601, such as 2026-11-01T00:00:00Z, or a date, such as 2026-11-01."],
+      [{ token: CASHCAT, atBlock: 1, at: "2026-07-08" }, "Pass atBlock or at, not both."],
+      [{ token: CASHCAT, days: 30 }, "Unknown field: days. This tool takes only token, atBlock, at."],
+    ] as const) {
+      const result = await call(args, read);
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: said });
+    }
+    expect(reads).toBe(0);
+  });
+
+  it("answers a failed read in one line, and passes on what is already written for the reader", async () => {
+    const slow = new ChainError(STILL_READING);
+    for (const [error, said] of [
+      [Object.assign(new Error("HTTP request failed.\n\nStatus: 429"), { status: 429 }), "Robinhood Chain could not be read just now: HTTP 429. Try again in a minute."],
+      [slow, slow.message],
+      [new ChainError("Block 9 is not on Robinhood Chain yet: the newest block is 8."), "Block 9 is not on Robinhood Chain yet: the newest block is 8."],
+    ] as const) {
+      const result = await call({ token: CASHCAT }, async () => Promise.reject(error));
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: said });
+    }
   });
 });

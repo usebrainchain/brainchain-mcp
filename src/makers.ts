@@ -233,6 +233,9 @@ async function firstApproval(reader: ChainHistory, token: Address, maker: MakerW
   return { at, block: Number(first.blockNumber), transaction: first.transactionHash, spender: first.args.spender, confirmed: isAddressEqual(sent.from, wallet) || own(sent.to) };
 }
 
+/** A wallet as an answer names it: the firm, its name tag, whether the operator added it, and the address. */
+export const who = ({ name, tag, source, wallet }: MakerWallet) => ({ ...(name ? { name } : {}), ...(tag ? { tag } : {}), ...(source ? { source } : {}), wallet });
+
 /** `part` of `whole` in percent, to four places, rounded half up. */
 const percent = (part: bigint, whole: bigint) => (Number((part * 2_000_000n + whole) / (2n * whole)) / 10_000).toFixed(4);
 
@@ -300,7 +303,6 @@ export async function makerHoldings(reader: ChainHistory, token: Address, wallet
   const { decimals, supply, name, symbol, balances } = facts;
   const first = await firstApprovals(reader, token, wallets, kept, newest);
   const readAt = now.toISOString();
-  const who = ({ name: owner, tag, source, wallet }: MakerWallet) => ({ ...(owner ? { name: owner } : {}), ...(tag ? { tag } : {}), ...(source ? { source } : {}), wallet });
   const approved = (i: number) => (first[i] ? { firstApproval: first[i] } : {});
   const board = {
     chain: "Robinhood Chain" as const,
@@ -355,4 +357,4 @@ export function readMakerHoldings(token: Address, wallet?: Address, moment?: Mom
 }
 
 /** The first approvals `readMakerHoldings` finds, read in a turn another tool already holds, so both share what was read. */
-export const readFirstApprovals = (reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], newest: bigint) => firstApprovals(reader, token, wallets, kept, newest);
+export const firstApprovalsIn = (reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], newest: bigint) => firstApprovals(reader, token, wallets, kept, newest);

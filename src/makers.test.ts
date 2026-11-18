@@ -263,8 +263,8 @@ describe("the market maker tool's words", () => {
     expect(MAKERS_TOOL.inputSchema).toMatchObject({ required: ["token"], additionalProperties: false });
     expect(Object.keys(MAKERS_TOOL.inputSchema.properties!)).toEqual(["token", "wallet", "atBlock", "at"]);
     expect(readme).toContain(`- \`${MAKERS_NAME}\` `);
-    expect(readme).toContain("The other eight only read.");
-    expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness` and `brainchain_token_sightings`.");
+    expect(readme).toContain("The other nine only read.");
+    expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings` and `brainchain_token_timeline`.");
   });
 });
 
@@ -1063,6 +1063,32 @@ describe("readMakerHoldings", () => {
       // Nothing was asked about the second token until the first answer was done.
       expect(before).toBeGreaterThan(2);
       expect(requests.findIndex(({ about }) => about.includes(PERMIT2))).toBe(before);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets the timeline read the chain in the same turn, and find what the other tools kept", async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const newest = 2n * STRETCH_BLOCKS + SETTLED_BLOCKS;
+    const { fetchImpl, requests } = endpoint({ [CASHCAT]: cashCat({ approvals: [approval(9n, 5, maxUint256)] }) }, { newest });
+    vi.stubGlobal("fetch", fetchImpl);
+    try {
+      const makers = await import("./makers.js");
+      const readiness = await import("./readiness.js");
+      const timeline = await import("./timeline.js");
+      await settled(Promise.all([makers.readMakerHoldings(CASHCAT), readiness.readTokenReadiness(CASHCAT)]));
+      requests.length = 0;
+      const board = await settled(timeline.readTokenTimeline(CASHCAT));
+      expect(board.steps).toEqual([expect.objectContaining({ step: "approval", block: 9, maker: expect.objectContaining({ name: "Wintermute" }), confirmed: true })]);
+      // Only the newest stretch, which has not settled, is read again.
+      const logs = requests.filter(({ method }) => method === "eth_getLogs").map(({ about }) => about.split(" ").at(-1));
+      expect(logs.length).toBeGreaterThan(0);
+      expect(new Set(logs)).toEqual(new Set([`20000000-${newest}`]));
+      // This endpoint answers nothing but JSON-RPC, so GitHub and the lists cannot be read, and the answer says so.
+      expect(board.unread).toEqual(["BitGo", "Trust Wallet", "MetaMask"]);
     } finally {
       vi.unstubAllGlobals();
       vi.useRealTimers();

@@ -120,7 +120,7 @@ describe("the custody tool's words", () => {
   it("are counted with the tools that only read", () => {
     expect(CUSTODY_TOOL.annotations).toEqual({ readOnlyHint: true, openWorldHint: true });
     expect(readme).toContain(`- \`${CUSTODY_NAME}\` `);
-    expect(readme).toContain("The other eight only read.");
+    expect(readme).toContain("The other nine only read.");
     expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, ");
   });
 });
