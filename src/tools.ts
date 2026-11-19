@@ -2,7 +2,7 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { getAddress, isAddress, type Address } from "viem";
 
 import type { Bonds } from "./bonds.js";
-import { CHANGES_NAME, CHANGES_TOOL, changesQuery, readChanges, type ChangesQuery } from "./changes.js";
+import { CHANGES_NAME, CHANGES_TOOL, changesQuery, createWatch, HOSTED_WATCH_URL, readChanges, removeWatch, UNWATCH_NAME, UNWATCH_TOOL, unwatchArgs, WATCH_NAME, WATCH_TOOL, watchArgsOf, type ChangesQuery, type WatchRequest } from "./changes.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, type CustodyBoard, type CustodyToken } from "./custody.js";
 import { ChainError, type Moment } from "./history.js";
@@ -448,8 +448,10 @@ export interface Readers {
   listed(): Promise<CustodyToken[]>;
   timeline(token: Address, until?: Moment): Promise<TimelineBoard>;
   marketCap(token: Address, moment?: Moment): Promise<MarketCapBoard>;
-  /** The events of the watcher BRAINCHAIN_WATCH_URL names; with none named, how to start one. */
+  /** The events of the watcher BRAINCHAIN_WATCH_URL names, or of BrainChain's own. */
   changes(query: ChangesQuery): Promise<unknown>;
+  watch(request: WatchRequest): Promise<unknown>;
+  unwatch(id: string, manageToken: string): Promise<unknown>;
 }
 
 const READERS: Readers = {
@@ -460,7 +462,9 @@ const READERS: Readers = {
   listed: readListedTokens,
   timeline: readTokenTimeline,
   marketCap: readMarketCap,
-  changes: (query) => readChanges(undefined, query),
+  changes: (query) => readChanges(new URL(HOSTED_WATCH_URL), query),
+  watch: (request) => createWatch(new URL(HOSTED_WATCH_URL), request),
+  unwatch: (id, manageToken) => removeWatch(new URL(HOSTED_WATCH_URL), id, manageToken),
 };
 
 /** An answer for a token looked up by symbol leads with what it was looked up as. */
@@ -476,7 +480,7 @@ export async function callTool(
   refused: ReadonlyMap<string, string> = new Map(),
   readers: Partial<Readers> = {},
 ): Promise<CallToolResult> {
-  const { custody, makers, readiness, sightings, listed, timeline, marketCap, changes } = { ...READERS, ...readers };
+  const { custody, makers, readiness, sightings, listed, timeline, marketCap, changes, watch, unwatch } = { ...READERS, ...readers };
   const input = (args ?? {}) as Record<string, unknown>;
   const refusal = refused.get(name);
   if (refusal !== undefined) return reply({ error: refusal }, true);
@@ -585,6 +589,15 @@ export async function callTool(
     if (name === CHANGES_NAME) {
       refuseUnknownFields(input, CHANGES_TOOL.inputSchema);
       return reply(await changes(changesQuery(input)));
+    }
+    if (name === WATCH_NAME) {
+      refuseUnknownFields(input, WATCH_TOOL.inputSchema);
+      return reply(await watch(watchArgsOf(input)));
+    }
+    if (name === UNWATCH_NAME) {
+      refuseUnknownFields(input, UNWATCH_TOOL.inputSchema);
+      const { id, manageToken } = unwatchArgs(input);
+      return reply(await unwatch(id, manageToken));
     }
     return reply({ error: `Unknown tool ${name}.` }, true);
   } catch (error) {

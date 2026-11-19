@@ -50,8 +50,8 @@ Environment:
   BRAINCHAIN_MAKER_WALLETS    More wallets for brainchain_market_maker_holdings and brainchain_token_timeline to follow, as
                               Name=0xAddress separated by commas (at most 20). Nobody checks whose wallets they are; their
                               entries say source configured.
-  BRAINCHAIN_WATCH_URL        The address of a running \`brainchain-mcp watch --serve\`, such as http://127.0.0.1:8787, which
-                              brainchain_changes reads.
+  BRAINCHAIN_WATCH_URL        The watcher brainchain_changes, brainchain_watch and brainchain_unwatch use, such as your own
+                              \`brainchain-mcp watch --serve\` at http://127.0.0.1:8787 (default https://watch.usebrainchain.com).
   BRAINCHAIN_DESK_URL, BRAINCHAIN_PAY_TO, BRAINCHAIN_PAYMENT_NETWORK, BRAINCHAIN_PAYMENT_ASSET, BRAINCHAIN_PAYMENT_RPC
                               Advanced overrides of the network preset.
 `;

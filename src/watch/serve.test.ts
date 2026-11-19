@@ -3,9 +3,13 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ResourceUpdatedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { CHANGES_NAME, CHANGES_TOOL, changesQuery, readChanges, watchUrl } from "../changes.js";
+import { CHANGES_NAME, CHANGES_TOOL, changesQuery, createWatch, HOSTED_WATCH_URL, readChanges, removeWatch, UNWATCH_NAME, WATCH_NAME, WATCH_TOOL, watchUrl } from "../changes.js";
+import { createServer } from "../server.js";
 import { callTool, type Desk } from "../tools.js";
 import { watchArgs } from "./cli.js";
 import { Deliveries } from "./deliver.js";
@@ -101,30 +105,28 @@ const desk = {} as Desk;
 const text = (result: { content: unknown }) => (result.content as { text: string }[])[0]!.text;
 
 describe("the changes tool", () => {
-  it("says how to run the watcher when none is set", async () => {
-    const result = await callTool(desk, CHANGES_NAME, {});
-    expect(result.isError).toBe(false);
-    expect(JSON.parse(text(result))).toEqual({
-      watching: false,
-      message: expect.stringContaining("Run `npx -y brainchain-mcp watch --serve 8787` on a machine that stays on, set BRAINCHAIN_WATCH_URL to http://127.0.0.1:8787"),
-    });
+  it("reads BrainChain's own watcher unless BRAINCHAIN_WATCH_URL names another", async () => {
+    const asked: string[] = [];
+    const answering = (async (url: URL) => (asked.push(String(url)), Response.json({ readAt: "2026-11-19T13:00:00.000Z", events: [], next: 9, more: false }))) as unknown as typeof fetch;
+    expect(await readChanges(watchUrl(undefined), { since: "4" }, answering)).toEqual({ watcher: HOSTED_WATCH_URL, readAt: "2026-11-19T13:00:00.000Z", events: [], next: 9, more: false });
+    expect(asked).toEqual([`${HOSTED_WATCH_URL}/events?since=4`]);
   });
 
   it("returns a running watcher's events and the cursor for the next call", async () => {
     const { base } = await serving();
     const answer = (await readChanges(base, { since: "2", kinds: ["pool"], tokens: ["cashcat"] })) as Record<string, unknown>;
-    expect(answer).toMatchObject({ watching: true, watcher: base.origin, next: 4, more: false });
+    expect(answer).toMatchObject({ watcher: base.origin, next: 4, more: false });
     expect((answer.events as { kind: string }[]).map(({ kind }) => kind)).toEqual(["pool.created"]);
     const result = await callTool(desk, CHANGES_NAME, { since: 3 }, undefined, undefined, undefined, { changes: (query) => readChanges(base, query) });
     expect(JSON.parse(text(result))).toMatchObject({ events: [{ id: 4, kind: "robinhood.pair_added" }], next: 4 });
   });
 
-  it("passes on what the watcher finds wrong with a query, and says when it cannot be reached", async () => {
+  it("passes on what the watcher finds wrong with a query, and says when it cannot be reached and how to run one", async () => {
     const { base } = await serving();
     await expect(readChanges(base, { since: "yesterday" })).rejects.toThrow(/^since must be an event id/);
     close?.();
     close = undefined;
-    await expect(readChanges(base, {})).rejects.toThrow(`The watcher at ${base.origin} could not be reached.`);
+    await expect(readChanges(base, {})).rejects.toThrow(`The watcher at ${base.origin} could not be reached just now. Try again in a minute. To run your own, start \`npx -y brainchain-mcp watch --serve 8787\``);
     const notWatcher = (async () => new Response("<html></html>", { status: 200 })) as unknown as typeof fetch;
     await expect(readChanges(base, {}, notWatcher)).rejects.toThrow(/answered 200 without a list of events/);
   });
@@ -137,9 +139,9 @@ describe("the changes tool", () => {
     expect(() => changesQuery({ since: -1 })).toThrow(/^since must be/);
   });
 
-  it("reads BRAINCHAIN_WATCH_URL as an http or https address", () => {
-    expect(watchUrl(undefined)).toBeUndefined();
-    expect(watchUrl(" http://127.0.0.1:8787 ")!.href).toBe("http://127.0.0.1:8787/");
+  it("reads BRAINCHAIN_WATCH_URL as an http or https address, and BrainChain's own watcher without it", () => {
+    expect(watchUrl(undefined).href).toBe(`${HOSTED_WATCH_URL}/`);
+    expect(watchUrl(" http://127.0.0.1:8787 ").href).toBe("http://127.0.0.1:8787/");
     expect(() => watchUrl("localhost:8787")).toThrow("BRAINCHAIN_WATCH_URL must start with http:// or https://.");
     expect(() => watchUrl("not a url")).toThrow(/^BRAINCHAIN_WATCH_URL must be the address/);
     expect(() => watchUrl("https://user:secret@watch.example")).toThrow("BRAINCHAIN_WATCH_URL must not hold a user name or password.");
@@ -148,10 +150,11 @@ describe("the changes tool", () => {
   it("is in the README's tools, with the watcher it reads and what an event does not mean", () => {
     const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
     const row = readme.split("\n").find((line) => line.startsWith(`| \`${CHANGES_NAME}\` |`))!;
-    expect(row).toContain("Reads the watcher `BRAINCHAIN_WATCH_URL` names; without it, the answer says how to start one. Free, no key.");
+    expect(row).toContain("Reads the watcher `BRAINCHAIN_WATCH_URL` names, BrainChain's own by default. Free, no key.");
     const section = readme.split("\n## Watch public changes\n")[1]!.split("\n## ")[0]!;
     expect(section).toContain("It does not say why, and most tokens with these traces are never listed.");
     expect(section).toContain("reports none of it as new, so a new watcher starts quiet.");
+    expect(section).toContain("`v1=` and the hex HMAC-SHA256, keyed with the watch's `secret`, of the timestamp, a full stop and the body.");
     expect(section).not.toMatch(/\u2014|alpha|front-?run|insider|will list|forecast/i);
   });
 
@@ -309,5 +312,63 @@ describe("the watcher's HTTP surface", () => {
       expect(events.headers.get(name), name).toBe(value);
     const made = await fetch(new URL("/watches", base), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: "https://hooks.example.com/x" }) });
     expect([made.headers.get("x-content-type-options"), made.headers.get("access-control-allow-origin")]).toEqual(["nosniff", null]);
+  });
+});
+
+describe("the watch tools", () => {
+  it("make a watch on the watcher, hand back its secret and manage token, and remove it with them", async () => {
+    const { base } = await serving();
+    const readers = { watch: (request: Parameters<typeof createWatch>[1]) => createWatch(base, request), unwatch: (id: string, token: string) => removeWatch(base, id, token) };
+    const made = JSON.parse(text(await callTool(desk, WATCH_NAME, { url: "https://discord.com/api/webhooks/123/abc", kinds: ["bitgo"] }, undefined, undefined, undefined, readers))) as Record<string, string>;
+    expect(made).toMatchObject({ watcher: base.origin, id: expect.stringMatching(/^[\w-]{22}$/), manageToken: expect.stringMatching(/^[\w-]{43}$/), format: "discord" });
+    const wrong = await callTool(desk, UNWATCH_NAME, { id: made.id, manageToken: "x".repeat(43) }, undefined, undefined, undefined, readers);
+    expect([wrong.isError, JSON.parse(text(wrong)).error]).toEqual([true, "No watch has that id and manage token on this watcher. It may be removed already."]);
+    expect(JSON.parse(text(await callTool(desk, UNWATCH_NAME, { id: made.id, manageToken: made.manageToken }, undefined, undefined, undefined, readers)))).toEqual({ removed: true, id: made.id });
+  });
+
+  it("pass on what the watcher refuses, and check what they are sent first", async () => {
+    const { base } = await serving();
+    const readers = { watch: (request: Parameters<typeof createWatch>[1]) => createWatch(base, request) };
+    const refused = await callTool(desk, WATCH_NAME, { url: "https://192.168.1.4/hook" }, undefined, undefined, undefined, readers);
+    expect(JSON.parse(text(refused)).error).toBe("url points at a private, loopback or reserved address.");
+    for (const [name, args, error] of [
+      [WATCH_NAME, { url: "http://hooks.example.com" }, "url must be an https address of at most 2,048 characters."],
+      [WATCH_NAME, { url: "https://hooks.example.com", kinds: ["listing"] }, "Unknown kind: listing. The kinds are listed in this tool's description."],
+      [UNWATCH_NAME, { id: "short", manageToken: "x".repeat(43) }, "id must be the id brainchain_watch gave: 22 letters, digits, - or _."],
+    ] as const)
+      expect(JSON.parse(text(await callTool(desk, name, args))).error).toBe(error);
+  });
+
+  it("say how to check a delivery and what to keep private, in plain words", () => {
+    const description = WATCH_TOOL.description!;
+    expect(description).toContain("X-BrainChain-Signature is v1= and the hex HMAC-SHA256, keyed with `secret`, of X-BrainChain-Timestamp, a full stop and the body.");
+    expect(description).toContain("Keep all three private");
+    for (const word of [/alpha/i, /front-?run/i, /insider/i, /signal/i, /will list/i, /forecast/i, /\u2014/]) expect(description).not.toMatch(word);
+  });
+});
+
+describe("the changes resource", () => {
+  it("reads the newest changes, and while subscribed tells the client of each new one", async () => {
+    const { base, log, served } = await serving();
+    const server = createServer({ BRAINCHAIN_WATCH_URL: base.origin }, "0.0.0-test", { log: () => {} });
+    const [mine, theirs] = InMemoryTransport.createLinkedPair();
+    await server.connect(theirs);
+    const client = new Client({ name: "test", version: "1" });
+    const updated: string[] = [];
+    client.setNotificationHandler(ResourceUpdatedNotificationSchema, ({ params }) => void updated.push(params.uri));
+    await client.connect(mine);
+    expect((await client.listResources()).resources.map(({ uri }) => uri)).toEqual(["brainchain://changes"]);
+    const read = JSON.parse((await client.readResource({ uri: "brainchain://changes" })).contents[0]!.text as string) as { events: { id: number }[] };
+    expect(read.events.map(({ id }) => id)).toEqual([2, 3, 4]);
+    await client.subscribeResource({ uri: "brainchain://changes" });
+    for (let waited = 0; waited < 2_000; waited += 20) {
+      served.publish(settled(log, [{ ...found("kucoin.listed", `kucoin-${waited}`), observedAt: "2026-11-19T13:00:00.000Z" }]));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      if (updated.length) break;
+    }
+    expect(updated[0]).toBe("brainchain://changes");
+    await client.unsubscribeResource({ uri: "brainchain://changes" });
+    await expect(client.readResource({ uri: "brainchain://other" })).rejects.toThrow(/Unknown resource brainchain:\/\/other/);
+    await client.close();
   });
 });

@@ -4,12 +4,15 @@ import { DEFAULT_LIMIT, knownKind, MAX_LIMIT } from "./watch/events.js";
 import { MAX_FILTERS } from "./watch/serve.js";
 
 export const CHANGES_NAME = "brainchain_changes";
+export const WATCH_NAME = "brainchain_watch";
+export const UNWATCH_NAME = "brainchain_unwatch";
+/** BrainChain's own watcher, which the tools read unless BRAINCHAIN_WATCH_URL names another. */
+export const HOSTED_WATCH_URL = "https://watch.usebrainchain.com";
 
 const REQUEST_MS = 10_000;
 
 export const WATCH_STEPS =
-  "Run `npx -y brainchain-mcp watch --serve 8787` on a machine that stays on, set BRAINCHAIN_WATCH_URL to http://127.0.0.1:8787 in this server's environment, and restart this server. " +
-  "On its first run the watcher records what is already public as its baseline; every change after that comes back here.";
+  "To run your own, start `npx -y brainchain-mcp watch --serve 8787` on a machine that stays on and set BRAINCHAIN_WATCH_URL to http://127.0.0.1:8787 in this server's environment.";
 
 export const CHANGES_TOOL: Tool = {
   name: CHANGES_NAME,
@@ -29,7 +32,8 @@ export const CHANGES_TOOL: Tool = {
     "Pass the `next` of your previous answer as `since` to get only what is new; `since` also takes a time in ISO 8601, for what the watcher saw from then on. Without `since` you get the newest events. " +
     "`kinds` keeps some kinds, or every kind from one source, such as `bitgo`; `tokens` keeps some tokens, by contract address, symbol or BitGo id; `limit` caps the answer at 1 to 1,000 events, 100 by default, and `more` says whether more matched. " +
     "An event says what became public and when. It does not say why, and most tokens with these traces are never listed. " +
-    "The watcher runs apart from this server, and BRAINCHAIN_WATCH_URL tells this server where. Without it the tool answers with how to start one. What was already public when the watcher first started is its baseline, which it never reports as new. " +
+    `The changes come from BrainChain's watcher at ${HOSTED_WATCH_URL}, or from your own \`brainchain-mcp watch --serve\` when BRAINCHAIN_WATCH_URL names it. What was already public when the watcher first started is its baseline, which it never reports as new. ` +
+    "To have changes sent to you as they happen, use brainchain_watch. " +
     "Free, no key and no payment. Not advice.",
   annotations: { readOnlyHint: true, openWorldHint: true },
   inputSchema: {
@@ -51,10 +55,10 @@ export interface ChangesQuery {
   limit?: number;
 }
 
-/** BRAINCHAIN_WATCH_URL, checked: undefined when unset, and an error for a value that is not an http or https address. */
-export function watchUrl(value: string | undefined): URL | undefined {
+/** BRAINCHAIN_WATCH_URL, checked, or BrainChain's own watcher when it is unset. */
+export function watchUrl(value: string | undefined): URL {
   const given = value?.trim();
-  if (!given) return undefined;
+  if (!given) return new URL(HOSTED_WATCH_URL);
   let url: URL;
   try {
     url = new URL(given);
@@ -90,24 +94,150 @@ export function changesQuery(input: Record<string, unknown>): ChangesQuery {
   return query;
 }
 
-/** The events a running watcher has for the query, or, with no watcher set, how to start one. */
-export async function readChanges(watcher: URL | undefined, query: ChangesQuery, fetchImpl: typeof fetch = fetch): Promise<unknown> {
-  if (!watcher) return { watching: false, message: `No watcher is set for this server. ${WATCH_STEPS}` };
-  const url = new URL("events", watcher.href.endsWith("/") ? watcher : `${watcher.href}/`);
-  if (query.since !== undefined) url.searchParams.set("since", query.since);
-  if (query.kinds?.length) url.searchParams.set("kinds", query.kinds.join(","));
-  if (query.tokens?.length) url.searchParams.set("tokens", query.tokens.join(","));
-  if (query.limit !== undefined) url.searchParams.set("limit", String(query.limit));
+const at = (watcher: URL, path: string) => new URL(path, watcher.href.endsWith("/") ? watcher : `${watcher.href}/`);
+const unreachable = (watcher: URL) => new Error(`The watcher at ${watcher.origin} could not be reached just now. Try again in a minute. ${WATCH_STEPS}`);
+
+/** A watcher's JSON answer, with its own words for a request it refused, which are written for the caller. */
+async function ask(watcher: URL, path: string, init: RequestInit, fetchImpl: typeof fetch): Promise<{ status: number; body: Record<string, unknown> | undefined }> {
   let response: Response;
   try {
-    response = await fetchImpl(url, { headers: { Accept: "application/json", "User-Agent": "brainchain-mcp" }, signal: AbortSignal.timeout(REQUEST_MS) });
+    response = await fetchImpl(at(watcher, path), { ...init, redirect: "error", headers: { Accept: "application/json", "User-Agent": "brainchain-mcp", ...(init.headers as Record<string, string>) }, signal: AbortSignal.timeout(REQUEST_MS) });
   } catch {
-    throw new Error(`The watcher at ${watcher.origin} could not be reached. Check that \`brainchain-mcp watch --serve\` is running there and that BRAINCHAIN_WATCH_URL names it.`);
+    throw unreachable(watcher);
   }
-  const body = (await response.json().catch(() => undefined)) as { error?: unknown; events?: unknown; next?: unknown; more?: unknown; readAt?: unknown } | undefined;
-  if (response.status === 400 && typeof body?.error === "string") throw new Error(body.error.slice(0, 300));
-  if (!response.ok || !body || !Array.isArray(body.events) || typeof body.next !== "number") {
-    throw new Error(`The watcher at ${watcher.origin} answered ${response.status} without a list of events. Check that BRAINCHAIN_WATCH_URL names a running \`brainchain-mcp watch --serve\`.`);
-  }
-  return { watching: true, watcher: watcher.origin, readAt: body.readAt, events: body.events, next: body.next, more: body.more === true };
+  const body = (await response.json().catch(() => undefined)) as Record<string, unknown> | undefined;
+  if (response.status >= 400 && response.status < 500 && response.status !== 404 && typeof body?.error === "string") throw new Error(body.error.slice(0, 300));
+  return { status: response.status, body };
 }
+
+/** The events a watcher has for the query. */
+export async function readChanges(watcher: URL, query: ChangesQuery, fetchImpl: typeof fetch = fetch): Promise<unknown> {
+  const params = new URLSearchParams();
+  if (query.since !== undefined) params.set("since", query.since);
+  if (query.kinds?.length) params.set("kinds", query.kinds.join(","));
+  if (query.tokens?.length) params.set("tokens", query.tokens.join(","));
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  const { status, body } = await ask(watcher, `events${params.size ? `?${params}` : ""}`, {}, fetchImpl);
+  if (status !== 200 || !body || !Array.isArray(body.events) || typeof body.next !== "number") {
+    throw new Error(`The watcher at ${watcher.origin} answered ${status} without a list of events. Check that BRAINCHAIN_WATCH_URL names a running \`brainchain-mcp watch --serve\`.`);
+  }
+  return { watcher: watcher.origin, readAt: body.readAt, events: body.events, next: body.next, more: body.more === true };
+}
+
+export interface WatchRequest {
+  url: string;
+  kinds?: string[];
+  tokens?: string[];
+}
+
+/** Makes a watch on the watcher; the answer holds its secret and manage token, which the watcher never gives out again. */
+export async function createWatch(watcher: URL, request: WatchRequest, fetchImpl: typeof fetch = fetch): Promise<unknown> {
+  const { status, body } = await ask(watcher, "watches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) }, fetchImpl);
+  if (status !== 201 || typeof body?.id !== "string") throw new Error(`The watcher at ${watcher.origin} answered ${status} and made no watch. Try again in a minute.`);
+  return { watcher: watcher.origin, ...body };
+}
+
+export async function removeWatch(watcher: URL, id: string, manageToken: string, fetchImpl: typeof fetch = fetch): Promise<unknown> {
+  const { status } = await ask(watcher, `watches/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${manageToken}` } }, fetchImpl);
+  if (status === 204) return { removed: true, id };
+  if (status === 404) throw new Error("No watch has that id and manage token on this watcher. It may be removed already.");
+  throw new Error(`The watcher at ${watcher.origin} answered ${status}. Try again in a minute.`);
+}
+
+/**
+ * Follows a watcher's stream and calls `seen` with each event's id, from the newest on, until `signal` aborts. A stream
+ * that drops is opened again after a wait that grows to a minute, from the last id seen.
+ */
+export async function followChanges(watcher: URL, seen: (id: number) => void, signal: AbortSignal, fetchImpl: typeof fetch = fetch): Promise<void> {
+  let last: number | undefined;
+  for (let wait = 1_000; !signal.aborted; wait = Math.min(wait * 2, 60_000)) {
+    try {
+      const response = await fetchImpl(at(watcher, "events/stream"), { redirect: "error", signal, headers: { Accept: "text/event-stream", "User-Agent": "brainchain-mcp", ...(last ? { "Last-Event-ID": String(last) } : {}) } });
+      if (response.status !== 200 || !response.body) throw new Error();
+      wait = 1_000;
+      let buffer = "";
+      const decoder = new TextDecoder();
+      for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+        buffer += decoder.decode(chunk, { stream: true });
+        for (let end = buffer.indexOf("\n\n"); end >= 0; end = buffer.indexOf("\n\n")) {
+          const id = /^id: (\d+)$/m.exec(buffer.slice(0, end))?.[1];
+          buffer = buffer.slice(end + 2);
+          if (id) seen((last = Number(id)));
+        }
+        if (buffer.length > 1_000_000) buffer = "";
+      }
+    } catch {
+      // A dropped or refused stream is opened again below.
+    }
+    if (signal.aborted) return;
+    await new Promise((resolve) => setTimeout(resolve, wait).unref());
+  }
+}
+
+/** An id and manage token as brainchain_watch gave them, checked. */
+export function unwatchArgs(input: Record<string, unknown>): { id: string; manageToken: string } {
+  const { id, manageToken } = input;
+  if (typeof id !== "string" || !/^[\w-]{22}$/.test(id)) throw new Error("id must be the id brainchain_watch gave: 22 letters, digits, - or _.");
+  if (typeof manageToken !== "string" || !/^[\w-]{43}$/.test(manageToken)) throw new Error("manageToken must be the manage token brainchain_watch gave: 43 letters, digits, - or _.");
+  return { id, manageToken };
+}
+
+/** A new watch's request, checked before it is sent. */
+export function watchArgsOf(input: Record<string, unknown>): WatchRequest {
+  if (typeof input.url !== "string" || !input.url.trim()) throw new Error("url is required: the https address to send changes to.");
+  const url = input.url.trim();
+  if (url.length > 2048 || !/^https:\/\//i.test(url)) throw new Error("url must be an https address of at most 2,048 characters.");
+  const { kinds, tokens } = changesQuery({ kinds: input.kinds, tokens: input.tokens });
+  return { url, ...(kinds ? { kinds } : {}), ...(tokens ? { tokens } : {}) };
+}
+
+const FILTERS = {
+  kinds: { type: "array", items: { type: "string" }, maxItems: MAX_FILTERS, description: "Optional: kinds to keep, such as bitgo.pr_opened, or a source's prefix, such as bitgo." },
+  tokens: { type: "array", items: { type: "string" }, maxItems: MAX_FILTERS, description: "Optional: tokens to keep, by contract address, symbol or BitGo id." },
+} as const;
+
+export const WATCH_TOOL: Tool = {
+  name: WATCH_NAME,
+  title: "Have new public changes about Robinhood Chain tokens sent to you",
+  description:
+    "Has each new public change about a Robinhood Chain token sent to an https address as the watcher sees it, so an agent or its user hears without asking. " +
+    "`url` can be a Discord or Slack incoming webhook, or a Telegram bot's sendMessage URL with ?chat_id=, which get one line per change: what changed, the token, what it is worth now and the link to check it. " +
+    "Any other https endpoint gets each event as JSON, the same as brainchain_changes returns it, signed: X-BrainChain-Signature is v1= and the hex HMAC-SHA256, keyed with `secret`, of X-BrainChain-Timestamp, a full stop and the body. Refuse a delivery whose timestamp is more than 300 seconds off. " +
+    "`kinds` and `tokens` keep only some changes, as in brainchain_changes. Only changes after the watch is made are sent, in order, each once. " +
+    "The answer has `id`, `secret` and `manageToken`. Keep all three private: the watcher shows `manageToken` only this once, and it removes the watch with brainchain_unwatch. The watcher keeps the URL to send to and never shows it again. " +
+    "An endpoint that fails is tried again for about two hours, then the watch is switched off. The url must be https, on port 443, at a public address. One address can hold 5 watches and make 10 an hour. " +
+    `The watch is made on BrainChain's watcher at ${HOSTED_WATCH_URL}, or on the one BRAINCHAIN_WATCH_URL names. Free, no key and no payment.`,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  inputSchema: {
+    type: "object",
+    properties: { url: { type: "string", maxLength: 2048, description: "The https address to send changes to: a Discord or Slack webhook, a Telegram bot's sendMessage URL with ?chat_id=, or your own endpoint." }, ...FILTERS },
+    required: ["url"],
+    additionalProperties: false,
+  },
+};
+
+export const UNWATCH_TOOL: Tool = {
+  name: UNWATCH_NAME,
+  title: "Stop changes being sent",
+  description: "Removes a watch made with brainchain_watch, so nothing more is sent to its address. Pass its `id` and the `manageToken` brainchain_watch gave. A wrong token and an unknown id get the same answer. Free, no key and no payment.",
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: { type: "string", pattern: "^[\\w-]{22}$", description: "The watch's id, from brainchain_watch." },
+      manageToken: { type: "string", pattern: "^[\\w-]{43}$", description: "The manage token brainchain_watch gave with it." },
+    },
+    required: ["id", "manageToken"],
+    additionalProperties: false,
+  },
+};
+
+/** The resource a client can subscribe to, to hear of each new change while this server runs. */
+export const CHANGES_URI = "brainchain://changes";
+export const CHANGES_RESOURCE = {
+  uri: CHANGES_URI,
+  name: "changes",
+  title: "New public changes about Robinhood Chain tokens",
+  description: "The newest public changes about Robinhood Chain tokens, as brainchain_changes returns them. Subscribe to hear of each new one: the server follows the watcher's stream while it runs, and sends resources/updated for each change.",
+  mimeType: "application/json",
+};

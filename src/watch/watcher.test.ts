@@ -157,7 +157,8 @@ describe("the watcher", () => {
     const quick = (name: string): Poller => ({ name, interval: 5, poll: async () => void reads.push(name) });
     const { watcher } = open(where, [quick("a"), quick("b")]);
     watcher.start();
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    const runs = (name: string) => reads.filter((read) => read === name).length;
+    for (let waited = 0; waited < 2_000 && (runs("a") < 2 || runs("b") < 2); waited += 10) await new Promise((resolve) => setTimeout(resolve, 10));
     await watcher.stop();
     const count = reads.length;
     expect(reads.filter((name) => name === "a").length).toBeGreaterThan(1);

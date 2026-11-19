@@ -104,7 +104,7 @@
         },
         {
           "name": "BRAINCHAIN_WATCH_URL",
-          "description": "The address of a running brainchain-mcp watch --serve, such as http://127.0.0.1:8787, which brainchain_changes reads. Without it the tool answers with how to start one.",
+          "description": "The watcher brainchain_changes, brainchain_watch and brainchain_unwatch use, such as your own brainchain-mcp watch --serve at http://127.0.0.1:8787. BrainChain's own, https://watch.usebrainchain.com, by default.",
           "isRequired": false,
           "format": "string"
         },
