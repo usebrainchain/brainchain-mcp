@@ -81,5 +81,5 @@ export function eventContext({ log, readers, wallets, times, ms = CONTEXT_MS }: 
   };
 }
 
-/** Runs a timeline's chain reads against the watcher's own reader, within the same limit as the tools. */
+/** Runs a timeline's chain reads against the watcher's own reader, so they share its pace and its count of requests. */
 export const chainTurn = (reader: ChainHistory) => <T>(read: (reader: ChainHistory) => Promise<T>) => read(reader);
