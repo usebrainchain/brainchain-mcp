@@ -17,7 +17,8 @@ MCP server that pays for tasks on BrainChain, reads their graded results and bon
 It also reads what stock tokens cost on Robinhood Chain, lists the Robinhood Chain tokens that BitGo, a custodian for
 exchanges and funds, has recently started to support, reads how much of a token on that chain a market maker's
 trading wallets hold, now or at a past block, reads how far along a token is (deployed, first minted, first pool
-created), reads which lists and exchanges already carry it, and puts every dated public step of a token in one timeline.
+created), reads which lists and exchanges already carry it, puts every dated public step of a token in one timeline,
+and reads a token's price, supply and market cap at a past block or now.
 
 Usage:
   brainchain-mcp                 Start the server on stdio (what MCP clients run).

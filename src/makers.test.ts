@@ -263,8 +263,8 @@ describe("the market maker tool's words", () => {
     expect(MAKERS_TOOL.inputSchema).toMatchObject({ required: ["token"], additionalProperties: false });
     expect(Object.keys(MAKERS_TOOL.inputSchema.properties!)).toEqual(["token", "wallet", "atBlock", "at"]);
     expect(readme).toContain(`- \`${MAKERS_NAME}\` `);
-    expect(readme).toContain("The other nine only read.");
-    expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings` and `brainchain_token_timeline`.");
+    expect(readme).toContain("The other ten only read.");
+    expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline` and `brainchain_token_market_cap`.");
   });
 });
 

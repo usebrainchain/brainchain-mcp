@@ -157,7 +157,7 @@ export async function firstSince<T>(kept: Kept<T>, key: string, newest: bigint, 
 }
 
 /** What `read` finds, kept under `name`. A read that fails is dropped, so the next answer asks again. */
-function remember<T>(kept: Map<string, Promise<T>>, name: string, read: () => Promise<T>): Promise<T> {
+export function remember<T>(kept: Map<string, Promise<T>>, name: string, read: () => Promise<T>): Promise<T> {
   const earlier = kept.get(name);
   if (earlier) return earlier;
   if (kept.size >= MAX_KEPT) kept.clear();

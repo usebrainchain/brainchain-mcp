@@ -13,6 +13,7 @@ import { stateDirProblem } from "./daily.js";
 import { useGitHubToken } from "./github.js";
 import { createLimits } from "./limits.js";
 import { configuredMakers, MAKERS_NAME, makersTool, MARKET_MAKERS, readMakerHoldings, type MakerWallet } from "./makers.js";
+import { MARKET_CAP_NAME, MARKET_CAP_TOOL } from "./marketcap.js";
 import { createDesk, erc20, firstLine } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL } from "./premiums.js";
 import { READINESS_NAME, READINESS_TOOL } from "./readiness.js";
@@ -53,7 +54,7 @@ export const INSTRUCTIONS =
 const KEY_HELP =
   `Keep the key in a file only your account can read (chmod 600) and add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config ` +
   `(in Claude Code, \`claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp\`), then restart the server. ` +
-  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME} and ${TIMELINE_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
+  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME}, ${TIMELINE_NAME} and ${MARKET_CAP_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -355,6 +356,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
     READINESS_TOOL,
     SIGHTINGS_TOOL,
     lead(TIMELINE_TOOL),
+    MARKET_CAP_TOOL,
     ...bondToolList,
   ];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
