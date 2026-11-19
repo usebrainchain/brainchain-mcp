@@ -123,7 +123,9 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   // Each token's pool index and creation block are kept on disk, so a restart does not search its history again.
   const worthFile = join(dir, "worth.json");
   const worthKept = loadWorth(worthFile);
-  const capKept: CapKept = { starts: new Map(), pools: new Map(), swaps: new Map(), changes: new Map(), supply: new Map(), times: new Map(), index: worthKept.index };
+  // The hosted watcher's address is shared, and the public endpoint often turns it away: a long search it refuses is
+  // answered from state instead, and tried again next time.
+  const capKept: CapKept = { starts: new Map(), pools: new Map(), swaps: new Map(), changes: new Map(), supply: new Map(), times: new Map(), index: worthKept.index, byState: true };
   let saving: ReturnType<typeof setTimeout> | undefined;
   const keepWorth = () => {
     saving ??= setTimeout(() => {

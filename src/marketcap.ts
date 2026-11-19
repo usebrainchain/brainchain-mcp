@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { formatUnits, getAddress, isAddressEqual, parseAbiItem, zeroAddress, type Address, type Hash } from "viem";
+import { decodeFunctionResult, encodeAbiParameters, encodeFunctionData, formatUnits, getAddress, isAddressEqual, keccak256, multicall3Abi, parseAbi, parseAbiItem, parseAbiParameters, zeroAddress, type Address, type Hash } from "viem";
 
 import { BY_SYMBOL, TOKEN_INPUT } from "./custody.js";
 import {
@@ -20,6 +20,7 @@ import {
   type Kept,
   type Moment,
 } from "./history.js";
+import { MULTICALL3 } from "./premiums.js";
 import { UNISWAP_V3, UNISWAP_V4 } from "./readiness.js";
 
 export const MARKET_CAP_NAME = "brainchain_token_market_cap";
@@ -152,6 +153,11 @@ export interface CapKept {
   times: Map<string, Promise<bigint>>;
   /** Each set of pairs' pools found so far, from one block through another: a later read scans only the blocks after. */
   index: Map<string, { from: bigint; through: bigint; pools: Pool[] }>;
+  /**
+   * When a search for pools over a long range is turned away, use the pools that state alone shows instead, and search
+   * again next time. Set by a caller that must answer without the public endpoint; the tool leaves it unset.
+   */
+  byState?: boolean;
 }
 
 /** Ranges up to this many blocks are searched in one request; longer ones a stretch at a time. */
@@ -216,6 +222,57 @@ async function scanPools(reader: ChainHistory, pairs: readonly [Address, Address
   return found;
 }
 
+const getPoolAbi = parseAbi(["function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)"]);
+const extsloadAbi = parseAbi(["function extsload(bytes32[] slots) view returns (bytes32[] values)"]);
+/** The fee tiers Uniswap v3 enables when it is deployed. */
+export const V3_FEES = [100, 500, 3_000, 10_000] as const;
+/** The fee and tick spacing pairs a Uniswap v4 pool without hooks takes by convention. */
+export const V4_STANDARD = [
+  [100, 1],
+  [500, 10],
+  [3_000, 60],
+  [10_000, 200],
+] as const;
+/** Where the v4 pool manager keeps its pools, as Uniswap's StateLibrary reads them. */
+const POOLS_SLOT = 6n;
+const LOW_160 = (1n << 160n) - 1n;
+
+/** A v4 pool's id: the hash of its key, as the pool manager computes it. */
+export const v4PoolId = (currency0: Address, currency1: Address, fee: number, tickSpacing: number, hooks: Address = zeroAddress): Hash =>
+  keccak256(encodeAbiParameters(parseAbiParameters("address, address, uint24, int24, address"), [currency0, currency1, fee, tickSpacing, hooks]));
+
+/**
+ * The pools of `pairs` that state alone shows, with no search of logs: v3 pools at the standard fee tiers, from the
+ * factory, and v4 pools without hooks at the standard fee and tick spacing pairs that hold a price in the pool manager.
+ * A v4 pool with hooks, or at another fee, is not among them. When each was created is not known, so `created` stands in.
+ */
+export async function poolsByState(reader: ChainHistory, pairs: readonly [Address, Address][], created: bigint): Promise<Pool[]> {
+  const found: Pool[] = [];
+  const v3 = pairs.filter(([currency0]) => !same(currency0, zeroAddress)).flatMap(([currency0, currency1]) => V3_FEES.map((fee) => ({ currency0, currency1, fee })));
+  if (v3.length > 0) {
+    const answers = await reader.readContract({
+      address: MULTICALL3,
+      abi: multicall3Abi,
+      functionName: "aggregate3",
+      args: [v3.map(({ currency0, currency1, fee }) => ({ target: UNISWAP_V3, allowFailure: true, callData: encodeFunctionData({ abi: getPoolAbi, functionName: "getPool", args: [currency0, currency1, fee] }) }))],
+    });
+    v3.forEach(({ currency0, currency1, fee }, i) => {
+      const answer = answers[i];
+      if (!answer?.success || answer.returnData === "0x") return;
+      const pool = decodeFunctionResult({ abi: getPoolAbi, functionName: "getPool", data: answer.returnData });
+      if (!same(pool, zeroAddress)) found.push({ version: "Uniswap v3", key: getAddress(pool), currency0, currency1, fee, created });
+    });
+  }
+  const v4 = pairs.flatMap(([currency0, currency1]) => V4_STANDARD.map(([fee, spacing]) => ({ currency0, currency1, fee, id: v4PoolId(currency0, currency1, fee, spacing) })));
+  const slots = v4.map(({ id }) => keccak256(encodeAbiParameters(parseAbiParameters("bytes32, uint256"), [id, POOLS_SLOT])));
+  const values = await reader.readContract({ address: UNISWAP_V4, abi: extsloadAbi, functionName: "extsload", args: [slots] });
+  v4.forEach(({ currency0, currency1, fee, id }, i) => {
+    // A pool that was never initialized has no price.
+    if ((BigInt(values[i] ?? "0x0") & LOW_160) !== 0n) found.push({ version: "Uniswap v4", key: id, currency0, currency1, fee, hooks: zeroAddress, created });
+  });
+  return found;
+}
+
 /**
  * The pools on Uniswap v3 and v4 created by `upTo` that pair one of `assets` with one of `quotes`, from block `from` on.
  * What was found is kept as an index through the newest block, so the next read for the same pairs scans only the blocks
@@ -227,7 +284,18 @@ async function poolsFor(reader: ChainHistory, assets: readonly Address[], quotes
   const known = kept.index.get(key);
   const covered = known !== undefined && known.from <= from;
   if (!covered || known.through < upTo) {
-    const scanned = await scanPools(reader, pairs, covered ? known.through + 1n : from, newest, newest, kept);
+    const start = covered ? known.through + 1n : from;
+    let scanned: Pool[];
+    try {
+      scanned = await scanPools(reader, pairs, start, newest, newest, kept);
+    } catch (error) {
+      if (!kept.byState || newest - start < ONE_RANGE) throw error;
+      // The stretches already read are kept, so the search goes on from them next time.
+      const shown = await poolsByState(reader, pairs, start);
+      const pools = [...(covered ? known.pools : [])];
+      for (const pool of shown) if (!pools.some((other) => other.key.toLowerCase() === pool.key.toLowerCase())) pools.push(pool);
+      return pools.filter((pool) => pool.created <= upTo);
+    }
     kept.index.set(key, { from: covered ? known.from : from, through: newest, pools: [...(covered ? known.pools : []), ...scanned] });
   }
   return kept.index.get(key)!.pools.filter((pool) => pool.created <= upTo);

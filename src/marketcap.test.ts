@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 
-import { decodeFunctionData, encodeFunctionResult, getAddress, InvalidInputRpcError, multicall3Abi, parseAbi, RpcRequestError, zeroAddress, type Address, type Hash, type Hex } from "viem";
+import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult, getAddress, InvalidInputRpcError, keccak256, multicall3Abi, parseAbi, parseAbiParameters, RpcRequestError, zeroAddress, type Address, type Hash, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
 
 import { ChainError, type ChainHistory } from "./history.js";
@@ -21,6 +21,8 @@ import {
   USDG,
   WETH,
   type CapKept,
+  poolsByState,
+  v4PoolId,
 } from "./marketcap.js";
 import { MULTICALL3 } from "./premiums.js";
 import { UNISWAP_V3, UNISWAP_V4 } from "./readiness.js";
@@ -410,5 +412,43 @@ describe("marketCap", () => {
   it("refuses USDG itself and an address with no contract", async () => {
     await expect(marketCap(chain().reader, USDG, fresh(), NOW)).rejects.toThrow(new ChainError("USDG is the dollar this tool prices in: it counts one USDG as one dollar."));
     await expect(marketCap(chain().reader, OTHER, fresh(), NOW)).rejects.toThrow(/^There is no contract at 0xB97e4298c7F5f55360d207a6196125376675B3eA on Robinhood Chain\./);
+  });
+});
+
+describe("pools from state", () => {
+  const PLTR = "0x894E1EC2D74FFE5AEF8Dc8A9e84686acCB964F2A" as Address;
+
+  it("computes a v4 pool's id from its key as the pool manager does", () => {
+    // PLTR/USDG at 1% with a tick spacing of 200 and no hooks, as Robinhood Chain logged its Initialize.
+    expect(v4PoolId(USDG, PLTR, 10_000, 200)).toBe("0xee430ee1003e1985e1828a01b9a20dad67ad4302994fe2abb4a173de4ac54623");
+  });
+
+  it("finds v3 pools at the standard fee tiers from the factory and v4 pools without hooks that hold a price, with no search of logs", async () => {
+    const V3_POOL = getAddress("0x85168041a9f3d8e9b0e2f8a3e3c8c0c8f5a1b2c3");
+    const live = v4PoolId(USDG, PLTR, 10_000, 200);
+    const slotOf = (id: Hash) => keccak256(encodeAbiParameters(parseAbiParameters("bytes32, uint256"), [id, 6n]));
+    const reader = {
+      async readContract({ address, functionName, args }: { address: Address; functionName: string; args: [unknown] }) {
+        if (functionName === "aggregate3") {
+          expect(address).toBe(MULTICALL3);
+          return (args[0] as { target: Address; callData: Hex }[]).map(({ target, callData }) => {
+            expect(target).toBe(UNISWAP_V3);
+            const { args: [a, b, fee] } = decodeFunctionData({ abi: parseAbi(["function getPool(address, address, uint24) view returns (address)"]), data: callData });
+            const pool = a === USDG && b === PLTR && fee === 3_000 ? V3_POOL : zeroAddress;
+            return { success: true, returnData: encodeAbiParameters(parseAbiParameters("address"), [pool]) };
+          });
+        }
+        expect([address, functionName]).toEqual([UNISWAP_V4, "extsload"]);
+        return (args[0] as Hash[]).map((slot) => (slot === slotOf(live) ? `0x${(1n << 96n).toString(16).padStart(64, "0")}` : `0x${"0".repeat(64)}`));
+      },
+      async getLogs() {
+        throw new Error("no search of logs");
+      },
+    } as unknown as ChainHistory;
+    const pools = await poolsByState(reader, [[USDG, PLTR], [zeroAddress, PLTR]], 48_285n);
+    expect(pools.map(({ version, key, fee, created }) => [version, key, fee, created])).toEqual([
+      ["Uniswap v3", V3_POOL, 3_000, 48_285n],
+      ["Uniswap v4", live, 10_000, 48_285n],
+    ]);
   });
 });
