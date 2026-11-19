@@ -44,7 +44,7 @@ const KEY = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const task = { title: "Explain a Merkle proof", brief: "In two paragraphs.", levels: ["Accurate and complete", "Accurate"] };
 const order = `0x${"ab".repeat(32)}`;
 const grade = { brief: "Sort 3, 1 and 2.", result: "1, 2, 3" };
-const sitting = { agentId: "20424" };
+const sitting = { agentId: "20424", price: "5000000" };
 const delivery = { sitting: order, item: 0, text: "def f(x):\n    return x" };
 const EXAM_TOOLS = [EXAM_INFO_NAME, SIT_EXAM_NAME, EXAM_SUBMIT_NAME, EXAM_STATUS_NAME, LICENCES_NAME, AGENT_RECORD_NAME];
 
@@ -102,7 +102,8 @@ describe("the server", () => {
     }) as typeof fetch;
     const client = await connect({ BRAINCHAIN_NETWORK: "testnet" }, { fetch: fetchImpl });
     expect(JSON.parse(text(await client.callTool({ name: EXAM_INFO_NAME, arguments: {} })))).toEqual({ price: "5.00 USD a sitting", pool: { inUse: 1 } });
-    expect(reads).toEqual(["https://brain.testnet.usebrainchain.com/exams"]);
+    // The price in units is read from the desk's offer, which needs no key either.
+    expect(reads.sort()).toEqual(["https://brain.testnet.usebrainchain.com/exams", "https://brain.testnet.usebrainchain.com/x402/exams"]);
     for (const call of [
       { name: SIT_EXAM_NAME, arguments: sitting },
       { name: EXAM_SUBMIT_NAME, arguments: delivery },
@@ -113,11 +114,11 @@ describe("the server", () => {
       expect(text(result)).toContain("No paying key is set");
       expect(text(result)).toContain("stop and tell your operator");
     }
-    expect(reads).toHaveLength(1);
+    expect(reads).toHaveLength(2);
 
     const { address } = privateKeyToAccount(`0x${KEY}`);
     const { tools } = await (await connect({ BRAINCHAIN_PAYER_KEY: KEY })).listTools();
-    expect(tools.find((tool) => tool.name === SIT_EXAM_NAME)!.description).toContain(`pays exactly that from this server's wallet ${address} on Robinhood Chain.`);
+    expect(tools.find((tool) => tool.name === SIT_EXAM_NAME)!.description).toContain(`pays exactly that from this server's wallet ${address} on Robinhood Chain, or refuses with nothing signed when the desk asks more than \`price\`.`);
     expect(INSTRUCTIONS).toContain(`call ${SIT_EXAM_NAME} again with the same agentId and class`);
   });
 
@@ -155,8 +156,8 @@ describe("the server", () => {
         { name: SIT_EXAM_NAME, arguments: sitting },
         { name: EXAM_SUBMIT_NAME, arguments: delivery },
         { name: EXAM_STATUS_NAME, arguments: { sitting: order } },
-        { name: LICENCES_NAME, arguments: sitting },
-        { name: AGENT_RECORD_NAME, arguments: sitting },
+        { name: LICENCES_NAME, arguments: { agentId: sitting.agentId } },
+        { name: AGENT_RECORD_NAME, arguments: { agentId: sitting.agentId } },
       ]) {
         const result = await client.callTool(call);
         expect(result.isError).toBe(true);

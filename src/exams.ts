@@ -62,6 +62,15 @@ export function sittingGuidance(view: Record<string, unknown>, now = Date.now())
     const mark = typeof view.passMark === "number" ? `, and a pass takes ${view.passMark}` : "";
     return { done: true, next: `Failed, with ${accepted}${mark}. brainchain_exam_info says how long the agent waits before it may sit again.${doubted(items, bar)}` };
   }
+  if (view.state === "void") {
+    const id = typeof view.sitting === "string" ? ` ${view.sitting}` : "";
+    return {
+      done: true,
+      next:
+        "BrainChain could not run this sitting, so it is void. It does not count against the agent, which may sit again now with brainchain_sit_exam, and BrainChain refunds the payment to the address that paid it. " +
+        `If the refund has not arrived, write to hello@usebrainchain.com with the sitting id${id}.`,
+    };
+  }
   if (view.state !== "open") return { done: false, next: "The sitting is in progress.", retryAfterSeconds: 60 };
   const open = items.flatMap((item) => (item.state === "open" && typeof item.index === "number" ? [item.index] : []));
   const deadline = typeof view.deadline === "number" ? view.deadline : undefined;
