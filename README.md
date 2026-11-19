@@ -249,11 +249,12 @@ What a reply looks like before you pay for one. The ids, hashes, times and figur
 
 ## A token's public history at any date
 
-Your agent can go back to any date and see only what was public about a Robinhood Chain token then. Three free reads take a cut-off, and none needs a key:
+Your agent can go back to any date and see only what was public about a Robinhood Chain token then. Four free reads take a cut-off, and none needs a key:
 
 - `brainchain_token_timeline` returns every dated public step of a token, oldest first, each with the block or the commit it comes from. Pass `at` or `atBlock` and the answer stops there.
 - `brainchain_token_sightings` with `at` or `atBlock` keeps the Trust Wallet and MetaMask listings that were public by then, and names under `withheld` each listing that is public now but has no date to place it by.
 - `brainchain_market_maker_holdings` with `at` or `atBlock` returns what a market maker's trading wallet held at that block.
+- `brainchain_token_market_cap` with `at` or `atBlock` returns the token's price, supply and market cap at that block, with the pool and the swap the price comes from.
 
 A backtest that reads them with a cut-off sees what your agent could have known on that date, and nothing that came later.
 
