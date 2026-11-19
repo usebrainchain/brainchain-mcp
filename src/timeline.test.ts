@@ -122,6 +122,10 @@ describe("the timeline tool's words", () => {
       expect(text).toContain("The tool lists dated public steps and does not forecast a listing, so it gives no score.");
       expect(text).toContain("A step is a lead to look into: none says why it happened, and together they do not mean an exchange will list the token.");
       expect(text).toContain("Robinhood, Bitstamp, KuCoin, Gate, LI.FI and CoinGecko publish no date for a listing");
+      expect(text).toContain("BitGo's merges are read from May 11, 2026, when BitGo added its first Robinhood Chain token, so a token BitGo added at any time since has its merge, including one it has since removed");
+      expect(text).toContain("A token BitGo removed again within 16 merges, a few days at its pace, can be missed.");
+      expect(text).toContain("about a dozen of the 60 requests an hour GitHub allows one IP address without a key");
+      expect(text).not.toContain("90 days");
       expect(text).not.toMatch(/guarantee|will be listed|insider|likely|probab|signal strength/i);
     }
     expect(TIMELINE_TOOL.description).toMatch(/Free, no key and no payment\. Not advice\.$/);
@@ -228,6 +232,14 @@ describe("tokenTimeline", () => {
     expect(board.undated).toEqual([{ step: "custody", source: "BitGo", id: "hoodeth:cashcat", name: "Cash Cat", by: "2026-05-09T00:00:00.000Z" }]);
     expect((await timeline(readers, { time: Date.parse("2026-05-09T00:00:00Z") })).undated).toHaveLength(1);
     expect((await timeline(readers, { time: Date.parse("2026-05-08T23:59:59Z") })).undated).toEqual([]);
+  });
+
+  it("gives a token BitGo has since removed from its lists its BitGo step", async () => {
+    const { readers } = sources({ listed: async () => [] });
+    const board = await timeline(readers);
+    expect(board.steps.filter(({ step }) => step === "custody")).toEqual([{ at: "2026-07-28T07:09:00.000Z", step: "custody", source: "BitGo", id: "hoodeth:cashcat", name: "Cash Cat", commit: MERGE }]);
+    expect(board.undated).toEqual([]);
+    expect(kinds(await timeline(readers, { time: Date.parse("2026-07-28T07:09:00Z") }))).toContain("custody BitGo");
   });
 
   it("gives nothing for BitGo when the token is on none of its lists, and takes only the token's own entry from a merge", async () => {

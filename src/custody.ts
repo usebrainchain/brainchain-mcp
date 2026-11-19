@@ -7,14 +7,35 @@ export const CUSTODY_NAME = "brainchain_custody_additions";
 const REPO = "BitGo/BitGoJS";
 /** The lists that hold Robinhood Chain tokens: the one BitGo's engineers edit and the one its asset service generates. */
 export const TOKEN_LISTS = ["modules/statics/src/coins/hoodethTokens.ts", "modules/statics/src/coins/botTokens.ts"] as const;
+/** Where BitGo kept its Robinhood Chain tokens before the list its engineers edit existed. */
+export const EARLY_LIST = "modules/statics/src/allCoinsAndTokens.ts";
+/**
+ * When master moved BitGo's Robinhood Chain tokens out of `EARLY_LIST` into the first of `TOKEN_LISTS` (PR #8970, master at
+ * c6136c75). Before it that list is missing, and the tokens are read from `EARLY_LIST` in its place.
+ */
+export const LISTS_MOVED_AT = Date.parse("2026-06-10T08:54:29Z");
+/**
+ * Where BitGo's history for Robinhood Chain begins: the commit time of 42d4c1de, "add Robinhood mainnet ERC-20 tokens (TSLA
+ * and USDG)", the first commit in BitGoJS that added a Robinhood Chain token. It reached master at 2026-05-11T08:17:10Z, by
+ * PR #8728. Found by halving the history of `EARLY_LIST` for its first version with a `hoodeth:` entry, and by reading every
+ * file under modules/statics/src at that commit's parent: they held only testnet (`thoodeth:`) entries.
+ */
+export const BITGO_START = Date.parse("2026-05-11T07:40:16Z");
 export const DEFAULT_DAYS = 30;
 export const MAX_DAYS = 90;
 /** GitHub's page size for a branch's changes, and how many pages one answer may take before it is given up. */
 export const PAGE = 100;
 export const MAX_PAGES = 12;
+/** How many pages the reading from `BITGO_START` may take: 1,124 changes had reached master by 2026-11-19, about 140 a month. */
+export const HISTORY_PAGES = 60;
+/** The history reads master at every this many changes and halves between, so a token that stayed on the lists this long is found. */
+export const PROBE_EVERY = 16;
 /** GitHub allows 60 unauthenticated API requests an hour from one IP address, so the newest page of changes is kept this long. */
 export const KEEP_MS = 10 * 60_000;
-/** How many reads the reader keeps before it clears them. An answer takes about a dozen for each merge that added a token. */
+/**
+ * How many reads the reader keeps before it clears them. An answer takes about a dozen for each merge that added a token,
+ * and the history from `BITGO_START` took 283 on 2026-11-19, once: what it works out is kept apart from these reads.
+ */
 export const MAX_KEPT = 400;
 /** How long a host that refused a request is not asked again when it sends no reset time. */
 export const REFUSED_MS = 60_000;
@@ -146,29 +167,67 @@ export function tokenList(text: string): TokenList | undefined {
   return { tokens, mentioned: new Set([...source.matchAll(MENTION)].map((mention) => mention[1]!)) };
 }
 
-/** The changes to master since `since`, newest first, the commit master points to now, and when GitHub was read for it. */
-async function changesSince(reader: BitGoReader, since: number): Promise<{ head: string; readAt: number; recent: BranchChange[] }> {
-  const recent: BranchChange[] = [];
-  let newest: { head: string; readAt: number } | undefined;
-  let page: string | undefined;
-  for (let pages = 1; pages <= MAX_PAGES; pages++) {
-    const { changes, readAt, next } = await reader.changes(page);
-    if (!newest && !changes[0]) throw new CustodyError(MOVED);
-    newest ??= { head: changes[0]!.after, readAt };
-    recent.push(...changes.filter((change) => change.at >= since));
-    if (!next || changes.some((change) => change.at < since)) return { ...newest, recent };
-    page = next;
+/** What has been read of master's changes through one reader: a run of them, newest first, and the page after the oldest. */
+interface ReadSoFar {
+  changes: BranchChange[];
+  next?: string;
+}
+const readSoFar = new WeakMap<BitGoReader, ReadSoFar>();
+const same = (a: BranchChange, b: BranchChange) => a.at === b.at && a.before === b.before && a.after === b.after;
+const tooMany = (pages: number) =>
+  new CustodyError(`BitGo merged into its master branch more than ${(pages * PAGE).toLocaleString("en-US")} times in that period, more than this tool reads. Try again with a smaller \`days\`.`);
+
+/**
+ * The changes to master since `since`, newest first, the commit master points to now, and when GitHub was read for it.
+ *
+ * GitHub pages the changes from the newest, so every older page moves along as master moves. What was read before is kept
+ * with the reader: the newest pages are read only until they meet it, and older pages only where it does not reach back to
+ * `since`. One answer reads at most `pages` pages.
+ */
+async function changesSince(reader: BitGoReader, since: number, pages = MAX_PAGES): Promise<{ head: string; readAt: number; recent: BranchChange[] }> {
+  const known = readSoFar.get(reader);
+  const newest = await reader.changes();
+  if (!newest.changes[0]) throw new CustodyError(MOVED);
+  let run: ReadSoFar = { changes: [] };
+  let page = newest;
+  let read = 1;
+  for (;;) {
+    const meets = known?.changes[0] ? page.changes.findIndex((change) => same(change, known.changes[0]!)) : -1;
+    if (meets >= 0) {
+      run = { changes: [...run.changes, ...page.changes.slice(0, meets), ...known!.changes], ...(known!.next ? { next: known!.next } : {}) };
+      break;
+    }
+    run = { changes: [...run.changes, ...page.changes], ...(page.next ? { next: page.next } : {}) };
+    // Without an earlier read to meet, the newest pages stop where the period does.
+    if (!page.next || (!known && page.changes.some((change) => change.at < since))) break;
+    if (read >= pages) {
+      if (page.changes.some((change) => change.at < since)) break;
+      throw tooMany(pages);
+    }
+    page = await reader.changes(page.next);
+    read++;
   }
-  throw new CustodyError(`BitGo merged into its master branch more than ${(MAX_PAGES * PAGE).toLocaleString("en-US")} times in that period, more than this tool reads. Try again with a smaller \`days\`.`);
+  readSoFar.set(reader, run);
+  while (run.next && run.changes.at(-1)!.at >= since) {
+    if (read >= pages) throw tooMany(pages);
+    const older = await reader.changes(run.next);
+    read++;
+    run = { changes: [...run.changes, ...older.changes], ...(older.next ? { next: older.next } : {}) };
+    readSoFar.set(reader, run);
+  }
+  return { head: newest.changes[0].after, readAt: newest.readAt, recent: run.changes.filter((change) => change.at >= since) };
 }
 
 /**
- * Both lists as they stood at a commit, as one. Throws `MOVED` where a list is missing or mentions a Robinhood Chain id that
- * neither list holds as an entry: a missing list would make every token look new at the next commit, and an id read only as a
- * mention would drop its token and report nothing added. Both lists are older than `MAX_DAYS` days.
+ * The lists as they stood at a commit made at `at`, as one. Throws `MOVED` where a list is missing or mentions a Robinhood
+ * Chain id that no list holds as an entry: a missing list would make every token look new at the next commit, and an id read
+ * only as a mention would drop its token and report nothing added. Before `LISTS_MOVED_AT` the tokens BitGo's engineers
+ * edit are read from `EARLY_LIST`.
  */
-async function tokensAt(reader: BitGoReader, commit: string): Promise<Map<string, ListedToken>> {
-  const lists = await Promise.all(TOKEN_LISTS.map((file) => reader.list(file, commit)));
+async function tokensAt(reader: BitGoReader, commit: string, at: number): Promise<Map<string, ListedToken>> {
+  const early = at < LISTS_MOVED_AT;
+  const [edited, generated, earlier] = await Promise.all([...TOKEN_LISTS, ...(early ? [EARLY_LIST] : [])].map((file) => reader.list(file, commit)));
+  const lists = [edited ?? (early ? earlier : undefined), generated];
   const tokens = new Map(lists.flatMap((list) => [...(list?.tokens ?? [])]));
   if (lists.some((list) => !list || [...list.mentioned].some((id) => !tokens.has(id)))) throw new CustodyError(MOVED);
   return tokens;
@@ -186,12 +245,12 @@ async function tokensAt(reader: BitGoReader, commit: string): Promise<Map<string
 export async function custodyAdditions(reader: BitGoReader, period: number | Date, now = new Date()): Promise<CustodyBoard> {
   const since = typeof period === "number" ? now.getTime() - period * DAY_MS : period.getTime();
   const { head, readAt, recent } = await changesSince(reader, since);
-  const held = await tokensAt(reader, head);
+  const held = await tokensAt(reader, head, now.getTime());
   if (held.size === 0) throw new CustodyError(MOVED);
 
   // States run from 0, master as the period opened, to steps.length, master now.
   const steps = [...recent].reverse();
-  const state = (index: number) => tokensAt(reader, index === 0 ? steps[0]!.before : steps[index - 1]!.after);
+  const state = (index: number) => (index === 0 ? tokensAt(reader, steps[0]!.before, since) : tokensAt(reader, steps[index - 1]!.after, steps[index - 1]!.at));
   const added = new Map<number, string[]>();
   async function locate(low: number, high: number, ids: string[]): Promise<void> {
     if (high - low === 1) {
@@ -225,11 +284,84 @@ export async function custodyAdditions(reader: BitGoReader, period: number | Dat
   };
 }
 
+/** What has been worked out of master's history from `BITGO_START` through one reader, so the next answer starts where it ends. */
+interface Story {
+  /** How many changes it covers, the commit master pointed to after the last of them, and the tokens there. */
+  through: number;
+  after: string;
+  tokens: Map<string, ListedToken>;
+  /** Each token's first gain: the change, by its index from 1, and the token as the lists gave it there. */
+  gains: Map<string, { index: number; token: ListedToken }>;
+}
+const stories = new WeakMap<BitGoReader, Story>();
+const sameIds = (a: Map<string, unknown>, b: Map<string, unknown>) => a.size === b.size && [...a.keys()].every((id) => b.has(id));
+
+/**
+ * Every Robinhood Chain token BitGo has added to its lists since `BITGO_START`, each under the change to master that first
+ * brought it, newest change first, tokens BitGo has since removed included.
+ *
+ * Master is read at every `PROBE_EVERY` changes, and each stretch between whose two ends do not hold the same tokens is
+ * halved until the change is found. A stretch whose ends hold the same tokens is taken to hold no change, so a token found
+ * is one that stayed on the lists for `PROBE_EVERY` changes in a row, or that the halving met; one added and removed again
+ * sooner can be missed. A token still on the lists is described as they describe it now, and one since removed as they
+ * described it when it was added. The work is kept with the reader, so a later answer reads only the changes since.
+ */
+export async function custodyHistory(reader: BitGoReader, now = new Date()): Promise<CustodyBoard> {
+  const { head, readAt, recent } = await changesSince(reader, BITGO_START, HISTORY_PAGES);
+  const held = await tokensAt(reader, head, now.getTime());
+  if (held.size === 0) throw new CustodyError(MOVED);
+
+  const steps = [...recent].reverse();
+  const state = (index: number) => (index === 0 ? tokensAt(reader, steps[0]!.before, BITGO_START) : tokensAt(reader, steps[index - 1]!.after, steps[index - 1]!.at));
+  const story = stories.get(reader);
+  const resumes = story !== undefined && story.through > 0 && story.through <= steps.length && steps[story.through - 1]!.after === story.after;
+  const found: [string, { index: number; token: ListedToken }][] = [];
+  async function split(low: number, high: number, first: Map<string, ListedToken>, last: Map<string, ListedToken>): Promise<void> {
+    if (sameIds(first, last)) return;
+    if (high - low === 1) {
+      for (const [id, token] of last) if (!first.has(id)) found.push([id, { index: high, token }]);
+      return;
+    }
+    const middle = (low + high) >> 1;
+    const there = await state(middle);
+    await Promise.all([split(low, middle, first, there), split(middle, high, there, last)]);
+  }
+  const from = resumes ? story.through : 0;
+  if (steps.length > from) {
+    const marks = [from];
+    while (marks.at(-1)! + PROBE_EVERY < steps.length) marks.push(marks.at(-1)! + PROBE_EVERY);
+    marks.push(steps.length);
+    const there = await Promise.all(marks.map((mark, i) => (i === marks.length - 1 ? held : i === 0 && resumes ? story.tokens : state(mark))));
+    await Promise.all(marks.slice(1).map((mark, i) => split(marks[i]!, mark, there[i]!, there[i + 1]!)));
+  }
+  // A gain kept from an earlier answer is older than any found since, and of the gains found now the first counts.
+  const gains = new Map(resumes ? story.gains : []);
+  for (const [id, gain] of found.sort(([, a], [, b]) => a.index - b.index)) if (!gains.has(id)) gains.set(id, gain);
+  if (steps.length > 0) stories.set(reader, { through: steps.length, after: steps.at(-1)!.after, tokens: held, gains });
+
+  const byChange = new Map<number, string[]>();
+  for (const [id, { index }] of gains) byChange.set(index, [...(byChange.get(index) ?? []), id]);
+  const additions = [...byChange]
+    .sort(([first], [second]) => second - first)
+    .map(([index, ids]) => ({
+      addedAt: new Date(steps[index - 1]!.at).toISOString(),
+      commit: `https://github.com/${REPO}/commit/${steps[index - 1]!.after}`,
+      tokens: ids.sort().map((id) => ({ id: `hoodeth:${id}`, ...(held.get(id) ?? gains.get(id)!.token) })),
+    }));
+  return {
+    chain: "Robinhood Chain",
+    source: `https://github.com/${REPO}/tree/master/modules/statics/src/coins`,
+    readAt: new Date(readAt).toISOString(),
+    since: new Date(BITGO_START).toISOString(),
+    additions,
+  };
+}
+
 /** Every Robinhood Chain token on BitGo's lists as master stands now. */
 export async function listedTokens(reader: BitGoReader): Promise<CustodyToken[]> {
   const { changes } = await reader.changes();
   if (!changes[0]) throw new CustodyError(MOVED);
-  const held = await tokensAt(reader, changes[0].after);
+  const held = await tokensAt(reader, changes[0].after, Date.now());
   if (held.size === 0) throw new CustodyError(MOVED);
   return [...held].map(([id, token]) => ({ id: `hoodeth:${id}`, ...token }));
 }
@@ -391,4 +523,10 @@ export function readListedTokens(): Promise<CustodyToken[]> {
 export function readCustodyAdditions(period: number | Date): Promise<CustodyBoard> {
   reader ??= bitGoReader();
   return within(ANSWER_MS, custodyAdditions(reader, period), new CustodyError("BitGo's code on GitHub is taking too long to read. Try again in a minute."));
+}
+
+/** Every merge since `BITGO_START` that added a Robinhood Chain token. Work that runs past the limit goes on, and the next call picks it up. */
+export function readCustodyHistory(): Promise<CustodyBoard> {
+  reader ??= bitGoReader();
+  return within(ANSWER_MS, custodyHistory(reader), new CustodyError("BitGo's code on GitHub is taking too long to read. Try again in a minute."));
 }

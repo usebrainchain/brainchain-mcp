@@ -1,7 +1,7 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { isAddressEqual, type Address, type Hash } from "viem";
 
-import { BY_SYMBOL, MAX_DAYS, readCustodyAdditions, readListedTokens, TOKEN_INPUT, type CustodyBoard, type CustodyToken } from "./custody.js";
+import { BY_SYMBOL, readCustodyHistory, readListedTokens, TOKEN_INPUT, type CustodyBoard, type CustodyToken } from "./custody.js";
 import { blockOf, inTurn, type ChainHistory, type Moment } from "./history.js";
 import { firstApprovalsIn, MARKET_MAKERS, who, type Approval, type MakerWallet } from "./makers.js";
 import { readinessIn, type Pool, type ReadinessBoard } from "./readiness.js";
@@ -24,10 +24,12 @@ export const TIMELINE_TOOL: Tool = {
     BY_SYMBOL +
     "To see only what was public at a point in the past, pass `atBlock`, a block number, or `at`, a time in ISO 8601 such as 2026-11-01T00:00:00Z. " +
     "A step read from the chain is kept when its block is at or before that block, or the last block made at or before that time, and any other step when its time is at or before the block's time, or the time given. `until` then gives the `block` and the time (`at`) used. " +
-    "BitGo's merges are read for the last 90 days. For a token that was already on BitGo's lists when they began, `undated` has the merge with `by`, a time it had happened by, in place of `at`, and so does a listing whose first commit could not be dated. A token BitGo has since removed has no BitGo step. " +
+    "BitGo's merges are read from May 11, 2026, when BitGo added its first Robinhood Chain token, so a token BitGo added at any time since has its merge, including one it has since removed. A token BitGo removed again within 16 merges, a few days at its pace, can be missed. " +
+    "`undated` has a listing whose first commit could not be dated, with `by`, a time it had happened by, in place of `at`. " +
     "Robinhood, Bitstamp, KuCoin, Gate, LI.FI and CoinGecko publish no date for a listing, so brainchain_token_sightings reads them and they are not steps here. " +
     "`deployed` says whether a contract is at the address, `token` holds its `contract` and the `name` and `symbol` it gives itself, and `unread` names a source that could not be read just now: BitGo, Trust Wallet or MetaMask. `readAt` is when the answer was made. " +
     "The tool answers one request at a time, in turn with the other tools that read the chain. The first answer for a token can take half a minute; an answer that is not ready after 45 seconds says so, and asking again goes on from where it stopped. " +
+    "The first answer after the server starts also reads BitGo's history, with about a dozen of the 60 requests an hour GitHub allows one IP address without a key; the server keeps what it worked out, and later answers read only BitGo's changes since. If that history is not read within 45 seconds, `unread` names BitGo, and asking again goes on from where it stopped. " +
     "Free, no key and no payment. Not advice.",
   annotations: { readOnlyHint: true, openWorldHint: true },
   inputSchema: {
@@ -163,7 +165,7 @@ const READERS: TimelineReaders = {
   chain: inTurn,
   readiness: readinessIn,
   approvals: firstApprovalsIn,
-  custody: () => readCustodyAdditions(MAX_DAYS),
+  custody: readCustodyHistory,
   listed: readListedTokens,
   sightings: readTokenSightings,
 };
