@@ -180,7 +180,10 @@ describe("the state folder", () => {
     // A lock taken on another host, as a container's disk after a redeploy, is stale.
     lockStateDir(where, process.pid, "old-container")();
     lockStateDir(where, process.pid, "old-container");
-    expect(() => lockStateDir(where, 2)).not.toThrow();
+    let release2: () => void = () => {};
+    expect(() => (release2 = lockStateDir(where, 2))).not.toThrow();
+    // Pid 2 is a live process on Linux, so its lock is let go before the next.
+    release2();
     // A lock left by a process that no longer runs is taken over, and so is one that names this process, as after a container restart.
     lockStateDir(where, 2 ** 22 + 12_345)();
     lockStateDir(where, 2 ** 22 + 12_345);
