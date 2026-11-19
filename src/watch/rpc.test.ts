@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { redactor, rpcSetting, splitting } from "./rpc.js";
+import { PIECES_AT_ONCE, redactor, rpcSetting, splitting } from "./rpc.js";
 
 describe("the RPC setting", () => {
   it("takes https, or http on this machine, since it can hold a key, and never repeats the value", () => {
@@ -58,6 +58,24 @@ describe("a log search on the private endpoint", () => {
     const answer = (await (await splitting(fetchImpl)(RPC, { method: "POST", body: search(100_000, 129_999) })).json()) as { id: number; result: unknown[] };
     expect([answer.id, answer.result.length]).toEqual([7, 6]);
     expect(asked).toEqual([[100_000, 109_999], [110_000, 119_999], [120_000, 129_999]]);
+  });
+
+  it("has a few pieces in flight at once and joins them in block order, whichever answers first", async () => {
+    let inFlight = 0;
+    let most = 0;
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const { id, params } = JSON.parse(init!.body as string) as { id: number; params: [{ fromBlock: string }] };
+      const from = Number(params[0].fromBlock);
+      inFlight++;
+      most = Math.max(most, inFlight);
+      // Later pieces answer sooner, so order comes only from where each piece is put.
+      await new Promise((resolve) => setTimeout(resolve, 30 - (from / 10_000) * 2));
+      inFlight--;
+      return Response.json({ jsonrpc: "2.0", id, result: [{ blockNumber: `0x${from.toString(16)}` }] });
+    }) as typeof fetch;
+    const answer = (await (await splitting(fetchImpl)(RPC, { method: "POST", body: search(0, 99_999) })).json()) as { result: { blockNumber: string }[] };
+    expect(answer.result.map(({ blockNumber }) => Number(blockNumber))).toEqual(Array.from({ length: 10 }, (_, i) => i * 10_000));
+    expect(most).toBe(PIECES_AT_ONCE);
   });
 
   it("passes a short search, a long one and anything else through as it is, for the fallback to take", async () => {

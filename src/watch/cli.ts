@@ -196,7 +196,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       sightings: (address) => tokenSightings(sightings, address),
     },
     // Off the delivery path, the slow parts get longer: what is not ready by the first deadline follows as an update.
-    ms: 90_000,
+    ms: 150_000,
     worth: async (address) => {
       try {
         return await marketCap(reader, address, capKept, new Date(), undefined, await createdBlock(address));

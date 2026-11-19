@@ -160,6 +160,8 @@ export interface CapKept {
   byState?: boolean;
 }
 
+/** With `byState`, how long a long search for pools is waited for before the pools state shows stand in. */
+export const SEARCH_WAIT_MS = 20_000;
 /** Ranges up to this many blocks are searched in one request; longer ones a stretch at a time. */
 export const ONE_RANGE = 200_000n;
 
@@ -221,6 +223,9 @@ async function scanPools(reader: ChainHistory, pairs: readonly [Address, Address
   }
   return found;
 }
+
+/** Pools that state showed in place of a search still running, and that search. */
+const stoodIn = new WeakMap<Pool[], Promise<void>>();
 
 const getPoolAbi = parseAbi(["function getPool(address tokenA, address tokenB, uint24 fee) view returns (address pool)"]);
 const extsloadAbi = parseAbi(["function extsload(bytes32[] slots) view returns (bytes32[] values)"]);
@@ -285,18 +290,27 @@ async function poolsFor(reader: ChainHistory, assets: readonly Address[], quotes
   const covered = known !== undefined && known.from <= from;
   if (!covered || known.through < upTo) {
     const start = covered ? known.through + 1n : from;
-    let scanned: Pool[];
-    try {
-      scanned = await scanPools(reader, pairs, start, newest, newest, kept);
-    } catch (error) {
-      if (!kept.byState || newest - start < ONE_RANGE) throw error;
-      // The stretches already read are kept, so the search goes on from them next time.
-      const shown = await poolsByState(reader, pairs, start);
-      const pools = [...(covered ? known.pools : [])];
-      for (const pool of shown) if (!pools.some((other) => other.key.toLowerCase() === pool.key.toLowerCase())) pools.push(pool);
-      return pools.filter((pool) => pool.created <= upTo);
+    const search = scanPools(reader, pairs, start, newest, newest, kept).then((scanned) => {
+      kept.index.set(key, { from: covered ? known.from : from, through: newest, pools: [...(covered ? known.pools : []), ...scanned] });
+    });
+    if (!kept.byState || newest - start < ONE_RANGE) await search;
+    else {
+      // A long search the public endpoint turns away or takes too long over: the pools state shows stand in now, and the
+      // search goes on, filling the index for the next read when it finishes.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), SEARCH_WAIT_MS)));
+      const outcome = await Promise.race([search.then(() => "done" as const), late]).catch(() => "failed" as const);
+      clearTimeout(timer);
+      if (outcome !== "done") {
+        search.catch(() => {});
+        const shown = await poolsByState(reader, pairs, start);
+        const pools = [...(covered ? known.pools : [])];
+        for (const pool of shown) if (!pools.some((other) => other.key.toLowerCase() === pool.key.toLowerCase())) pools.push(pool);
+        const standing = pools.filter((pool) => pool.created <= upTo);
+        stoodIn.set(standing, search);
+        return standing;
+      }
     }
-    kept.index.set(key, { from: covered ? known.from : from, through: newest, pools: [...(covered ? known.pools : []), ...scanned] });
   }
   return kept.index.get(key)!.pools.filter((pool) => pool.created <= upTo);
 }
@@ -502,8 +516,16 @@ interface Pricing {
  * through ETH's own deepest pool paired with USDG.
  */
 async function deepest(reader: ChainHistory, name: string, asset: Asset, quotes: readonly Address[], start: bigint, block: bigint, newest: bigint, kept: CapKept): Promise<Pricing | undefined> {
-  const pools = await poolsFor(reader, asset.addresses, quotes, start, block, newest, kept);
-  const { swaps, from, recent } = await lastSwaps(reader, name, pools, block, newest, kept);
+  let pools = await poolsFor(reader, asset.addresses, quotes, start, block, newest, kept);
+  let { swaps, from, recent } = await lastSwaps(reader, name, pools, block, newest, kept);
+  const search = stoodIn.get(pools);
+  if (swaps.length === 0 && search) {
+    // None of the pools state shows traded, which says nothing about the others: the whole search decides, and a search
+    // the endpoint turns away fails the read rather than saying no pool traded.
+    await search;
+    pools = await poolsFor(reader, asset.addresses, quotes, start, block, newest, kept);
+    ({ swaps, from, recent } = await lastSwaps(reader, name, pools, block, newest, kept));
+  }
   if (swaps.length === 0) return undefined;
   const isUsdg = (swap: Traded) => same(swap.pool.currency0, USDG) || same(swap.pool.currency1, USDG);
   const inUsdg = swaps.filter(isUsdg);

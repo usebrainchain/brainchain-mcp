@@ -29,6 +29,8 @@ export function rpcSetting(value: string | undefined): URL | undefined {
 export const PRIVATE_SPAN = 10_000n;
 /** A log search up to this many blocks is split into `PRIVATE_SPAN` pieces on the private endpoint; a longer one goes to the public endpoint, which searches ten million at a time. */
 export const MAX_SPLIT = 200_000n;
+/** How many pieces of one split search are in flight at once. */
+export const PIECES_AT_ONCE = 3;
 /** The public endpoint's own limit on logs in one answer, kept when pieces are joined, so a caller halves a full range as before. */
 const MAX_LOGS = 10_000;
 
@@ -43,18 +45,35 @@ export function splitting(fetchImpl: typeof fetch): typeof fetch {
     const filter = call?.method === "eth_getLogs" ? call.params?.[0] : undefined;
     const [from, to] = [filter?.fromBlock, filter?.toBlock].map((block) => (typeof block === "string" && /^0x[0-9a-f]+$/i.test(block) ? BigInt(block) : undefined));
     if (!call || !filter || from === undefined || to === undefined || to - from + 1n <= PRIVATE_SPAN || to - from + 1n > MAX_SPLIT) return fetchImpl(input, init);
-    const logs: unknown[] = [];
-    for (let low = from; low <= to; low += PRIVATE_SPAN) {
-      const high = low + PRIVATE_SPAN - 1n < to ? low + PRIVATE_SPAN - 1n : to;
-      const body = JSON.stringify({ ...call, params: [{ ...filter, fromBlock: `0x${low.toString(16)}`, toBlock: `0x${high.toString(16)}` }] });
-      const answer = await fetchImpl(input, { ...init, body });
-      if (!answer.ok) return answer;
-      const piece = (await answer.json()) as { result?: unknown[]; error?: unknown };
-      if (!Array.isArray(piece.result)) return Response.json(piece);
-      logs.push(...piece.result);
-      if (logs.length > MAX_LOGS) return Response.json({ jsonrpc: "2.0", id: call.id, error: { code: -32005, message: `logs matched by query exceeds limit of ${MAX_LOGS}` } });
-    }
-    return Response.json({ jsonrpc: "2.0", id: call.id, result: logs });
+    const pieces: [bigint, bigint][] = [];
+    for (let low = from; low <= to; low += PRIVATE_SPAN) pieces.push([low, low + PRIVATE_SPAN - 1n < to ? low + PRIVATE_SPAN - 1n : to]);
+    const found: unknown[][] = [];
+    let failed: Response | undefined;
+    let next = 0;
+    let count = 0;
+    // A few pieces at a time, each into its own place, so the logs come back in block order.
+    const worker = async () => {
+      while (!failed && next < pieces.length) {
+        const at = next++;
+        const [low, high] = pieces[at]!;
+        const body = JSON.stringify({ ...call, params: [{ ...filter, fromBlock: `0x${low.toString(16)}`, toBlock: `0x${high.toString(16)}` }] });
+        const answer = await fetchImpl(input, { ...init, body });
+        if (!answer.ok) {
+          failed ??= answer;
+          return;
+        }
+        const piece = (await answer.json()) as { result?: unknown[]; error?: unknown };
+        if (!Array.isArray(piece.result)) {
+          failed ??= Response.json(piece);
+          return;
+        }
+        found[at] = piece.result;
+        count += piece.result.length;
+        if (count > MAX_LOGS) failed ??= Response.json({ jsonrpc: "2.0", id: call.id, error: { code: -32005, message: `logs matched by query exceeds limit of ${MAX_LOGS}` } });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(PIECES_AT_ONCE, pieces.length) }, worker));
+    return failed ?? Response.json({ jsonrpc: "2.0", id: call.id, result: found.flat() });
   };
 }
 
