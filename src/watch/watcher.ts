@@ -76,8 +76,8 @@ export interface WatcherOptions {
 }
 
 export const CONTEXT_READERS = 2;
-/** The longest an event waits for its context before it goes out with what is ready. */
-export const FIRST_MS = 10_000;
+/** The longest an event waits for its context before it goes out with what is ready: under the ten seconds promised, so a chain event is out within about 20 seconds of its block. */
+export const FIRST_MS = 8_000;
 
 /** An error in one line: a client library's short message and details rather than its full text, which repeats the request. */
 export function describe(error: unknown): string {

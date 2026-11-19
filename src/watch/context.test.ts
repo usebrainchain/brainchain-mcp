@@ -1,15 +1,15 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { getAddress, type Address, type Hash } from "viem";
+import { getAddress, zeroAddress, type Address, type Hash } from "viem";
 import { describe, expect, it } from "vitest";
 
 import type { ReadinessBoard } from "../readiness.js";
 import type { SightingsBoard } from "../sightings.js";
 import { ChainError, type History as History } from "../history.js";
 import type { MarketCapBoard } from "../marketcap.js";
-import { custodyFromLog, eventContext, worthOf } from "./context.js";
+import { custodyFromLog, eventContext, loadWorth, PATIENT_TRIES, patiently, saveWorth, worthOf } from "./context.js";
 import { EventLog, type Found, type WatchEvent } from "./events.js";
 import { Backoff } from "./http.js";
 
@@ -125,7 +125,7 @@ describe("an event's context", () => {
     const reasons = async (worth: (token: Address) => Promise<MarketCapBoard>, ms?: number) => (await context(filled(), undefined, ms, worth).of(pool("2026-08-07T10:00:00.000Z")).done).worthMissing;
     expect(await reasons(async () => Promise.reject(new ChainError("No pool on Uniswap v3 or v4 that pairs it with USDG, ETH or WETH traded.")))).toBe("No pool on Uniswap v3 or v4 that pairs it with USDG, ETH or WETH traded.");
     expect(await reasons(() => new Promise(() => {}), 20)).toBe("The market cap was not read within 0.02 seconds.");
-    expect(await reasons(async () => Promise.reject(new Error("HTTP request failed.", { cause: new Backoff("rpc answered 429", 1) })))).toBe(
+    expect(await reasons(async () => Promise.reject(new Error("HTTP request failed.", { cause: new Backoff("rpc answered 429", Date.now() + 3_600_000) })))).toBe(
       "Robinhood Chain's public endpoint asked the watcher to wait, so this was not read; the long searches it needs are served by that endpoint alone.",
     );
     // A client library's own error can carry a node's address with its key, so it never reaches the event.
@@ -164,5 +164,43 @@ describe("an event's context", () => {
 
   it("puts a market cap board in the shape an event carries", () => {
     expect(worthOf({ ...CAP, marketCapUsd: undefined, supply: undefined }).marketCapUsd).toBeUndefined();
+  });
+});
+
+describe("the worth's patience and memory", () => {
+  it("tries a read again once the endpoint's wait is over, while that is before the deadline, and gives up after it", async () => {
+    let tries = 0;
+    const slept: number[] = [];
+    const sleep = async (ms: number) => void slept.push(ms);
+    const flaky = async () => {
+      tries++;
+      if (tries < 3) throw new Error("public endpoint", { cause: new Backoff("asked to wait", Date.now() + 1_000) });
+      return "read";
+    };
+    expect(await patiently(flaky, Date.now() + 60_000, sleep)).toBe("read");
+    expect([tries, slept.length]).toEqual([3, 2]);
+    tries = 0;
+    await expect(patiently(flaky, Date.now() + 500, sleep)).rejects.toThrow("public endpoint");
+    expect(tries).toBe(1);
+    await expect(patiently(async () => Promise.reject(new Error("no pool")), Date.now() + 60_000, sleep)).rejects.toThrow("no pool");
+    // An endpoint that keeps asking is tried a bounded number of times.
+    tries = 0;
+    const stubborn = async () => {
+      tries++;
+      throw new Backoff("asked to wait", Date.now() + 1);
+    };
+    await expect(patiently(stubborn, Date.now() + 60_000, sleep)).rejects.toThrow("asked to wait");
+    expect(tries).toBe(PATIENT_TRIES);
+  });
+
+  it("keeps each token's pool index and creation block across a restart", () => {
+    const path = join(mkdtempSync(join(tmpdir(), "worth-")), "worth.json");
+    expect(loadWorth(path)).toEqual({ index: new Map(), created: new Map() });
+    const pool = { version: "Uniswap v4" as const, key: `0x${"ab".repeat(32)}` as const, currency0: zeroAddress, currency1: "0x020bfC650A365f8BD4A8BA5bcda4A2cCE4D518b4" as const, fee: 3000, hooks: zeroAddress, created: 118_000_000n };
+    const kept = { index: new Map([["key", { from: 117_990_000n, through: 118_200_000n, pools: [pool] }]]), created: new Map([["0x020bfc650a365f8bd4a8ba5bcda4a2cce4d518b4", 117_990_000n]]) };
+    saveWorth(path, kept);
+    expect(loadWorth(path)).toEqual(kept);
+    writeFileSync(path, '{"index": {"key": {"from"');
+    expect(loadWorth(path)).toEqual({ index: new Map(), created: new Map() });
   });
 });

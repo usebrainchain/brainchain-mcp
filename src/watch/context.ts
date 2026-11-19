@@ -1,8 +1,9 @@
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { getAddress, type Address } from "viem";
 
 import { BITGO_START, CustodyError, within, type CustodyAddition, type CustodyBoard } from "../custody.js";
 import { ANSWER_MS, ChainError, type ChainHistory } from "../history.js";
-import type { MarketCapBoard } from "../marketcap.js";
+import type { CapKept, MarketCapBoard, Pool } from "../marketcap.js";
 import { SightingsError } from "../sightings.js";
 import type { MakerWallet } from "../makers.js";
 import { tokenTimeline, type TimelineReaders } from "../timeline.js";
@@ -115,15 +116,9 @@ export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT
     // Each part goes into the context the moment it is read, so what is ready can go out before the rest.
     const parts: Record<string, Record<string, unknown>> = {};
     // The worth first: both read the same endpoints, and the worth is what a reader wants soonest.
-    const worthRead = worth ? within(ms, worth(target), late("The market cap")) : Promise.reject(new LateError("This watcher reads no market cap."));
-    const steps = within(
-      ms,
-      worthRead.then(
-        () => tokenTimeline(full, target, wallets, times),
-        () => tokenTimeline(full, target, wallets, times),
-      ),
-      late("The token timeline"),
-    ).then(
+    const worthRead = worth ? within(ms, patiently(() => worth(target), Date.now() + ms), late("The market cap")) : Promise.reject(new LateError("This watcher reads no market cap."));
+    const timeline = () => within(ms, tokenTimeline(full, target, wallets, times), late("The token timeline"));
+    const steps = worthRead.then(timeline, timeline).then(
       (board) => (parts.priorTraces = { priorTraces: board.steps.filter((step) => Date.parse(step.at) < before), ...(board.unread.length ? { unread: board.unread } : {}) }),
       (error: unknown) => {
         if (why(error) === UNREAD) say?.(`event ${event.id}: the token timeline could not be read: ${describe(error)}`);
@@ -143,6 +138,56 @@ export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT
     };
     return { now, done: Promise.all([steps, value]).then(now) };
   };
+}
+
+/** What the worth reads keep between restarts: each token's pool index and the block its contract was created in. */
+export interface WorthKept {
+  index: CapKept["index"];
+  created: Map<string, bigint>;
+}
+
+/** Reads the kept pool indexes and creation blocks, or starts empty when the file is missing or cut off. */
+export function loadWorth(path: string): WorthKept {
+  const kept: WorthKept = { index: new Map(), created: new Map() };
+  if (!existsSync(path)) return kept;
+  try {
+    const saved = JSON.parse(readFileSync(path, "utf8")) as { index?: Record<string, { from: string; through: string; pools: (Omit<Pool, "created"> & { created: string })[] }>; created?: Record<string, string> };
+    for (const [key, { from, through, pools }] of Object.entries(saved.index ?? {})) {
+      kept.index.set(key, { from: BigInt(from), through: BigInt(through), pools: pools.map((pool) => ({ ...pool, created: BigInt(pool.created) })) });
+    }
+    for (const [address, block] of Object.entries(saved.created ?? {})) kept.created.set(address, BigInt(block));
+  } catch {
+    return { index: new Map(), created: new Map() };
+  }
+  return kept;
+}
+
+/** Writes the kept pool indexes and creation blocks whole, through a temporary file, so a crash leaves the old file. */
+export function saveWorth(path: string, kept: WorthKept): void {
+  const text = (value: bigint) => value.toString();
+  const index = Object.fromEntries([...kept.index].map(([key, { from, through, pools }]) => [key, { from: text(from), through: text(through), pools: pools.map((pool) => ({ ...pool, created: text(pool.created) })) }]));
+  const created = Object.fromEntries([...kept.created].map(([address, block]) => [address, text(block)]));
+  writeFileSync(`${path}.tmp`, JSON.stringify({ index, created }));
+  renameSync(`${path}.tmp`, path);
+}
+
+/** How many times a read that an endpoint asked to wait is tried in all. */
+export const PATIENT_TRIES = 6;
+
+/**
+ * A read that an endpoint asked to wait is tried again once the wait is over, as long as that is before `until`; the
+ * blocks already read are kept, so the next try starts where this one stopped.
+ */
+export async function patiently<T>(read: () => Promise<T>, until: number, sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))): Promise<T> {
+  for (let tries = 1; ; tries++) {
+    try {
+      return await read();
+    } catch (error) {
+      const wait = backoffIn(error);
+      if (!wait || wait.until >= until || tries >= PATIENT_TRIES) throw error;
+      await sleep(Math.max(0, wait.until - Date.now()) + 250);
+    }
+  }
 }
 
 /**

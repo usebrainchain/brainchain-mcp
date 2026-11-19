@@ -10,7 +10,7 @@ import { readinessIn } from "../readiness.js";
 import { sightingsReader, tokenSightings } from "../sightings.js";
 import { bitGoLists, bitGoMerges, bitGoPullRequests, bitGoReleases } from "./bitgo.js";
 import { chainFirsts, chainKept, chainPoller } from "./chain.js";
-import { chainTurn, createdIn, eventContext } from "./context.js";
+import { chainTurn, createdIn, eventContext, loadWorth, saveWorth } from "./context.js";
 import { Deliveries } from "./deliver.js";
 import { EventLog, type WatchEvent } from "./events.js";
 import { Requests } from "./http.js";
@@ -120,13 +120,34 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   const github = githubEvery(token);
   const reader = chainReader(requests, rpc);
   const kept = chainKept();
-  const capKept: CapKept = { starts: new Map(), pools: new Map(), swaps: new Map(), changes: new Map(), supply: new Map(), times: new Map(), index: new Map() };
+  // Each token's pool index and creation block are kept on disk, so a restart does not search its history again.
+  const worthFile = join(dir, "worth.json");
+  const worthKept = loadWorth(worthFile);
+  const capKept: CapKept = { starts: new Map(), pools: new Map(), swaps: new Map(), changes: new Map(), supply: new Map(), times: new Map(), index: worthKept.index };
+  let saving: ReturnType<typeof setTimeout> | undefined;
+  const keepWorth = () => {
+    saving ??= setTimeout(() => {
+      saving = undefined;
+      try {
+        saveWorth(worthFile, worthKept);
+      } catch (error) {
+        say(`the pool index could not be saved: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }, 5_000);
+  };
   const lists = bitGoLists(requests);
   // Where each token's contract was created, so the search for its pools starts there and not at the chain's first block.
   const created = new Map<string, Promise<bigint | undefined>>();
   const createdBlock = (address: `0x${string}`) => {
     const key = address.toLowerCase();
-    if (!created.has(key)) created.set(key, reader.getBlockNumber().then((newest) => createdIn(reader, address, newest)));
+    const known = worthKept.created.get(key);
+    if (known !== undefined) return Promise.resolve(known);
+    if (!created.has(key)) {
+      const found = reader.getBlockNumber().then((newest) => createdIn(reader, address, newest));
+      created.set(key, found);
+      // A failed search is tried again next time; a found block never changes.
+      void found.then((block) => (block === undefined ? created.delete(key) : worthKept.created.set(key, block)));
+    }
     return created.get(key)!;
   };
 
@@ -174,7 +195,13 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     },
     // Off the delivery path, the slow parts get longer: what is not ready by the first deadline follows as an update.
     ms: 90_000,
-    worth: async (address) => marketCap(reader, address, capKept, new Date(), undefined, await createdBlock(address)),
+    worth: async (address) => {
+      try {
+        return await marketCap(reader, address, capKept, new Date(), undefined, await createdBlock(address));
+      } finally {
+        keepWorth();
+      }
+    },
     say: (line) => say(line),
   });
 
@@ -255,15 +282,6 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   }
   watcher.start();
   deliveries.start();
-  // Warms the pool index for the tokens of recent events, one at a time, so their next event goes out with its worth.
-  void (async () => {
-    const recent = [...new Set(log.all().slice(-200).flatMap((event) => (!event.baseline && event.token.address ? [event.token.address] : [])))].slice(-30);
-    for (const address of recent) {
-      if (stopping) return;
-      await marketCap(reader, address as `0x${string}`, capKept, new Date(), undefined, await createdBlock(address as `0x${string}`)).catch(() => undefined);
-      await new Promise((resolve) => setTimeout(resolve, 10_000).unref());
-    }
-  })();
 
   const stop = async () => {
     if (stopping) return;
@@ -272,6 +290,12 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     served?.close();
     deliveries.stop();
     await watcher.stop();
+    clearTimeout(saving);
+    try {
+      saveWorth(worthFile, worthKept);
+    } catch {
+      // A pool index that could not be saved is searched again after the restart.
+    }
     log.close();
     release();
     process.exit(0);
