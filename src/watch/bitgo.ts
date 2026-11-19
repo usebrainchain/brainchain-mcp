@@ -64,7 +64,7 @@ const merged = (additions: readonly CustodyAddition[]): Found[] =>
   additions.flatMap(({ addedAt, commit, tokens }) =>
     tokens.map(({ id, ...listed }) => ({
       kind: "bitgo.merged" as const,
-      token: { address: listed.contract ?? null, symbol: null, name: listed.name ?? null },
+      token: token(listed),
       source: "BitGo",
       ref: commit,
       at: addedAt,
