@@ -10,6 +10,7 @@ import { bondsClosed, createBonds, type Bonds } from "./bonds.js";
 import { expandHome, formatUnits, PRICE, resolveConfig, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL } from "./custody.js";
 import { stateDirProblem } from "./daily.js";
+import { useGitHubToken } from "./github.js";
 import { createLimits } from "./limits.js";
 import { configuredMakers, MAKERS_NAME, makersTool, MARKET_MAKERS, readMakerHoldings, type MakerWallet } from "./makers.js";
 import { createDesk, erc20, firstLine } from "./payments.js";
@@ -330,6 +331,8 @@ export function createServer(env: Record<string, string | undefined>, version: s
   const log = options.log ?? console.error;
   if (problem) log(`brainchain-mcp has an invalid setting: ${problem}`);
   // Only the tools that read the wallets depend on them, so a bad list stops those and nothing else.
+  const github = useGitHubToken(env.GITHUB_TOKEN);
+  if (github) log(`brainchain-mcp has an invalid setting: ${github}`);
   const makers = followedMakers(env);
   if (makers.problem) {
     log(`brainchain-mcp has an invalid setting: ${makers.problem}`);

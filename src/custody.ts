@@ -1,6 +1,8 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { getAddress, type Address } from "viem";
 
+import { gitHubAuth, hasGitHubToken } from "./github.js";
+
 export const CUSTODY_NAME = "brainchain_custody_additions";
 
 /** BitGo's public code: each token it supports is one entry in a list per chain. */
@@ -60,7 +62,7 @@ export const CUSTODY_TOOL: Tool = {
     "Most of the tokens BitGo has added are stock tokens issued by Robinhood itself, which say nothing about a listing on an exchange, and some are added before their contract is deployed. " +
     "Nearly all of those have \"Robinhood\" in their `name`, but `name` is BitGo's label and not the token's name on chain, so a `name` without \"Robinhood\" does not prove a token comes from someone else: " +
     "look up the `contract` on a block explorer before treating a token as one Robinhood did not issue. " +
-    "Free, no key and no payment. GitHub allows 60 unauthenticated API requests an hour from one IP address: 30 days usually takes two requests and 90 days about six, and when they are used up the tool says when to try again. " +
+    "Free, no key and no payment. GitHub allows 60 unauthenticated API requests an hour from one IP address: 30 days usually takes two requests and 90 days about six, and when they are used up the tool says when to try again. A server whose operator set GITHUB_TOKEN reads with that token's allowance. " +
     "While the server runs, what it read from GitHub is kept for ten minutes: the same call again in that time makes no request and shows the same `readAt`. Not advice.",
   annotations: { readOnlyHint: true, openWorldHint: true },
   inputSchema: {
@@ -409,16 +411,20 @@ function refusal(response: Response): { message: string; until?: number } | unde
   if (response.status !== 403 && response.status !== 429) return undefined;
   const reset = Number(response.headers.get("x-ratelimit-reset"));
   if (response.headers.get("x-ratelimit-remaining") === "0" && reset > 0) {
-    const message = `GitHub allows 60 unauthenticated API requests an hour from one IP address, and this address has used them up. Try again after ${new Date(reset * 1000).toISOString().slice(11, 16)} UTC.`;
+    const after = `Try again after ${new Date(reset * 1000).toISOString().slice(11, 16)} UTC.`;
+    const message = hasGitHubToken()
+      ? `GITHUB_TOKEN has used up the requests GitHub allows it this hour. ${after}`
+      : `GitHub allows 60 unauthenticated API requests an hour from one IP address, and this address has used them up. ${after}`;
     return { message, until: reset * 1000 };
   }
   return { message: "GitHub is temporarily refusing requests from this IP address. Try again in a minute." };
 }
 
 /**
- * Reads BitGo's code from GitHub with no key. A commit and an older page of changes never change, so both are kept until
- * `MAX_KEPT` reads; the newest page is kept for `KEEP_MS`. A read that failed or found no list is not kept. A host that
- * refuses a request is not asked again until the reset time it sent, or for `REFUSED_MS`.
+ * Reads BitGo's code from GitHub, with GITHUB_TOKEN for GitHub's API when it is set and no key otherwise. A commit and an
+ * older page of changes never change, so both are kept until `MAX_KEPT` reads; the newest page is kept for `KEEP_MS`. A
+ * read that failed or found no list is not kept. A host that refuses a request is not asked again until the reset time it
+ * sent, or for `REFUSED_MS`.
  */
 export function bitGoReader(fetchImpl: typeof fetch = fetch, clock: () => number = Date.now): BitGoReader {
   const kept = new Map<string, { until: number; value: Promise<unknown> }>();
@@ -437,7 +443,7 @@ export function bitGoReader(fetchImpl: typeof fetch = fetch, clock: () => number
       try {
         const blocked = refused.get(host);
         if (blocked && clock() < blocked.until) throw new CustodyError(blocked.message);
-        const response = await fetchImpl(url, { headers: { Accept: accept, "User-Agent": "brainchain-mcp" }, signal: AbortSignal.timeout(REQUEST_MS) });
+        const response = await fetchImpl(url, { headers: { Accept: accept, "User-Agent": "brainchain-mcp", ...gitHubAuth(url) }, signal: AbortSignal.timeout(REQUEST_MS) });
         try {
           const refusing = refusal(response);
           if (refusing) {
