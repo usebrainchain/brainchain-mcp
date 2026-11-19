@@ -202,15 +202,12 @@ export class PoolIndex {
   /** Appends pools to the file and the in-memory index. */
   private append(pools: readonly IndexedPool[]): void {
     if (pools.length === 0) return;
-    let text = "";
-    const starts: number[] = [];
-    for (const pool of pools) {
-      starts.push(this.size + Buffer.byteLength(text));
-      text += `${JSON.stringify(pool)}\n`;
+    const lines = pools.map((pool) => JSON.stringify(pool));
+    writeSync(this.fd, `${lines.join("\n")}\n`);
+    for (const line of lines) {
+      this.note(line, this.size);
+      this.size += Buffer.byteLength(line) + 1;
     }
-    writeSync(this.fd, text);
-    pools.forEach((pool, i) => this.note(JSON.stringify(pool), starts[i]!));
-    this.size += Buffer.byteLength(text);
     this.checkpoint.pools += pools.length;
   }
 
