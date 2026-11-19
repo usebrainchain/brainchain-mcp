@@ -224,7 +224,7 @@ export interface Mint extends Dated {
   to: Address;
 }
 
-const transferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
+export const transferEvent = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
 
 /** The first time tokens of `token` were created: its first transfer out of the zero address. Nothing for a token that has minted none. */
 export function firstMint(reader: ChainHistory, token: Address, newest: bigint, kept: Kept<Mint>): Promise<Mint | undefined> {

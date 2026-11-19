@@ -278,7 +278,7 @@ function mergedAt({ status, body }: Page): string | undefined {
  * A token's file in a list kept as one file per token; nothing when the file is not there. Both lists give every token a
  * symbol, so a document without one is some other answer and counts as unread.
  */
-function tokenFile({ status, body }: Page): Record<string, unknown> | undefined {
+export function tokenFile({ status, body }: Page): Record<string, unknown> | undefined {
   if (status === 404) return undefined;
   const entry = record(JSON.parse(body));
   if (!text(entry.symbol)) throw new Error("The source did not answer with the token's file.");
@@ -286,12 +286,12 @@ function tokenFile({ status, body }: Page): Record<string, unknown> | undefined 
 }
 
 // Each document has the one parser it is read with, which is what lets the reader keep the result under the document's URL.
-const LIFI = { url: `https://li.quest/v1/tokens?chains=${CHAIN_ID}`, parse: required(lifiTokens) };
-const COINGECKO = { url: "https://tokens.coingecko.com/robinhood/all.json", parse: required(coingeckoTokens) };
-const KUCOIN = { url: "https://api.kucoin.com/api/v3/currencies", parse: required(kucoinList) };
-const GATE = { url: "https://api.gateio.ws/api/v4/spot/currencies", parse: required(gateList) };
-const ROBINHOOD_PAGES = { url: "https://robinhood.com/us/en/sitemap-crypto.xml", parse: required(robinhoodPages) };
-const ROBINHOOD_PAIRS = { url: "https://nummus.robinhood.com/currency_pairs/", parse: required(robinhoodPairs) };
+export const LIFI = { url: `https://li.quest/v1/tokens?chains=${CHAIN_ID}`, parse: required(lifiTokens) };
+export const COINGECKO = { url: "https://tokens.coingecko.com/robinhood/all.json", parse: required(coingeckoTokens) };
+export const KUCOIN = { url: "https://api.kucoin.com/api/v3/currencies", parse: required(kucoinList) };
+export const GATE = { url: "https://api.gateio.ws/api/v4/spot/currencies", parse: required(gateList) };
+export const ROBINHOOD_PAGES = { url: "https://robinhood.com/us/en/sitemap-crypto.xml", parse: required(robinhoodPages) };
+export const ROBINHOOD_PAIRS = { url: "https://nummus.robinhood.com/currency_pairs/", parse: required(robinhoodPairs) };
 const BITSTAMP = { url: "https://www.bitstamp.net/api/v2/currencies/", parse: required(bitstampSymbols) };
 const feedCommit = required(firstCommit);
 
