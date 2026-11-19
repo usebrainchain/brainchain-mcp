@@ -17,6 +17,7 @@ import { resolveConfig } from "./config.js";
 import { CUSTODY_NAME } from "./custody.js";
 import { MAKERS_NAME } from "./makers.js";
 import { gradeGuidance, guidance } from "./payments.js";
+import { hasGitHubToken } from "./github.js";
 import { approvalFailure, approvalUnconfirmed, approveCommand, createServer, INSTRUCTIONS, pastedKey, payerAccount, terminalHint, walletExitCode, walletReport, type ServerOptions } from "./server.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_GRADE_NAME, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, POST_TASK_NAME } from "./tools.js";
 
@@ -125,6 +126,20 @@ describe("the server", () => {
     expect(logged).toEqual([]);
     const { tools } = await client.listTools();
     expect(tools.find((tool) => tool.name === MAKERS_NAME)!.description).toContain("This server also follows one more wallet that its operator added with BRAINCHAIN_MAKER_WALLETS: Acme at 0xB97e4298c7F5f55360d207a6196125376675B3eA.");
+  });
+
+  it("takes GITHUB_TOKEN silently, and reports one that is not a token without repeating it", async () => {
+    const logged: string[] = [];
+    await connect({ GITHUB_TOKEN: `github_pat_${"A1_".repeat(25)}` }, { log: (message) => logged.push(message) });
+    expect(logged).toEqual([]);
+    const pasted = "ghp_secret value\nX-Injected: yes";
+    await connect({ GITHUB_TOKEN: pasted }, { log: (message) => logged.push(message) });
+    expect(logged).toEqual([
+      "brainchain-mcp has an invalid setting: GITHUB_TOKEN is not a GitHub token, which is letters, digits and underscores, so GitHub is read without one. Fix it in this server's environment and restart the server.",
+    ]);
+    expect(logged.join("")).not.toContain("secret");
+    expect(hasGitHubToken()).toBe(false);
+    await connect({});
   });
 
   it("reports a BRAINCHAIN_MAKER_WALLETS it cannot read once at startup, and stops only the tools that read the wallets", async () => {

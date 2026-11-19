@@ -441,7 +441,7 @@ export interface Readers {
   custody(period: number | Date): Promise<CustodyBoard>;
   makers(token: Address, wallet?: Address, moment?: Moment): Promise<MakerBoard>;
   readiness(token: Address): Promise<ReadinessBoard>;
-  sightings(token: Address): Promise<SightingsBoard>;
+  sightings(token: Address, until?: Moment): Promise<SightingsBoard>;
   /** BitGo's tokens on Robinhood Chain, which a symbol is looked up in. */
   listed(): Promise<CustodyToken[]>;
   timeline(token: Address, until?: Moment): Promise<TimelineBoard>;
@@ -540,9 +540,10 @@ export async function callTool(
     }
     if (name === SIGHTINGS_NAME) {
       refuseUnknownFields(input, SIGHTINGS_TOOL.inputSchema);
+      const when = moment(input);
       const { token, lookup } = await tokenOf(input.token, listed);
-      const board = await sightings(token).catch((error: unknown) => {
-        if (error instanceof SightingsError) throw error;
+      const board = await sightings(token, when).catch((error: unknown) => {
+        if (error instanceof SightingsError || error instanceof ChainError) throw error;
         throw new Error(`The lists could not be read just now: ${brief(error)} Try again in a minute.`);
       });
       return reply(withLookup(board, lookup));

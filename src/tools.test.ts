@@ -657,13 +657,25 @@ describe("token sightings", () => {
     for (const [args, said] of [
       [{}, "token is required."],
       [{ token: "0xCASHCAT" }, "token must be an address on Robinhood Chain: 0x followed by 40 hex characters."],
-      [{ token: CASHCAT, symbol: "CASHCAT" }, "Unknown field: symbol. This tool takes only token."],
+      [{ token: CASHCAT, symbol: "CASHCAT" }, "Unknown field: symbol. This tool takes only token, atBlock, at."],
+      [{ token: CASHCAT, at: "2026-08-06", atBlock: 1 }, "Pass atBlock or at, not both."],
+      [{ token: CASHCAT, at: "2126-08-06" }, "at is in the future."],
     ] as const) {
       const result = await call(args, read);
       expect(result.isError).toBe(true);
       expect(body(result)).toEqual({ error: said });
     }
     expect(asked).toEqual([CASHCAT]);
+  });
+
+  it("hands a cut-off to the reader as a block or a time, and passes on what the chain says of a block", async () => {
+    const asked: unknown[] = [];
+    const read = (async (_token: string, until?: unknown) => (asked.push(until), board)) as (token: string) => Promise<typeof board>;
+    await call({ token: CASHCAT, at: "2026-08-06T00:00:00Z" }, read);
+    await call({ token: CASHCAT, atBlock: 28_900_542 }, read);
+    expect(asked).toEqual([{ time: Date.parse("2026-08-06T00:00:00Z") }, { block: 28_900_542n }]);
+    const later = new ChainError("Block 99999999999 is not on Robinhood Chain yet: the newest block is 29000000.");
+    expect(body(await call({ token: CASHCAT, atBlock: 99_999_999_999 }, async () => Promise.reject(later)))).toEqual({ error: later.message });
   });
 
   it("answers a failed read in one line, and passes on what is already written for the reader", async () => {

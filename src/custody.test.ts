@@ -32,6 +32,7 @@ import {
   type ListedToken,
   type TokenList,
 } from "./custody.js";
+import { useGitHubToken } from "./github.js";
 
 const [EDITED, GENERATED] = TOKEN_LISTS;
 
@@ -684,6 +685,29 @@ describe("bitGoReader", () => {
       expect(headers["User-Agent"]).toBe("brainchain-mcp");
       expect(Object.keys(headers).map((name) => name.toLowerCase())).not.toContain("authorization");
       expect(init.signal).toBeInstanceOf(AbortSignal);
+    }
+  });
+
+  it("reads GitHub's API with GITHUB_TOKEN when it is set, sends it nowhere else, and says whose allowance ran out", async () => {
+    const token = `ghp_${"b".repeat(36)}`;
+    const reset = Date.parse("2026-11-19T12:17:00Z");
+    const { fetchImpl, asked } = github({
+      [FIRST]: () => new Response("{}", { status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(reset / 1000) } }),
+      [raw(EDITED, sha(2))]: () => new Response(CASHCAT),
+    });
+    try {
+      useGitHubToken(token);
+      const reader = bitGoReader(fetchImpl, () => reset - 60_000);
+      const refused = await reader.changes().catch((error: Error) => error);
+      expect(refused).toStrictEqual(new CustodyError("GITHUB_TOKEN has used up the requests GitHub allows it this hour. Try again after 12:17 UTC."));
+      expect((refused as Error).message).not.toContain(token);
+      await reader.list(EDITED, sha(2));
+      expect(asked.map(({ url, init }) => [url, (init.headers as Record<string, string>).Authorization])).toEqual([
+        [FIRST, `Bearer ${token}`],
+        [raw(EDITED, sha(2)), undefined],
+      ]);
+    } finally {
+      useGitHubToken(undefined);
     }
   });
 
