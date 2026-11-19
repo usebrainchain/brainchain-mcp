@@ -7,6 +7,7 @@ import { createPublicClient, defineChain, formatEther, http, maxUint256, WaitFor
 import { privateKeyToAccount } from "viem/accounts";
 
 import { bondsClosed, createBonds, type Bonds } from "./bonds.js";
+import { CHANGES_NAME, CHANGES_TOOL, readChanges, watchUrl } from "./changes.js";
 import { expandHome, formatUnits, PRICE, resolveConfig, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL } from "./custody.js";
 import { stateDirProblem } from "./daily.js";
@@ -54,7 +55,7 @@ export const INSTRUCTIONS =
 const KEY_HELP =
   `Keep the key in a file only your account can read (chmod 600) and add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config ` +
   `(in Claude Code, \`claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp\`), then restart the server. ` +
-  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME}, ${TIMELINE_NAME} and ${MARKET_CAP_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
+  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME}, ${TIMELINE_NAME}, ${MARKET_CAP_NAME} and ${CHANGES_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -341,9 +342,20 @@ export function createServer(env: Record<string, string | undefined>, version: s
   }
   const lead = (tool: Tool): Tool => (makers.problem ? { ...tool, description: invalidSetting(makers.problem) + tool.description } : tool);
   const followed = [...MARKET_MAKERS, ...makers.configured];
+  // Only the changes tool reads BRAINCHAIN_WATCH_URL, so an address it cannot use stops that tool alone.
+  let watcher: URL | undefined;
+  let watchProblem: string | undefined;
+  try {
+    watcher = watchUrl(env.BRAINCHAIN_WATCH_URL);
+  } catch (error) {
+    watchProblem = `${messageOf(error)} Fix it in this server's environment and restart the server.`;
+    log(`brainchain-mcp has an invalid setting: ${watchProblem}`);
+    refused.set(CHANGES_NAME, watchProblem);
+  }
   const readers: Partial<Readers> = {
     makers: (token, wallet, moment) => readMakerHoldings(token, wallet, moment, followed),
     timeline: (token, until) => readTokenTimeline(token, until, followed),
+    changes: (query) => readChanges(watcher, query, options.fetch),
   };
   const tools = [
     postTaskTool(terms),
@@ -357,6 +369,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
     SIGHTINGS_TOOL,
     lead(TIMELINE_TOOL),
     MARKET_CAP_TOOL,
+    watchProblem ? { ...CHANGES_TOOL, description: invalidSetting(watchProblem) + CHANGES_TOOL.description } : CHANGES_TOOL,
     ...bondToolList,
   ];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });

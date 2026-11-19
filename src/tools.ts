@@ -2,6 +2,7 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { getAddress, isAddress, type Address } from "viem";
 
 import type { Bonds } from "./bonds.js";
+import { CHANGES_NAME, CHANGES_TOOL, changesQuery, readChanges, type ChangesQuery } from "./changes.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, type CustodyBoard, type CustodyToken } from "./custody.js";
 import { ChainError, type Moment } from "./history.js";
@@ -447,9 +448,20 @@ export interface Readers {
   listed(): Promise<CustodyToken[]>;
   timeline(token: Address, until?: Moment): Promise<TimelineBoard>;
   marketCap(token: Address, moment?: Moment): Promise<MarketCapBoard>;
+  /** The events of the watcher BRAINCHAIN_WATCH_URL names; with none named, how to start one. */
+  changes(query: ChangesQuery): Promise<unknown>;
 }
 
-const READERS: Readers = { custody: readCustodyAdditions, makers: readMakerHoldings, readiness: readTokenReadiness, sightings: readTokenSightings, listed: readListedTokens, timeline: readTokenTimeline, marketCap: readMarketCap };
+const READERS: Readers = {
+  custody: readCustodyAdditions,
+  makers: readMakerHoldings,
+  readiness: readTokenReadiness,
+  sightings: readTokenSightings,
+  listed: readListedTokens,
+  timeline: readTokenTimeline,
+  marketCap: readMarketCap,
+  changes: (query) => readChanges(undefined, query),
+};
 
 /** An answer for a token looked up by symbol leads with what it was looked up as. */
 const withLookup = (board: object, lookup: Lookup | undefined) => (lookup ? { lookup, ...board } : board);
@@ -464,7 +476,7 @@ export async function callTool(
   refused: ReadonlyMap<string, string> = new Map(),
   readers: Partial<Readers> = {},
 ): Promise<CallToolResult> {
-  const { custody, makers, readiness, sightings, listed, timeline, marketCap } = { ...READERS, ...readers };
+  const { custody, makers, readiness, sightings, listed, timeline, marketCap, changes } = { ...READERS, ...readers };
   const input = (args ?? {}) as Record<string, unknown>;
   const refusal = refused.get(name);
   if (refusal !== undefined) return reply({ error: refusal }, true);
@@ -569,6 +581,10 @@ export async function callTool(
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
       });
       return reply(withLookup(board, lookup));
+    }
+    if (name === CHANGES_NAME) {
+      refuseUnknownFields(input, CHANGES_TOOL.inputSchema);
+      return reply(await changes(changesQuery(input)));
     }
     return reply({ error: `Unknown tool ${name}.` }, true);
   } catch (error) {

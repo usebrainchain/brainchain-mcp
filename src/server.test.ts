@@ -13,6 +13,7 @@ import { PREMIUMS_NAME } from "./premiums.js";
 import { READINESS_NAME } from "./readiness.js";
 import { SIGHTINGS_NAME } from "./sightings.js";
 import { TIMELINE_NAME } from "./timeline.js";
+import { CHANGES_NAME } from "./changes.js";
 import { resolveConfig } from "./config.js";
 import { CUSTODY_NAME } from "./custody.js";
 import { MAKERS_NAME } from "./makers.js";
@@ -59,7 +60,7 @@ describe("the server", () => {
     expect(client.getServerVersion()).toMatchObject({ name: "brainchain", title: "BrainChain" });
     expect(client.getInstructions()).toBe(INSTRUCTIONS);
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, TIMELINE_NAME, MARKET_CAP_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]);
+    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, TIMELINE_NAME, MARKET_CAP_NAME, CHANGES_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]);
 
     const post = await client.callTool({ name: POST_TASK_NAME, arguments: task });
     expect(post.isError).toBe(true);
@@ -117,6 +118,7 @@ describe("the server", () => {
         const result = await client.callTool({ name, arguments: {} });
         expect(JSON.parse(text(result))).toEqual({ error: "token is required." });
       }
+      expect(JSON.parse(text(await client.callTool({ name: CHANGES_NAME, arguments: {} })))).toMatchObject({ watching: false });
       expect(logged).toHaveLength(1);
     }
   });
