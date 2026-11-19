@@ -1,4 +1,6 @@
+import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { isIP } from "node:net";
 
 import type { Deliveries } from "./deliver.js";
 import { DEFAULT_LIMIT, knownKind, matches, MAX_LIMIT, type EventLog, type Query, type WatchEvent } from "./events.js";
@@ -64,10 +66,16 @@ export interface ServeLimits {
 
 export const SERVE_LIMITS: ServeLimits = { perMinute: 120, watchesPerHour: 10, streamsPerAddress: 5, streams: 500, body: 4096, replay: 1000 };
 export const KEEPALIVE_MS = 20_000;
+/** A stream is closed after this long; the client opens it again from Last-Event-ID, so no slot is held for good. */
+export const STREAM_MS = 30 * 60_000;
+/** A stream whose client has not read this much of what was sent is closed. */
+export const BACKLOG_BYTES = 1_000_000;
 
 export interface ServeOptions {
   log: EventLog;
+  /** The full state of the sources; anyone gets only whether they are reading, and who holds `adminToken` gets it all. */
   health: () => Health;
+  adminToken?: string;
   deliveries?: Deliveries;
   /** Behind a proxy that appends the client's address to X-Forwarded-For, such as Render's, take the address from there. */
   trustProxy?: boolean;
@@ -88,16 +96,40 @@ const HEADERS = {
 /** The public reads, which any page may fetch: they carry no credentials and change nothing. */
 const OPEN = { "Access-Control-Allow-Origin": "*" };
 
-/** A request's client: the socket's address, or behind a trusted proxy the address it appended last. */
+/**
+ * A request's client. Behind a trusted proxy that is Cloudflare's CF-Connecting-IP, which Cloudflare sets itself, or else
+ * the X-Forwarded-For entry before the last: Render appends the address of the Cloudflare edge it came through. Without a
+ * proxy, the socket's own address.
+ */
 export function clientOf(request: IncomingMessage, trustProxy: boolean): string {
-  const forwarded = trustProxy ? request.headers["x-forwarded-for"] : undefined;
-  const last = (Array.isArray(forwarded) ? forwarded.at(-1) : forwarded)?.split(",").at(-1)?.trim();
-  return last || request.socket.remoteAddress || "unknown";
+  if (trustProxy) {
+    const edge = request.headers["cf-connecting-ip"];
+    const cloudflare = (Array.isArray(edge) ? edge[0] : edge)?.trim();
+    if (cloudflare && isIP(cloudflare)) return cloudflare;
+    const forwarded = request.headers["x-forwarded-for"];
+    const hops = (Array.isArray(forwarded) ? forwarded.join(",") : forwarded ?? "").split(",").map((hop) => hop.trim()).filter(Boolean);
+    const client = hops.at(-2) ?? hops.at(-1);
+    if (client && isIP(client)) return client;
+  }
+  return request.socket.remoteAddress || "unknown";
 }
 
-/** Counts per address in a window, forgetting an address once its window is over. */
+/** The key an address is counted under: an IPv6 address by its /64, which one client usually holds whole. */
+export function keyOf(address: string): string {
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address)?.[1];
+  if (mapped) return mapped;
+  if (isIP(address) !== 6) return address;
+  const [head, tail = ""] = address.toLowerCase().split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  const groups = address.includes("::") ? [...left, ...Array(8 - left.length - right.length).fill("0"), ...right] : left;
+  return `${groups.slice(0, 4).map((group) => group.replace(/^0+(?=.)/, "")).join(":")}::/64`;
+}
+
+/** Counts per address in a window. Addresses whose window is over are forgotten once a minute. */
 class Window {
   private readonly seen = new Map<string, number[]>();
+  private pruned = 0;
   constructor(
     private readonly size: number,
     private readonly ms: number,
@@ -105,14 +137,14 @@ class Window {
 
   /** Counts a request; false when the address is over its count for the window. */
   take(address: string, now: number): boolean {
-    const times = (this.seen.get(address) ?? []).filter((at) => at > now - this.ms);
-    if (times.length >= this.size) {
-      this.seen.set(address, times);
-      return false;
+    if (now - this.pruned > 60_000) {
+      for (const [key, kept] of this.seen) if (kept.every((at) => at <= now - this.ms)) this.seen.delete(key);
+      this.pruned = now;
     }
-    times.push(now);
+    const times = (this.seen.get(address) ?? []).filter((at) => at > now - this.ms);
     this.seen.set(address, times);
-    if (this.seen.size > 50_000) for (const [key, kept] of this.seen) if (kept.every((at) => at <= now - this.ms)) this.seen.delete(key);
+    if (times.length >= this.size) return false;
+    times.push(now);
     return true;
   }
 }
@@ -176,7 +208,7 @@ export interface Served {
  * `GET /health` (503 while a source keeps failing) and `GET /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
  * /watches/:id` with the watch's manage token. Nothing lists watches. Every address is held to `perMinute` requests.
  */
-export function serveEvents({ log, health, deliveries, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
+export function serveEvents({ log, health, adminToken, deliveries, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
   const perMinute = new Window(limits.perMinute, 60_000);
   const creations = new Window(limits.watchesPerHour, 3_600_000);
   const streams = new Set<{ response: ServerResponse; address: string; wanted: Pick<Query, "kinds" | "tokens">; cursor: number }>();
@@ -187,31 +219,45 @@ export function serveEvents({ log, health, deliveries, trustProxy = false, limit
   };
   const frame = (event: WatchEvent) => `id: ${event.id}\nevent: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`;
 
+  /** Writes to a stream, closing it once its client has fallen this far behind. */
+  const push = (open: { response: ServerResponse }, text: string) => {
+    if (open.response.writableLength > BACKLOG_BYTES) return void open.response.end();
+    open.response.write(text);
+  };
+
   function stream(request: IncomingMessage, response: ServerResponse, url: URL, address: string): void {
     const wanted = filters(list(url.searchParams.get("kinds")), list(url.searchParams.get("tokens")));
-    if (streams.size >= limits.streams) throw new HttpError(503, "The watcher has as many streams open as it takes. Try again later, or read GET /events.");
-    if ([...streams].filter((open) => open.address === address).length >= limits.streamsPerAddress) throw new HttpError(429, `An address can hold ${limits.streamsPerAddress} streams open at a time.`);
     const resume = request.headers["last-event-id"] ?? url.searchParams.get("since") ?? undefined;
     if (resume !== undefined && !/^\d{1,15}$/.test(String(resume))) throw new HttpError(400, "Last-Event-ID and since take an event id.");
-    response.writeHead(200, { ...HEADERS, ...OPEN, "Content-Type": "text/event-stream; charset=utf-8", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+    const head = { ...HEADERS, ...OPEN, "Content-Type": "text/event-stream; charset=utf-8", Connection: "keep-alive", "X-Accel-Buffering": "no" };
+    if (request.method === "HEAD") {
+      response.writeHead(200, head);
+      return void response.end();
+    }
+    if (streams.size >= limits.streams) throw new HttpError(503, "The watcher has as many streams open as it takes. Try again later, or read GET /events.");
+    if ([...streams].filter((open) => open.address === address).length >= limits.streamsPerAddress) throw new HttpError(429, `An address can hold ${limits.streamsPerAddress} streams open at a time.`);
+    response.writeHead(200, head);
     response.write("retry: 5000\n\n");
     const open = { response, address, wanted, cursor: resume === undefined ? log.publishedThrough : Number(resume) };
     const backlog = log.after(open.cursor).filter((event) => !event.baseline && matches(event, wanted));
     if (backlog.length > limits.replay) response.write(`event: gap\ndata: ${JSON.stringify({ skipped: backlog.length - limits.replay, readWith: "GET /events?since=" })}\n\n`);
-    for (const event of backlog.slice(-limits.replay)) response.write(frame(event));
+    for (const event of backlog.slice(-limits.replay)) push(open, frame(event));
     open.cursor = Math.max(open.cursor, log.publishedThrough);
     streams.add(open);
-    const beat = setInterval(() => response.write(": keepalive\n\n"), KEEPALIVE_MS);
+    const beat = setInterval(() => push(open, ": keepalive\n\n"), KEEPALIVE_MS);
+    const lifetime = setTimeout(() => response.end(), STREAM_MS);
     const done = () => {
       clearInterval(beat);
+      clearTimeout(lifetime);
       streams.delete(open);
     };
     request.on("close", done);
+    response.on("close", done);
     response.on("error", done);
   }
 
   async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const address = clientOf(request, trustProxy);
+    const address = keyOf(clientOf(request, trustProxy));
     if ((request.url ?? "").length > 2048) throw new HttpError(414, "The address is too long.");
     if (!perMinute.take(address, clock())) throw new HttpError(429, `An address can make ${limits.perMinute} requests a minute.`);
     const url = new URL(request.url ?? "/", "http://watcher");
@@ -220,7 +266,12 @@ export function serveEvents({ log, health, deliveries, trustProxy = false, limit
     if (url.pathname === "/health/live" && reading) return send(response, 200, { ok: true });
     if (url.pathname === "/health" && reading) {
       const state = health();
-      return send(response, state.ok ? 200 : 503, state, OPEN);
+      const given = bearer(request);
+      // The detail names hosts, limits and errors; only its operator reads it. Anyone can see whether the sources are reading.
+      const admin = adminToken !== undefined && given !== undefined && given.length === adminToken.length && timingSafeEqual(Buffer.from(given), Buffer.from(adminToken));
+      const sources = (state.sources ?? {}) as Record<string, { failures?: number; baselined?: boolean }>;
+      const summary = { ok: state.ok, events: state.events, sources: Object.fromEntries(Object.entries(sources).map(([name, { failures = 0, baselined }]) => [name, { reading: failures < 3, baselined: baselined === true }])) };
+      return send(response, state.ok ? 200 : 503, admin ? state : summary, admin ? {} : OPEN);
     }
     if (url.pathname === "/events" && reading) return send(response, 200, { readAt: new Date(clock()).toISOString(), ...log.query(eventsQuery(url.searchParams)) }, OPEN);
     if (url.pathname === "/events/stream" && reading) return stream(request, response, url, address);
@@ -279,7 +330,7 @@ export function serveEvents({ log, health, deliveries, trustProxy = false, limit
         for (const event of events) {
           if (event.id <= open.cursor) continue;
           open.cursor = event.id;
-          if (!event.baseline && matches(event, open.wanted)) open.response.write(frame(event));
+          if (!event.baseline && matches(event, open.wanted)) push(open, frame(event));
         }
       }
     },

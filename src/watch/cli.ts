@@ -37,12 +37,14 @@ what is already public as a baseline and reports none of it as new.
                          GET /events/stream (server-sent events), POST /watches to have them sent to a webhook, Discord,
                          Slack or Telegram, GET and DELETE /watches/:id, and GET /health. Point BRAINCHAIN_WATCH_URL at it.
   --print                Write each new event to stdout as one line of JSON.
-  --trust-proxy          Take a client's address from the last X-Forwarded-For entry, behind a proxy that appends it.
+  --trust-proxy          Behind Cloudflare and a proxy such as Render's, take a client's address from CF-Connecting-IP, or
+                         else from the X-Forwarded-For entry before the proxy's own.
 
 Environment: GITHUB_TOKEN, or GITHUB_TOKEN_FILE naming a file that holds it, lets the watcher read GitHub about once a
 minute; without one each GitHub source is read every ten minutes, inside the 60 requests an hour GitHub allows one IP
 address. BRAINCHAIN_WATCH_RPC reads Robinhood Chain from another RPC, with the public endpoint as the fallback.
-BRAINCHAIN_MAKER_WALLETS adds wallets to follow.`;
+BRAINCHAIN_MAKER_WALLETS adds wallets to follow. GET /health shows anyone whether each source is reading, and its full
+detail to a request with BRAINCHAIN_WATCH_ADMIN_TOKEN as a Bearer token.`;
 
 /** An argument the command cannot take: the usage goes out with it. */
 export class UsageError extends Error {}
@@ -160,7 +162,9 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   });
 
   const deliveries = new Deliveries({ dir, log, post: pinnedPost(), check: async (url) => void (await publicTarget(url.hostname)), say });
-  const served = args.serve ? serveEvents({ log, health: () => health(), deliveries, trustProxy: args.trustProxy }) : undefined;
+  const adminToken = env.BRAINCHAIN_WATCH_ADMIN_TOKEN?.trim() || undefined;
+  if (adminToken && !/^[\w-]{32,100}$/.test(adminToken)) throw new Error("BRAINCHAIN_WATCH_ADMIN_TOKEN must be 32 to 100 letters, digits, - or _.");
+  const served = args.serve ? serveEvents({ log, health: () => health(), adminToken, deliveries, trustProxy: args.trustProxy }) : undefined;
   let ticking = false;
   const watcher = new Watcher({
     log,

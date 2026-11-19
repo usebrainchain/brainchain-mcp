@@ -18,9 +18,10 @@ export function rpcSetting(value: string | undefined): URL | undefined {
   try {
     url = new URL(given);
   } catch {
-    throw new Error(`${RPC_SETTING} must be an http or https URL.`);
+    throw new Error(`${RPC_SETTING} must be an https URL.`);
   }
-  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(`${RPC_SETTING} must be an http or https URL.`);
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) throw new Error(`${RPC_SETTING} must be an https URL, or http on localhost: it can hold a key.`);
   return url;
 }
 
@@ -36,10 +37,15 @@ export function chainReader(requests: Requests, primary?: URL): ChainHistory {
 
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Replaces every form of a secret URL in a message, whole or by its host, so no log line or answer shows a node's address. */
+/**
+ * Replaces every form of a secret URL in a message, so no log line or answer shows a node's address: a URL on its host,
+ * with or without a port or a user name, and the key wherever it appears on its own, in its path, its query or its password.
+ */
 export function redactor(...secrets: (URL | undefined)[]): (text: string) => string {
-  const hosts = secrets.filter((url): url is URL => url !== undefined).map((url) => url.host);
-  if (hosts.length === 0) return (text) => text;
-  const pattern = new RegExp(`(?:https?://)?(?:${hosts.map(escaped).join("|")})[^\\s"'<>]*`, "gi");
-  return (text) => text.replace(pattern, "the configured RPC");
+  const urls = secrets.filter((url): url is URL => url !== undefined);
+  if (urls.length === 0) return (text) => text;
+  const hosts = urls.map((url) => escaped(url.hostname)).join("|");
+  const pattern = new RegExp(`(?:https?://)?(?:[^\\s/@"'<>]*@)?(?:${hosts})(?::\\d+)?[^\\s"'<>]*`, "gi");
+  const parts = urls.flatMap((url) => [url.password, url.username, ...url.pathname.split("/"), ...[...url.searchParams.values()]].filter((part) => part.length >= 8));
+  return (text) => parts.reduce((redacted, part) => redacted.split(part).join("[redacted]"), text.replace(pattern, "the configured RPC"));
 }

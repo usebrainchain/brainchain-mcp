@@ -108,10 +108,17 @@ function change(event: WatchEvent, name: string): string {
   }
 }
 
-/** One line for a chat: what changed, the token, its worth now and the link to check it by. */
+/** A name or symbol that reads as a web address or a handle, which a chat would turn into a link or a mention from our bot. */
+const LINKISH = /https?:|www\.|[\w-]\.[a-z]{2,}\b|@\w|t\.me\b|discord\.gg/i;
+
+/**
+ * One line for a chat: what changed, the token, its worth now and the link to check it by. A token's name is whatever its
+ * deployer wrote, so a name that reads as a link is left out and the token goes by its address.
+ */
 export function line(event: WatchEvent): string {
   const { address, symbol, name } = event.token;
-  const label = [name, symbol && symbol !== name ? symbol : undefined].filter(Boolean).join(" ") || symbol || "a token";
+  const safe = (text: string | null) => (text && !LINKISH.test(text) ? text : undefined);
+  const label = [safe(name), symbol && symbol !== name ? safe(symbol) : undefined].filter(Boolean).join(" ") || safe(symbol) || (address ? "a token" : "a token named like a link");
   const named = address ? `${label} (${short(address)})` : label;
   const worth = event.context.worth as { marketCapUsd?: string; liquidityUsd?: string } | null | undefined;
   const value = worth?.marketCapUsd ? ` Worth ${compact(worth.marketCapUsd)} now${worth.liquidityUsd ? `, ${compact(worth.liquidityUsd)} in its deepest pool` : ""}.` : "";
@@ -192,6 +199,9 @@ export class Deliveries {
     return [...this.watches.values()].filter((watch) => !watch.off).length;
   }
 
+  /** Watches switched off this long ago are dropped; until then they count toward their owner's cap, so failing ones cannot be cycled. */
+  static readonly KEEP_OFF_MS = 7 * 24 * 60 * 60_000;
+
   /** Makes a watch, after checking the URL and the caps, and returns what only its maker gets: the secret and the manage token. */
   async create(request: { url: string; kinds?: string[]; tokens?: string[] }, address: string): Promise<{ id: string; secret: string; manageToken: string; format: Format; from: number }> {
     const url = webhookUrl(request.url);
@@ -199,9 +209,9 @@ export class Deliveries {
     await this.options.check?.(url);
     const owner = ownerOf(address);
     const { perOwner, total } = this.options.limits ?? LIMITS;
-    const live = [...this.watches.values()].filter((watch) => !watch.off);
-    if (live.length >= total) throw new DeliveryError("The watcher holds as many watches as it takes. Try again later.");
-    if (live.filter((watch) => watch.owner === owner).length >= perOwner) throw new DeliveryError(`An address can have ${perOwner} watches at a time. Remove one first.`);
+    const held = [...this.watches.values()];
+    if (held.length >= total) throw new DeliveryError("The watcher holds as many watches as it takes. Try again later.");
+    if (held.filter((watch) => watch.owner === owner).length >= perOwner) throw new DeliveryError(`An address can have ${perOwner} watches at a time, switched-off ones included until they are removed. Remove one first.`);
     const manageToken = token(32);
     const watch: Watch = {
       id: token(16),
@@ -253,21 +263,38 @@ export class Deliveries {
     clearInterval(this.timer);
   }
 
-  /** Sends each watch that is due its next event. Called on a timer, and when events are published. */
+  private dirty = false;
+
+  /** Sends each watch that is due its next event, and writes what changed once. Called on a timer, and when events are published. */
   async tick(): Promise<void> {
     const now = this.clock();
-    await Promise.all(
-      [...this.watches.values()]
-        .filter((watch) => !watch.off && !this.sending.has(watch.id) && (watch.retryAt ?? 0) <= now)
-        .map(async (watch) => {
-          this.sending.add(watch.id);
-          try {
-            await this.next(watch);
-          } finally {
-            this.sending.delete(watch.id);
-          }
-        }),
-    );
+    for (const watch of this.watches.values()) {
+      if (watch.off && now - Date.parse(watch.off.at) > Deliveries.KEEP_OFF_MS) {
+        this.watches.delete(watch.id);
+        this.dirty = true;
+      }
+    }
+    try {
+      await Promise.all(
+        [...this.watches.values()]
+          .filter((watch) => !watch.off && !this.sending.has(watch.id) && (watch.retryAt ?? 0) <= now)
+          .map(async (watch) => {
+            this.sending.add(watch.id);
+            try {
+              await this.next(watch);
+            } finally {
+              this.sending.delete(watch.id);
+            }
+          }),
+      );
+      if (this.dirty) {
+        this.dirty = false;
+        this.save();
+      }
+    } catch (error) {
+      this.dirty = true;
+      this.options.say?.(`the watches could not be saved: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /** Sends the watch's matching events in order until it is caught up or one fails; events that do not match move its cursor past them. */
@@ -278,7 +305,7 @@ export class Deliveries {
       const skipped = due ? due.id - 1 : waiting.at(-1)?.id;
       if (skipped !== undefined && skipped > watch.cursor) {
         watch.cursor = skipped;
-        this.save();
+        this.dirty = true;
       }
       if (!due || watch.off) return;
       const failure = await this.send(watch, due);
@@ -286,7 +313,7 @@ export class Deliveries {
         Object.assign(watch, { cursor: due.id, delivered: watch.delivered + 1, failures: 0 });
         delete watch.retryAt;
         delete watch.lastError;
-        this.save();
+        this.dirty = true;
         continue;
       }
       watch.failures++;
@@ -296,7 +323,7 @@ export class Deliveries {
         delete watch.retryAt;
         this.options.say?.(`watch ${watch.id} switched off after ${watch.failures} failed tries.`);
       } else watch.retryAt = this.clock() + RETRY_MS[watch.failures - 1]!;
-      this.save();
+      this.dirty = true;
       return;
     }
   }
@@ -305,9 +332,10 @@ export class Deliveries {
   private async send(watch: Watch, event: WatchEvent): Promise<string | undefined> {
     const { body, headers } = message(watch, event, this.clock());
     try {
-      const { status, body: answer } = await this.options.post(new URL(watch.url), body, headers);
+      const { status } = await this.options.post(new URL(watch.url), body, headers);
+      // Only the status: echoing what the endpoint said would let a watch read the answers to posts from this address.
       if (status >= 200 && status < 300) return undefined;
-      return `The endpoint answered ${status}${answer ? `: ${answer.replace(/\s+/g, " ").slice(0, 120)}` : ""}.`;
+      return `The endpoint answered ${status}.`;
     } catch (error) {
       return error instanceof DeliveryError ? error.message : "The endpoint could not be reached.";
     }

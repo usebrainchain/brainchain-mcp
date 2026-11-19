@@ -15,7 +15,7 @@ import { watchArgs } from "./cli.js";
 import { Deliveries } from "./deliver.js";
 import { EventLog, type Found } from "./events.js";
 import type { Post } from "./net.js";
-import { eventsQuery, SERVE_LIMITS, serveEvents } from "./serve.js";
+import { clientOf, eventsQuery, keyOf, SERVE_LIMITS, serveEvents } from "./serve.js";
 
 const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
 const found = (kind: Found["kind"], ref: string, token: Found["token"] = { address: CASHCAT, symbol: "CASHCAT", name: "Cash Cat" }): Found => ({ kind, token, source: "x", ref, at: null, detail: {} });
@@ -282,7 +282,7 @@ describe("watches", () => {
   it("are held to a number an hour and a number at a time per address", async () => {
     const { base } = await serving({ limits: { ...SERVE_LIMITS, watchesPerHour: 6 } });
     for (let i = 0; i < 5; i++) expect((await post(base, { url: `https://hooks.example.com/${i}` })).status).toBe(201);
-    expect(await post(base, { url: "https://hooks.example.com/6" })).toEqual({ status: 400, body: { error: "An address can have 5 watches at a time. Remove one first." } });
+    expect(await post(base, { url: "https://hooks.example.com/6" })).toEqual({ status: 400, body: { error: "An address can have 5 watches at a time, switched-off ones included until they are removed. Remove one first." } });
     expect((await post(base, { url: "https://hooks.example.com/7" })).status).toBe(429);
   });
 });
@@ -296,10 +296,11 @@ describe("the watcher's HTTP surface", () => {
     expect([refused.status, refused.headers.get("retry-after")]).toEqual([429, "60"]);
   });
 
-  it("takes a client's address from the proxy's last X-Forwarded-For entry only when told to trust it", async () => {
+  it("takes a client's address from Cloudflare's header, or the hop before Render's, only when told to trust the proxy", async () => {
     for (const [trustProxy, second] of [[true, 200], [false, 429]] as const) {
       const { base } = await serving({ trustProxy, limits: { ...SERVE_LIMITS, perMinute: 1 } });
-      const from = (address: string) => fetch(new URL("/health/live", base), { headers: { "X-Forwarded-For": `1.2.3.4, ${address}` } }).then(({ status }) => status);
+      // The edge Render appends last is the same for both, as it would be for two clients behind one Cloudflare edge.
+      const from = (client: string) => fetch(new URL("/health/live", base), { headers: { "X-Forwarded-For": `6.6.6.6, ${client}, 104.23.1.1` } }).then(({ status }) => status);
       expect([await from("5.6.7.8"), await from("9.9.9.9")]).toEqual([200, second]);
       close?.();
     }
@@ -370,5 +371,41 @@ describe("the changes resource", () => {
     await client.unsubscribeResource({ uri: "brainchain://changes" });
     await expect(client.readResource({ uri: "brainchain://other" })).rejects.toThrow(/Unknown resource brainchain:\/\/other/);
     await client.close();
+  });
+});
+
+describe("a client's address", () => {
+  const request = (headers: Record<string, string>, remote = "10.0.0.1") => ({ headers, socket: { remoteAddress: remote } }) as unknown as Parameters<typeof clientOf>[0];
+
+  it("comes from CF-Connecting-IP behind the proxy, then from the hop before the last, and from the socket otherwise", () => {
+    expect(clientOf(request({ "cf-connecting-ip": "5.6.7.8", "x-forwarded-for": "1.1.1.1, 104.23.1.1" }), true)).toBe("5.6.7.8");
+    expect(clientOf(request({ "x-forwarded-for": "spoofed, 5.6.7.8, 104.23.1.1" }), true)).toBe("5.6.7.8");
+    expect(clientOf(request({ "x-forwarded-for": "5.6.7.8" }), true)).toBe("5.6.7.8");
+    expect(clientOf(request({ "cf-connecting-ip": "not an address", "x-forwarded-for": "junk" }), true)).toBe("10.0.0.1");
+    expect(clientOf(request({ "cf-connecting-ip": "5.6.7.8" }), false)).toBe("10.0.0.1");
+  });
+
+  it("is counted by its /64 for IPv6, which one client usually holds whole", () => {
+    expect(keyOf("2001:db8:aa:bb:1::1")).toBe("2001:db8:aa:bb::/64");
+    expect(keyOf("2001:db8:aa:bb:ffff:ffff:ffff:ffff")).toBe("2001:db8:aa:bb::/64");
+    expect(keyOf("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect([keyOf("::ffff:5.6.7.8"), keyOf("5.6.7.8")]).toEqual(["5.6.7.8", "5.6.7.8"]);
+  });
+});
+
+describe("the stream and health, read without a body", () => {
+  it("answer HEAD at once, and show the full health only to the operator's token", async () => {
+    const where = dir();
+    const log = new EventLog(where);
+    const served = serveEvents({ log, adminToken: "a".repeat(40), health: () => ({ ok: true, version: "x", events: { lastId: 0 }, sources: { chain: { failures: 0, baselined: true, lastError: "secret detail" } } }) });
+    await new Promise<void>((resolve) => served.server.listen(0, "127.0.0.1", resolve));
+    close = () => served.close();
+    const base = new URL(`http://127.0.0.1:${(served.server.address() as AddressInfo).port}`);
+    const head = await fetch(new URL("/events/stream", base), { method: "HEAD" });
+    expect([head.status, head.headers.get("content-type")]).toEqual([200, "text/event-stream; charset=utf-8"]);
+    expect(await (await fetch(new URL("/health", base))).json()).toEqual({ ok: true, events: { lastId: 0 }, sources: { chain: { reading: true, baselined: true } } });
+    const full = (await (await fetch(new URL("/health", base), { headers: { Authorization: `Bearer ${"a".repeat(40)}` } })).json()) as Record<string, unknown>;
+    expect(full.version).toBe("x");
+    expect(await (await fetch(new URL("/health", base), { headers: { Authorization: `Bearer ${"b".repeat(40)}` } })).json()).not.toHaveProperty("version");
   });
 });

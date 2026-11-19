@@ -7,9 +7,10 @@ describe("an address a webhook may reach", () => {
     for (const address of ["10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.1", "127.0.0.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1", "255.255.255.255", "198.18.0.1"])
       expect(publicAddress(address), address).toBe(false);
     for (const address of ["::1", "::", "fe80::1", "fd00:ec2::254", "fc00::1", "ff02::1", "2001:db8::1"]) expect(publicAddress(address), address).toBe(false);
-    // An IPv6 address that carries an IPv4 one reaches it, so it is weighed as that address.
-    for (const address of ["::ffff:127.0.0.1", "::ffff:7f00:1", "64:ff9b::10.0.0.1", "2002:a00:1::1", "::ffff:169.254.169.254"]) expect(publicAddress(address), address).toBe(false);
-    for (const address of ["8.8.8.8", "162.159.135.232", "2606:4700::6810:84e5", "::ffff:8.8.8.8"]) expect(publicAddress(address), address).toBe(true);
+    // A mapped IPv6 address is weighed as the IPv4 address it stands for, however it is written; IPv4-compatible, NAT64 and 6to4 ones are refused.
+    for (const address of ["::ffff:127.0.0.1", "::ffff:7f00:1", "0:0:0:0:0:ffff:7f00:1", "::ffff:169.254.169.254", "::127.0.0.1", "64:ff9b::10.0.0.1", "64:ff9b::808:808", "64:ff9b:1::1", "2002:a00:1::1", "2002:808:808::", "::ffff:0:7f00:1"])
+      expect(publicAddress(address), address).toBe(false);
+    for (const address of ["8.8.8.8", "162.159.135.232", "2606:4700::6810:84e5", "::ffff:8.8.8.8", "0:0:0:0:0:ffff:808:808"]) expect(publicAddress(address), address).toBe(true);
     expect(publicAddress("not an address")).toBe(false);
   });
 });

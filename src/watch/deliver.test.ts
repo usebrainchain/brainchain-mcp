@@ -110,11 +110,12 @@ describe("deliveries", () => {
 
   it("try a failing endpoint again after each wait, then switch the watch off and say why", async () => {
     let status = 500;
-    const { deliveries, publish, now, said } = harness(async () => ({ status, body: "upstream broke" }));
+    const { deliveries, publish, now, said } = harness(async () => ({ status, body: "upstream says: the admin password is hunter2" }));
     const { id, manageToken } = await deliveries.create({ url: "https://hooks.example.com/x" }, "1.2.3.4");
     publish(found("bitgo.merged", "m"));
     await deliveries.tick();
-    expect(deliveries.status(id, manageToken)).toMatchObject({ failures: 1, lastError: "The endpoint answered 500: upstream broke.", retryAt: new Date(1_000_000 + RETRY_MS[0]!).toISOString() });
+    // Only the status: what the endpoint answered is never shown, so a watch cannot be used to read it.
+    expect(deliveries.status(id, manageToken)).toMatchObject({ failures: 1, lastError: "The endpoint answered 500.", retryAt: new Date(1_000_000 + RETRY_MS[0]!).toISOString() });
     // Nothing is sent before the wait is over.
     await deliveries.tick();
     expect(deliveries.status(id, manageToken)).toMatchObject({ failures: 1 });
@@ -123,7 +124,7 @@ describe("deliveries", () => {
       await deliveries.tick();
     }
     const off = deliveries.status(id, manageToken)!;
-    expect(off.off).toEqual({ at: expect.any(String), reason: `Switched off after ${MAX_FAILURES} failed tries in a row on event 1; the last: The endpoint answered 500: upstream broke. Make a new watch to start again.` });
+    expect(off.off).toEqual({ at: expect.any(String), reason: `Switched off after ${MAX_FAILURES} failed tries in a row on event 1; the last: The endpoint answered 500. Make a new watch to start again.` });
     expect(said).toEqual([`watch ${id} switched off after ${MAX_FAILURES} failed tries.`]);
     status = 200;
     now.at += 2 * 60 * 60_000;
@@ -157,10 +158,38 @@ describe("deliveries", () => {
     const { deliveries } = harness(async () => ({ status: 200, body: "" }));
     const one = await deliveries.create({ url: "https://hooks.example.com/1" }, "1.2.3.4");
     await deliveries.create({ url: "https://hooks.example.com/2" }, "1.2.3.4");
-    await expect(deliveries.create({ url: "https://hooks.example.com/3" }, "1.2.3.4")).rejects.toThrow("An address can have 2 watches at a time. Remove one first.");
+    await expect(deliveries.create({ url: "https://hooks.example.com/3" }, "1.2.3.4")).rejects.toThrow("An address can have 2 watches at a time, switched-off ones included until they are removed. Remove one first.");
     await deliveries.create({ url: "https://hooks.example.com/3" }, "5.6.7.8");
     await expect(deliveries.create({ url: "https://hooks.example.com/4" }, "9.9.9.9")).rejects.toThrow("The watcher holds as many watches as it takes. Try again later.");
     expect([deliveries.status(one.id, "wrong"), deliveries.remove("nope", one.manageToken), deliveries.remove(one.id, "wrong")]).toEqual([undefined, false, false]);
     expect(deliveries.remove(one.id, one.manageToken)).toBe(true);
+  });
+
+  it("count a switched-off watch toward its owner's cap until it is removed or a week has passed", async () => {
+    const { deliveries, publish, now } = harness(async () => ({ status: 500, body: "" }));
+    const failing = await deliveries.create({ url: "https://hooks.example.com/1" }, "1.2.3.4");
+    await deliveries.create({ url: "https://hooks.example.com/2" }, "1.2.3.4");
+    publish(found("bitgo.merged", "m"));
+    for (let tries = 0; tries < MAX_FAILURES; tries++) {
+      await deliveries.tick();
+      now.at += 2 * 60 * 60_000;
+    }
+    expect(deliveries.status(failing.id, failing.manageToken)!.off).toBeDefined();
+    await expect(deliveries.create({ url: "https://hooks.example.com/3" }, "1.2.3.4")).rejects.toThrow(/switched-off ones included/);
+    now.at += 8 * 24 * 60 * 60_000;
+    await deliveries.tick();
+    expect(deliveries.status(failing.id, failing.manageToken)).toBeUndefined();
+    expect((await deliveries.create({ url: "https://hooks.example.com/3" }, "1.2.3.4")).format).toBe("webhook");
+  });
+});
+
+describe("a token's name in a chat", () => {
+  it("is left out when it reads as a link or a handle, so nobody can post one through our bot", () => {
+    for (const name of ["claim at evil.xyz", "https://evil", "www.claim", "join t.me/x", "@everyone", "discord.gg/abc"]) {
+      const text = line(event({ token: { address: CASHCAT, symbol: "EVIL", name }, context: {} }));
+      expect(text, name).not.toContain(name);
+      expect(text).toContain("EVIL (0x020b…18b4)");
+    }
+    expect(line(event({ token: { address: null, symbol: "free.money", name: null }, context: {} }))).toContain("a token named like a link");
   });
 });

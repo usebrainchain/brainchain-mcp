@@ -23,8 +23,13 @@ for (const [network, prefix] of [
 ] as const)
   BLOCKED.addSubnet(network, prefix, "ipv4");
 for (const [network, prefix] of [
-  ["::", 128],
-  ["::1", 128],
+  // Unspecified, loopback and IPv4-compatible, and the translated form. Mapped addresses are read as IPv4 below: a mapped
+  // subnet here would match every IPv4 address.
+  ["::", 96],
+  ["::ffff:0:0:0", 96],
+  ["64:ff9b::", 96],
+  ["64:ff9b:1::", 48],
+  ["2002::", 16],
   ["100::", 64],
   ["2001::", 23],
   ["2001:db8::", 32],
@@ -35,26 +40,37 @@ for (const [network, prefix] of [
 ] as const)
   BLOCKED.addSubnet(network, prefix, "ipv6");
 
-/** The IPv4 address an IPv6 one carries: mapped, NAT64 or 6to4. Each reaches that IPv4 address, so it is checked as one. */
+/** An IPv6 address as its eight groups, whichever way it was written. */
+function groups(address: string): number[] {
+  let text = address.toLowerCase();
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
+  if (dotted) {
+    const [a, b, c, d] = dotted.slice(1).map(Number) as [number, number, number, number];
+    text = `${text.slice(0, dotted.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head, tail] = text.split("::");
+  const left = head ? head.split(":") : [];
+  const right = tail ? tail.split(":") : [];
+  const zeros = tail === undefined ? [] : Array<string>(8 - left.length - right.length).fill("0");
+  return [...left, ...zeros, ...right].map((group) => parseInt(group, 16));
+}
+
+/**
+ * The IPv4 address a mapped IPv6 one stands for, in any spelling, which is checked as that address. NAT64 and 6to4, which
+ * reach IPv4 through a relay, are refused outright above.
+ */
 function carried(address: string): string | undefined {
-  const lower = address.toLowerCase();
-  const dotted = /^(?:::ffff:|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/.exec(lower)?.[1];
-  if (dotted) return dotted;
-  const hex = /^(?:::ffff:|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(lower);
-  const sixToFour = /^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4}):/.exec(lower);
-  const parts = hex ?? sixToFour;
-  if (!parts) return undefined;
-  const [high, low] = [parseInt(parts[1]!, 16), parseInt(parts[2]!, 16)];
-  return [high >> 8, high & 255, low >> 8, low & 255].join(".");
+  const g = groups(address);
+  if (!g.slice(0, 5).every((group) => group === 0) || g[5] !== 0xffff) return undefined;
+  return [g[6]! >> 8, g[6]! & 255, g[7]! >> 8, g[7]! & 255].join(".");
 }
 
 export function publicAddress(address: string): boolean {
   const family = isIP(address);
   if (family === 4) return !BLOCKED.check(address, "ipv4");
-  if (family !== 6) return false;
+  if (family !== 6 || BLOCKED.check(address, "ipv6")) return false;
   const inner = carried(address);
-  if (inner) return !BLOCKED.check(inner, "ipv4");
-  return !BLOCKED.check(address, "ipv6");
+  return inner ? !BLOCKED.check(inner, "ipv4") : true;
 }
 
 /** Host names that only ever mean this machine or its network. */
@@ -150,7 +166,11 @@ export function pinnedPost(resolve: Resolve = resolveAll): Post {
           answer.on("close", finish);
         },
       );
-      sent.on("timeout", () => sent.destroy(new DeliveryError(`${url.hostname} did not answer within ${SEND_MS / 1000} seconds.`)));
+      // The socket's timeout restarts with every byte, so a slow answer is also cut at one deadline for the whole delivery.
+      const late = () => sent.destroy(new DeliveryError(`${url.hostname} did not answer within ${SEND_MS / 1000} seconds.`));
+      const deadline = setTimeout(late, SEND_MS);
+      sent.on("close", () => clearTimeout(deadline));
+      sent.on("timeout", late);
       sent.on("error", (error) => fail(error instanceof DeliveryError ? error : new DeliveryError(`${url.hostname} could not be reached.`)));
       sent.end(body);
     });
