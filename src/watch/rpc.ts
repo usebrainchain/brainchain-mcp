@@ -77,6 +77,11 @@ export function splitting(fetchImpl: typeof fetch): typeof fetch {
   };
 }
 
+/** A reader for the private endpoint alone, for work that must never fall to the public endpoint. */
+export function privateReader(fetchImpl: typeof fetch, url: URL): ChainHistory {
+  return createPublicClient({ transport: http(url.href, { fetchFn: fetchImpl, retryCount: 2, retryDelay: RETRY_MS, timeout: 30_000 }) });
+}
+
 /**
  * A reader for Robinhood Chain: the RPC in the setting first, and the public endpoint when it fails, refuses a range it
  * does not serve, or is held back after a 429. Without the setting, the public endpoint alone.

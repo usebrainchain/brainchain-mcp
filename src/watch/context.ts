@@ -38,7 +38,7 @@ export interface ContextOptions {
   wallets: readonly MakerWallet[];
   times: Map<string, Promise<bigint>>;
   /** The token's market cap now, read as brainchain_token_market_cap reads it. */
-  worth?: (token: Address) => Promise<MarketCapBoard>;
+  worth?: (token: Address) => Promise<MarketCapBoard | Worth>;
   /** How long each read may take. */
   ms?: number;
   /**
@@ -132,7 +132,7 @@ export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT
       },
     );
     const value = worthRead.then(
-      (board) => (parts.worth = { worth: worthOf(board) }),
+      (board) => (parts.worth = { worth: "chain" in board ? worthOf(board) : board }),
       (error: unknown) => {
         if (why(error) === UNREAD) say?.(`event ${event.id}: the market cap could not be read: ${describe(error)}`);
         parts.worth = { worth: null, worthMissing: why(error) };

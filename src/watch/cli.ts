@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { expandHome } from "../config.js";
 import { hasGitHubToken, useGitHubToken } from "../github.js";
+import { ChainError } from "../history.js";
 import { configuredMakers, firstApprovals, MARKET_MAKERS } from "../makers.js";
 import { marketCap, type CapKept } from "../marketcap.js";
 import { ROBINHOOD_RPC } from "../premiums.js";
@@ -10,17 +11,19 @@ import { readinessIn } from "../readiness.js";
 import { sightingsReader, tokenSightings } from "../sightings.js";
 import { bitGoLists, bitGoMerges, bitGoPullRequests, bitGoReleases } from "./bitgo.js";
 import { chainFirsts, chainKept, chainPoller } from "./chain.js";
-import { chainTurn, createdIn, eventContext, loadWorth, saveWorth } from "./context.js";
+import { chainTurn, createdIn, eventContext, loadWorth, saveWorth, worthOf } from "./context.js";
 import { Deliveries } from "./deliver.js";
 import { EventLog, type WatchEvent } from "./events.js";
 import { Requests } from "./http.js";
 import { listMerges, listPullRequests, METAMASK, TRUST_WALLET } from "./lists.js";
 import { pinnedPost, publicTarget } from "./net.js";
-import { chainReader, redactor, RPC_SETTING, rpcSetting } from "./rpc.js";
+import { PoolIndex } from "./pools.js";
+import { chainReader, privateReader, redactor, RPC_SETTING, rpcSetting } from "./rpc.js";
 import { serveEvents } from "./serve.js";
 import { lockStateDir, StateFile } from "./state.js";
 import { coingecko, gate, kucoin, lifi, robinhoodPages, robinhoodPairs } from "./venues.js";
 import { Watcher, type Poller } from "./watcher.js";
+import { indexedWorth, type EthKept } from "./worth.js";
 
 export const WATCH_USAGE = `Usage: brainchain-mcp watch [--state <dir>] [--serve [host:]<port>] [--print] [--trust-proxy]
 
@@ -81,7 +84,7 @@ export const GITHUB_EVERY = { withToken: 60_000, withoutToken: 10 * 60_000 };
 /** How often each GitHub source is read: about once a minute with a token, every ten minutes without one. */
 export const githubEvery = (token: boolean) => (token ? GITHUB_EVERY.withToken : GITHUB_EVERY.withoutToken);
 /** How many requests an hour the watcher allows itself: GitHub's API with and without a key, and each Robinhood Chain endpoint. */
-export const ALLOWANCES = { githubWithToken: 4_000, githubWithoutToken: 50, publicChain: 4_000, privateChain: 20_000 };
+export const ALLOWANCES = { githubWithToken: 4_000, githubWithoutToken: 50, publicChain: 4_000, privateChain: 20_000, poolFill: 20_000 };
 
 /**
  * Reads GitHub with the token in GITHUB_TOKEN_FILE's file or in GITHUB_TOKEN, checked as the MCP server checks it, and says
@@ -120,6 +123,11 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   const github = githubEvery(token);
   const reader = chainReader(requests, rpc);
   const kept = chainKept();
+  // Every pool on the chain, so a token's pools are a lookup. It is filled from the private endpoint alone, on an allowance
+  // of its own so the fill never holds back the polls, and then kept current by the chain poll.
+  const poolIndex = new PoolIndex(dir, say);
+  const fillRequests = new Requests({ allowances: rpc ? [{ hosts: [rpc.host], perHour: ALLOWANCES.poolFill }] : [] });
+  const eth: EthKept = {};
   // Each token's pool index and creation block are kept on disk, so a restart does not search its history again.
   const worthFile = join(dir, "worth.json");
   const worthKept = loadWorth(worthFile);
@@ -165,7 +173,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
 
   const pollers: Poller[] = [
     // With a private endpoint the chain is read every 10 s, so an event is out within about 20 s of its block.
-    chainPoller({ reader, wallets, watched: tracked, firsts: chainFirsts(reader, kept), ...(rpc ? { interval: 10_000 } : {}) }),
+    chainPoller({ reader, wallets, watched: tracked, firsts: chainFirsts(reader, kept), ...(rpc ? { interval: 10_000 } : {}), onPools: (from, to, pools) => poolIndex.addLive(from, to, pools) }),
     bitGoPullRequests(requests, lists, github),
     bitGoMerges(requests, lists, github),
     bitGoReleases(requests, lists),
@@ -200,8 +208,16 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     // The public endpoint turns the hosted address away for minutes at a time; an older token's worth waits that out.
     patience: 12 * 60_000,
     worth: async (address) => {
+      if (poolIndex.ready) {
+        try {
+          return await indexedWorth(reader, address, poolIndex, eth);
+        } catch (error) {
+          // An answer about the token stands; a read that failed is tried the long way, which ends at the public endpoint.
+          if (error instanceof ChainError) throw error;
+        }
+      }
       try {
-        return await marketCap(reader, address, capKept, new Date(), undefined, await createdBlock(address));
+        return worthOf(await marketCap(reader, address, capKept, new Date(), undefined, await createdBlock(address)));
       } finally {
         keepWorth();
       }
@@ -267,6 +283,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       readAt: new Date().toISOString(),
       events: { total: log.size, baseline: log.baselineSize, lastId: log.lastId, published: log.publishedThrough },
       chain: { block: chain.block ?? null, startBlock: chain.startBlock ?? null, rpc: rpc ? "configured, public endpoint as fallback" : "public endpoint" },
+      pools: poolIndex.status(),
       github: { token, ...(requests.github ? { limit: requests.github.limit, remaining: requests.github.remaining, reset: new Date(requests.github.reset).toISOString() } : {}) },
       watches: deliveries.active,
       waiting,
@@ -284,6 +301,8 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   }
   watcher.start();
   deliveries.start();
+  if (rpc) void poolIndex.fill(privateReader(fillRequests.fetchFor("pools"), rpc));
+  else say("No private RPC is set, so the pool index is not filled and each token's pools are searched for as they are needed.");
 
   const stop = async () => {
     if (stopping) return;
@@ -293,6 +312,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     deliveries.stop();
     await watcher.stop();
     clearTimeout(saving);
+    poolIndex.close();
     try {
       saveWorth(worthFile, worthKept);
     } catch {

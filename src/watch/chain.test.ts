@@ -9,6 +9,7 @@ import type { ChainHistory } from "../history.js";
 import { MARKET_MAKERS, type Approval } from "../makers.js";
 import { chainFirsts, chainKept, chainPoller, SPAN, type Firsts, type Receipt } from "./chain.js";
 import { EventLog } from "./events.js";
+import type { IndexedPool } from "./pools.js";
 import { StateFile } from "./state.js";
 import { Watcher } from "./watcher.js";
 
@@ -98,9 +99,10 @@ function harness(reader: ChainHistory, firsts: Firsts, watched: Address[] = [CAS
   const dir = mkdtempSync(join(tmpdir(), "brainchain-watch-"));
   const log = new EventLog(dir);
   const state = new StateFile(dir);
-  const poller = chainPoller({ reader, wallets: MARKET_MAKERS, watched: () => new Set(watched.map((address) => address.toLowerCase())), firsts });
+  const indexed: [number, number, IndexedPool[]][] = [];
+  const poller = chainPoller({ reader, wallets: MARKET_MAKERS, watched: () => new Set(watched.map((address) => address.toLowerCase())), firsts, onPools: (from, to, pools) => indexed.push([from, to, pools]) });
   const watcher = new Watcher({ log, state, pollers: [poller], say: (line) => process.env.DEBUG_WATCH && console.log(line) });
-  return { log, state, run: () => watcher.runOnce(poller) };
+  return { log, state, indexed, run: () => watcher.runOnce(poller) };
 }
 
 describe("the chain poller", () => {
@@ -115,11 +117,13 @@ describe("the chain poller", () => {
 
   it("reports a new pool for a token with a public trace, paired with ETH, WETH, USDG or another such token, and never for the base", async () => {
     const { reader } = endpoint([v4(10n, zeroAddress, CASHCAT), v3(11n, PONS, WETH), v4(12n, CASHCAT, RANDOM), v4(13n, RANDOM, USDG), v4(14n, PONS, CASHCAT), v3(15n, USDG, WETH)], { newest: 0n });
-    const { log, state, run } = harness(reader, table().firsts);
+    const { log, state, indexed, run } = harness(reader, table().firsts);
     await run();
     state.source("chain").block = 0;
     (reader as { getBlockNumber: () => Promise<bigint> }).getBlockNumber = async () => 20n;
     await run();
+    // Every pool in the blocks read goes to the pool index, whether or not it is reported.
+    expect(indexed.map(([from, to, pools]) => [from, to, pools.map(({ version, block }) => `v${version}@${block}`)])).toEqual([[1, 20, ["v4@10", "v3@11", "v4@12", "v4@13", "v4@14", "v3@15"]]]);
     expect(log.all().map(({ kind, token, source, detail }) => [kind, token.symbol, source, detail.pairedWith, detail.block])).toEqual([
       ["pool.created", "CASHCAT", "Uniswap v4", "ETH", 10],
       ["pool.created", "PONS", "Uniswap v3", WETH, 11],

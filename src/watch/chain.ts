@@ -4,6 +4,7 @@ import { blockTime, ChainError, earliestLog, STRETCH_BLOCKS, tokenFacts, tooMany
 import { approvalEvent, firstApprovals, who, type Approval, type MakerWallet } from "../makers.js";
 import { initializeEvent, poolCreatedEvent, UNISWAP_V3, UNISWAP_V4 } from "../readiness.js";
 import type { EventToken, Found } from "./events.js";
+import { poolOf, type IndexedPool, type PoolLog } from "./pools.js";
 import type { Poller } from "./watcher.js";
 
 export const CHAIN_INTERVAL = 15_000;
@@ -111,6 +112,8 @@ export interface ChainOptions {
   watched: () => ReadonlySet<string>;
   firsts: Firsts;
   interval?: number;
+  /** Given every pool created in each range of blocks read, which the pool index keeps. */
+  onPools?: (from: number, to: number, pools: IndexedPool[]) => void;
 }
 
 interface ChainState {
@@ -128,7 +131,7 @@ interface ChainState {
  * older than the blocks being read is recorded as baseline, and a wallet that had received a token before them is noted as
  * settled, so neither is reported as new.
  */
-export function chainPoller({ reader, wallets, watched, firsts, interval = CHAIN_INTERVAL }: ChainOptions): Poller {
+export function chainPoller({ reader, wallets, watched, firsts, interval = CHAIN_INTERVAL, onPools }: ChainOptions): Poller {
   const facts = new Map<string, Promise<{ token: EventToken; decimals?: number }>>();
   const describe = (address: Address) => {
     const key = address.toLowerCase();
@@ -173,6 +176,7 @@ export function chainPoller({ reader, wallets, watched, firsts, interval = CHAIN
       };
 
       const pools = await allLogs((low, high) => reader.getLogs({ address: [UNISWAP_V3, UNISWAP_V4], events: [poolCreatedEvent, initializeEvent], fromBlock: low, toBlock: high, strict: true }), from, to);
+      onPools?.(Number(from), Number(to), (pools as unknown as PoolLog[]).map(poolOf));
       const tracked = watched();
       for (const log of pools) {
         const pool =
