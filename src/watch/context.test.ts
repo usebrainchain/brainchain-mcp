@@ -130,6 +130,21 @@ describe("an event's context", () => {
     expect([unnamed.worth, unnamed.worthMissing]).toEqual([null, "No token in the log goes by this symbol with a contract address, so its worth was not read."]);
   });
 
+  it("tells the operator's log the cause the event does not show", async () => {
+    const said: string[] = [];
+    const reader = { getBlockNumber: async () => 1_000n, getTransactionReceipt: async () => ({ contractAddress: null }) } as unknown as History;
+    const of = eventContext({
+      log: filled(),
+      wallets: [],
+      times: new Map(),
+      worth: async () => Promise.reject(new Error("HTTP request failed: 429")),
+      say: (line) => said.push(line),
+      readers: { chain: (work) => work(reader), readiness: async (_, token) => board(token), approvals: async () => [], sightings: async (token) => sightings(token) },
+    });
+    expect((await of(pool("2026-08-07T10:00:00.000Z"))).worthMissing).toBe("Robinhood Chain or a list could not be read just now.");
+    expect(said).toEqual(["event 99: the market cap could not be read: HTTP request failed: 429"]);
+  });
+
   it("puts a market cap board in the shape an event carries", () => {
     expect(worthOf({ ...CAP, marketCapUsd: undefined, supply: undefined }).marketCapUsd).toBeUndefined();
   });

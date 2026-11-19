@@ -49,6 +49,11 @@ describe("a chat message", () => {
     );
   });
 
+  it("names the pair's other side when it is ETH, WETH or USDG", () => {
+    expect(line(event({ kind: "pool.created", source: "Uniswap v4", ref: TX, detail: { pairedWith: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168" }, context: {} }))).toContain("paired with USDG.");
+    expect(line(event({ kind: "pool.created", source: "Uniswap v3", ref: TX, detail: { pairedWith: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73" }, context: {} }))).toContain("paired with WETH.");
+  });
+
   it("has words for every kind, none of them banned", () => {
     for (const kind of KINDS) {
       const text = line(event({ kind, detail: { pairedWith: "ETH", maker: { name: "Wintermute" }, version: "59.1.0", tradable: true, confirmed: true } }));

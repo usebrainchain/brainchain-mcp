@@ -7,6 +7,7 @@ import { SightingsError } from "../sightings.js";
 import type { MakerWallet } from "../makers.js";
 import { tokenTimeline, type TimelineReaders } from "../timeline.js";
 import type { EventLog, WatchEvent } from "./events.js";
+import { describe } from "./watcher.js";
 
 /** How long the context of one event may take before the event is written without its prior steps. */
 export const CONTEXT_MS = ANSWER_MS;
@@ -38,6 +39,8 @@ export interface ContextOptions {
   /** The token's market cap now, read as brainchain_token_market_cap reads it. */
   worth?: (token: Address) => Promise<MarketCapBoard>;
   ms?: number;
+  /** Told the cause of a read that failed for a reason the event does not show, for the operator's log, which redacts it. */
+  say?: (line: string) => void;
 }
 
 /** What a token is worth when its event is published, and the pool that says so. */
@@ -62,8 +65,8 @@ export const worthOf = (board: MarketCapBoard): Worth => ({
 });
 
 /** Why a read failed, in words written for a reader: a source's own error can carry a node's address, so only ours pass. */
-export const why = (error: unknown) =>
-  error instanceof ChainError || error instanceof CustodyError || error instanceof SightingsError || error instanceof LateError ? error.message : "Robinhood Chain or a list could not be read just now.";
+const UNREAD = "Robinhood Chain or a list could not be read just now.";
+export const why = (error: unknown) => (error instanceof ChainError || error instanceof CustodyError || error instanceof SightingsError || error instanceof LateError ? error.message : UNREAD);
 
 class LateError extends Error {}
 
@@ -75,7 +78,7 @@ class LateError extends Error {}
  * read only for a symbol that names exactly one. The steps and the worth are read side by side, each within `ms`, and one
  * that is missing says why in `unread` or `worthMissing`.
  */
-export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT_MS }: ContextOptions): (event: WatchEvent) => Promise<Record<string, unknown>> {
+export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT_MS, say }: ContextOptions): (event: WatchEvent) => Promise<Record<string, unknown>> {
   const full: TimelineReaders = { ...readers, custody: async () => custodyFromLog(log), listed: async () => [] };
   return async (event) => {
     const priorEvents = log
@@ -110,6 +113,9 @@ export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT
       within(ms, tokenTimeline(full, target, wallets, times), late("The token timeline")),
       worth ? within(ms, worth(target), late("The market cap")) : Promise.reject(new LateError("This watcher reads no market cap.")),
     ]);
+    for (const [what, read] of [["token timeline", steps], ["market cap", value]] as const) {
+      if (read.status === "rejected" && why(read.reason) === UNREAD) say?.(`event ${event.id}: the ${what} could not be read: ${describe(read.reason)}`);
+    }
     return {
       ...context,
       ...(steps.status === "fulfilled"

@@ -159,6 +159,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       sightings: (address) => tokenSightings(sightings, address),
     },
     worth: (address) => marketCap(reader, address, capKept),
+    say: (line) => say(line),
   });
 
   const deliveries = new Deliveries({ dir, log, post: pinnedPost(), check: async (url) => void (await publicTarget(url.hostname)), say });

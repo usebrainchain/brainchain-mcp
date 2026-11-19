@@ -16,7 +16,8 @@ export const SPAN = 10_000n;
  * What most pools are paired against: ETH, WETH and USDG, the three most paired on Robinhood Chain on 2026-11-19. A new pool
  * is news about the token on the other side, so no event is ever about one of these.
  */
-export const BASES: ReadonlySet<string> = new Set([zeroAddress, "0x0bd7d308f8e1639fab988df18a8011f41eacad73", "0x5fc5360d0400a0fd4f2af552add042d716f1d168"]);
+export const BASE_NAMES: Readonly<Record<string, string>> = { [zeroAddress]: "ETH", "0x0bd7d308f8e1639fab988df18a8011f41eacad73": "WETH", "0x5fc5360d0400a0fd4f2af552add042d716f1d168": "USDG" };
+export const BASES: ReadonlySet<string> = new Set(Object.keys(BASE_NAMES));
 
 export interface Receipt extends Dated {
   from: Address;

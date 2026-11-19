@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { BASE_NAMES } from "./chain.js";
 import { matches, type EventLog, type WatchEvent } from "./events.js";
 import { DeliveryError, webhookUrl, type Post } from "./net.js";
 
@@ -72,7 +73,7 @@ function change(event: WatchEvent, name: string): string {
   const maker = (detail.maker as { name?: string } | undefined)?.name ?? "A followed wallet";
   switch (event.kind) {
     case "pool.created":
-      return `New ${event.source} pool for ${name}, paired with ${detail.pairedWith === "ETH" ? "ETH" : short(String(detail.pairedWith))}.`;
+      return `New ${event.source} pool for ${name}, paired with ${detail.pairedWith === "ETH" ? "ETH" : (BASE_NAMES[String(detail.pairedWith).toLowerCase()] ?? short(String(detail.pairedWith)))}.`;
     case "maker.approval":
       return `${maker}'s wallet approved ${name} for the first time${detail.confirmed ? "" : ", by the token's log only"}.`;
     case "maker.receipt":
