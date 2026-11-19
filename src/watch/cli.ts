@@ -197,6 +197,8 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     },
     // Off the delivery path, the slow parts get longer: what is not ready by the first deadline follows as an update.
     ms: 150_000,
+    // The public endpoint turns the hosted address away for minutes at a time; an older token's worth waits that out.
+    patience: 12 * 60_000,
     worth: async (address) => {
       try {
         return await marketCap(reader, address, capKept, new Date(), undefined, await createdBlock(address));

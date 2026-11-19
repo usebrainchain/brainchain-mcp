@@ -49,7 +49,7 @@ const CAP: MarketCapBoard = {
   pools: [],
 };
 
-function context(log: EventLog, readiness: (token: Address) => Promise<ReadinessBoard> = async (token) => board(token), ms?: number, worth?: (token: Address) => Promise<MarketCapBoard>) {
+function context(log: EventLog, readiness: (token: Address) => Promise<ReadinessBoard> = async (token) => board(token), ms?: number, worth?: (token: Address) => Promise<MarketCapBoard>, patience?: number) {
   const reader = { getBlockNumber: async () => 1_000n, getTransactionReceipt: async () => ({ contractAddress: null }) } as unknown as History;
   const read: Address[] = [];
   const of = eventContext({
@@ -58,6 +58,7 @@ function context(log: EventLog, readiness: (token: Address) => Promise<Readiness
     times: new Map(),
     ...(ms ? { ms } : {}),
     ...(worth ? { worth } : {}),
+    ...(patience ? { patience } : {}),
     readers: {
       chain: (work) => work(reader),
       readiness: async (_, token) => (read.push(token), readiness(token)),
@@ -132,6 +133,23 @@ describe("an event's context", () => {
     expect(await reasons(async () => Promise.reject(new Error("HTTP request failed. URL: https://node.example/key")))).toBe("Robinhood Chain or a list could not be read just now.");
     const unnamed = await context(filled(), undefined, undefined, async () => CAP).of(event({ kind: "robinhood.page_added", token: { address: null, symbol: "NOPE", name: null }, source: "Robinhood", ref: "x", at: null, detail: {} })).done;
     expect([unnamed.worth, unnamed.worthMissing]).toEqual([null, "No token in the log goes by this symbol with a contract address, so its worth was not read."]);
+  });
+
+  it("tries the worth again after an endpoint's wait, for as long as its patience lasts", async () => {
+    let tries = 0;
+    const turnedAway = async () => {
+      if (++tries === 1) throw new Error("HTTP request failed.", { cause: new Backoff("rpc answered 429", Date.now() + 50) });
+      return CAP;
+    };
+    const patient = await context(filled(), undefined, 5_000, turnedAway, 5_000).of(pool("2026-08-07T10:00:00.000Z")).done;
+    expect([tries, (patient.worth as { marketCapUsd: string }).marketCapUsd]).toEqual([2, "38251409.00"]);
+    tries = 0;
+    const longWait = async () => {
+      tries++;
+      throw new Error("HTTP request failed.", { cause: new Backoff("rpc answered 429", Date.now() + 60_000) });
+    };
+    const impatient = await context(filled(), undefined, 5_000, longWait, 5_000).of(pool("2026-08-07T10:00:00.000Z")).done;
+    expect([tries, impatient.worthMissing]).toEqual([1, "Robinhood Chain's public endpoint asked the watcher to wait, so this was not read; the long searches it needs are served by that endpoint alone."]);
   });
 
   it("tells the operator's log the cause the event does not show", async () => {

@@ -39,7 +39,13 @@ export interface ContextOptions {
   times: Map<string, Promise<bigint>>;
   /** The token's market cap now, read as brainchain_token_market_cap reads it. */
   worth?: (token: Address) => Promise<MarketCapBoard>;
+  /** How long each read may take. */
   ms?: number;
+  /**
+   * How long the worth keeps trying when an endpoint asks the watcher to wait; each try goes on from the stretches the
+   * last one read, and the worth follows as an update whenever it is read.
+   */
+  patience?: number;
   /** Told the cause of a read that failed for a reason the event does not show, for the operator's log, which redacts it. */
   say?: (line: string) => void;
 }
@@ -81,7 +87,7 @@ class LateError extends Error {}
  * read only for a symbol that names exactly one. The steps and the worth are read side by side, each within `ms`, and one
  * that is missing says why in `unread` or `worthMissing`.
  */
-export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT_MS, say }: ContextOptions): (event: WatchEvent) => Reading {
+export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT_MS, patience = ms, say }: ContextOptions): (event: WatchEvent) => Reading {
   const full: TimelineReaders = { ...readers, custody: async () => custodyFromLog(log), listed: async () => [] };
   return (event) => {
     const priorEvents = log
@@ -116,7 +122,7 @@ export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT
     // Each part goes into the context the moment it is read, so what is ready can go out before the rest.
     const parts: Record<string, Record<string, unknown>> = {};
     // The worth first: both read the same endpoints, and the worth is what a reader wants soonest.
-    const worthRead = worth ? within(ms, patiently(() => worth(target), Date.now() + ms), late("The market cap")) : Promise.reject(new LateError("This watcher reads no market cap."));
+    const worthRead = worth ? patiently(() => within(ms, worth(target), late("The market cap")), Date.now() + patience) : Promise.reject(new LateError("This watcher reads no market cap."));
     const timeline = () => within(ms, tokenTimeline(full, target, wallets, times), late("The token timeline"));
     const steps = worthRead.then(timeline, timeline).then(
       (board) => (parts.priorTraces = { priorTraces: board.steps.filter((step) => Date.parse(step.at) < before), ...(board.unread.length ? { unread: board.unread } : {}) }),
