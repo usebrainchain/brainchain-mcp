@@ -29,10 +29,12 @@ const described = (id: string, listed: ListedToken) => ({ id: `hoodeth:${id}`, .
  * A pull request into BitGo's master that adds a Robinhood Chain token: the tokens its head has on BitGo's lists that its
  * base does not, read with the same reader as brainchain_custody_additions. Only a pull request that touches a list is read.
  */
-export async function bitGoPullRequest(reader: BitGoReader, pr: PullRequest, { files, cut }: { files: { filename: string }[]; cut: boolean }, at: string): Promise<Found[]> {
+export async function bitGoPullRequest(reader: BitGoReader, pr: PullRequest, { files, cut }: { files: { filename: string }[]; cut: boolean }, at: string, before?: string): Promise<Found[]> {
   const lists: readonly string[] = [...TOKEN_LISTS, EARLY_LIST];
   if (pr.baseRef !== "master" || (!cut && !files.some(({ filename }) => lists.includes(filename)))) return [];
-  const [head, base] = await Promise.all([tokensAt(reader, pr.head, Date.now()), tokensAt(reader, pr.base, Date.now())]);
+  // Against the head it had before, so a push reports only what it adds; against the base when that head cannot be read.
+  const earlier = before ? await tokensAt(reader, before, Date.now()).catch(() => undefined) : undefined;
+  const [head, base] = await Promise.all([tokensAt(reader, pr.head, Date.now()), earlier ?? tokensAt(reader, pr.base, Date.now())]);
   return [...head]
     .filter(([id]) => !base.has(id))
     .map(([id, listed]) => ({
@@ -51,8 +53,8 @@ export function bitGoPullRequests(requests: Requests, reader: BitGoReader, inter
     repo: REPO,
     interval,
     requests,
-    added: (pr, files, at) =>
-      bitGoPullRequest(reader, pr, files, at).catch((error: unknown) => {
+    added: (pr, files, at, before) =>
+      bitGoPullRequest(reader, pr, files, at, before).catch((error: unknown) => {
         // A head whose lists cannot be read, as from a fork the raw host does not serve, is passed over rather than read again at every poll.
         if (error instanceof CustodyError) return [];
         throw error;

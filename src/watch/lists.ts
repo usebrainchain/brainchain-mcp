@@ -59,12 +59,13 @@ async function listedIn(requests: Requests, source: string, list: FileList, url:
   return { symbol: symbol || null, name: name || null };
 }
 
-/** The tokens a pull request adds a listing file for, read at its head. */
-export async function listPullRequest(requests: Requests, list: FileList, pr: PullRequest, { files }: { files: ChangedFile[] }, at: string): Promise<Found[]> {
+/** The tokens a pull request adds a listing file for, read at its head; with `before`, only files that head did not have. */
+export async function listPullRequest(requests: Requests, list: FileList, pr: PullRequest, { files }: { files: ChangedFile[] }, at: string, before?: string): Promise<Found[]> {
   const found: Found[] = [];
   for (const { filename, status } of files) {
     const address = list.address(filename);
     if (status !== "added" || !address) continue;
+    if (before && (await requests.get(`${list.key}-prs`, raw(pr.headRepo ?? list.repo, before, filename), { accept: "*/*" })).status === 200) continue;
     const named = await listedIn(requests, `${list.key}-prs`, list, raw(pr.headRepo ?? list.repo, pr.head, filename));
     if (!named) continue;
     found.push({ kind: `${list.key}.pr_opened` as Kind, token: { address: getAddress(address.toLowerCase()), ...named }, source: list.source, ref: pr.url, at, detail: { pr: pr.number, title: pr.title, path: filename, head: pr.head } });
@@ -73,7 +74,7 @@ export async function listPullRequest(requests: Requests, list: FileList, pr: Pu
 }
 
 export const listPullRequests = (requests: Requests, list: FileList, interval: number): Poller =>
-  pullRequestsPoller({ name: `${list.key}-prs`, repo: list.repo, interval, requests, added: (pr, files, at) => listPullRequest(requests, list, pr, files, at) });
+  pullRequestsPoller({ name: `${list.key}-prs`, repo: list.repo, interval, requests, added: (pr, files, at, before) => listPullRequest(requests, list, pr, files, at, before) });
 
 interface MergesState {
   /** The newest commit to the chain's folder on master that was read. */

@@ -73,6 +73,29 @@ describe("the MetaMask pull request poller", () => {
   });
 });
 
+describe("a list pull request open at the baseline", () => {
+  const PULLS = "https://api.github.com/repos/MetaMask/contract-metadata/pulls?state=open&sort=updated&direction=desc&per_page=50";
+  const FILES = "https://api.github.com/repos/MetaMask/contract-metadata/pulls/2089/files?per_page=100&page=1";
+  const RAW = (ref: string, address: string) => `https://raw.githubusercontent.com/someone/contract-metadata/${ref}/metadata/eip155:4663/erc20:${address}.json`;
+  const NEW = "0x0000000000000000000000000000000000000c0C";
+  const at = (head: string, updatedAt: string) => ({ number: 2089, html_url: "https://github.com/MetaMask/contract-metadata/pull/2089", title: "Add tokens on Robinhood Chain", created_at: "2026-11-18T10:58:36Z", updated_at: updatedAt, head: { sha: head, repo: { full_name: "someone/contract-metadata" } }, base: { sha: sha("b"), ref: "master" } });
+
+  it("reports only the files a later push adds, so what it held before is not news", async () => {
+    const { requests, table } = routes({ [PULLS]: json([at(sha("c"), "2026-11-18T11:00:00Z")]) });
+    const { log, run } = harness(listPullRequests(requests, METAMASK, 60_000));
+    await run();
+    table[PULLS] = json([at(sha("d"), "2026-11-19T15:00:00Z")]);
+    table[FILES] = json([
+      { filename: `metadata/eip155:4663/erc20:${RCL}.json`, status: "added" },
+      { filename: `metadata/eip155:4663/erc20:${NEW}.json`, status: "added" },
+    ]);
+    table[RAW(sha("c"), RCL)] = json({ name: "Racing Legends", symbol: "RCL" });
+    table[RAW(sha("d"), NEW)] = json({ name: "New Coin", symbol: "NEW" });
+    await run();
+    expect(log.query().events.map(({ token, at: when }) => [token.symbol, when])).toEqual([["NEW", "2026-11-19T15:00:00.000Z"]]);
+  });
+});
+
 describe("the Trust Wallet merge poller", () => {
   const COMMITS = "https://api.github.com/repos/trustwallet/assets/commits?sha=master&path=blockchains%2Frobinhoodchain%2Fassets&per_page=30";
   const FOLDER = "https://api.github.com/repos/trustwallet/assets/contents/blockchains/robinhoodchain/assets?ref=master";

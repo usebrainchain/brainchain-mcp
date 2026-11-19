@@ -172,9 +172,10 @@ export class Watcher {
       delete status.lastError;
       wait = more ? 0 : poller.interval;
     } catch (error) {
-      status.failures++;
-      status.lastError = (this.options.redact ?? ((text: string) => text))(describe(error));
       const refused = backoffIn(error);
+      // A wait for an allowance or a host that asked for one is not a failure: the source is fine and says when it can go on.
+      if (!refused) status.failures++;
+      status.lastError = (this.options.redact ?? ((text: string) => text))(describe(error));
       wait = refused ? Math.max(refused.until - this.clock(), 1_000) : Math.min(poller.interval * 2 ** status.failures, MAX_WAIT_MS);
       this.say(`${poller.name}: ${status.lastError} Next try in ${Math.round(wait / 1000)} s.`);
     }

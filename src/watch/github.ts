@@ -88,9 +88,15 @@ export interface PullRequestsOptions {
   repo: string;
   interval: number;
   requests: Requests;
-  /** What a pull request at its current head adds. `at` is when that became public, as far as GitHub dates it. */
-  added(pr: PullRequest, files: { files: ChangedFile[]; cut: boolean }, at: string): Promise<Found[]>;
+  /**
+   * What a pull request at its current head adds: against `before`, the head it had when last read, when there was one, and
+   * else against its base. `at` is when that became public, as far as GitHub dates it.
+   */
+  added(pr: PullRequest, files: { files: ChangedFile[]; cut: boolean }, at: string, before?: string): Promise<Found[]>;
 }
+
+/** How many pull requests' heads are kept, the oldest let go first. */
+export const MAX_HEADS = 2_000;
 
 interface PullRequestsState {
   /** The head each open pull request had when it was last read. */
@@ -100,10 +106,11 @@ interface PullRequestsState {
 }
 
 /**
- * Open pull requests into the default branch of `repo`, most recently updated first. A pull request whose head moved since
- * the last read has its files read, and `added` says what it adds. One that adds something the first time it is seen, and
- * was opened after the baseline, is dated by its opening; one that adds it in a later push is dated by its last update,
- * which is that push.
+ * Open pull requests into the default branch of `repo`, most recently updated first. The baseline notes each one's head and
+ * reads nothing more, which keeps it to one request. After it, a pull request whose head moved has its files read, and
+ * `added` says what it adds since the head it had: a pull request open at the baseline reports only what later pushes add.
+ * One first seen with what it adds, and opened after the baseline, is dated by its opening; one that adds it in a later
+ * push is dated by its last update, which is that push.
  */
 export function pullRequestsPoller({ name, repo, interval, requests, added }: PullRequestsOptions): Poller {
   const url = `${API}/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${PRS_PER_READ}`;
@@ -121,13 +128,17 @@ export function pullRequestsPoller({ name, repo, interval, requests, added }: Pu
       for (const pr of [...open].reverse()) {
         const seen = heads[pr.number];
         if (seen === pr.head) continue;
-        const at = seen === undefined && pr.createdAt >= state.since ? pr.createdAt : pr.updatedAt;
-        await context.record(await added(pr, await prFiles(requests, name, repo, pr.number), at));
+        if (!context.baseline) {
+          const at = seen === undefined && pr.createdAt >= state.since ? pr.createdAt : pr.updatedAt;
+          await context.record(await added(pr, await prFiles(requests, name, repo, pr.number), at, seen));
+        }
+        // Moved to the end, so the heads let go first are the ones longest unchanged.
+        delete heads[pr.number];
         heads[pr.number] = pr.head;
       }
-      // A pull request that left the list was merged, closed or pushed down by newer updates; its head is read again if it comes back.
-      const listed = new Set(open.map(({ number }) => String(number)));
-      for (const number of Object.keys(heads)) if (!listed.has(number)) delete heads[number];
+      // A pull request that leaves the list keeps its head, so one that comes back is weighed against it.
+      const numbers = Object.keys(heads);
+      for (const number of numbers.slice(0, Math.max(0, numbers.length - MAX_HEADS))) delete heads[number];
       requests.commit(url, got);
     },
   };

@@ -98,13 +98,14 @@ describe("the BitGo pull request poller", () => {
   const FILES = (n: number) => `https://api.github.com/repos/BitGo/BitGoJS/pulls/${n}/files?per_page=100&page=1`;
   const listed = (...prs: PullRequest[]) => prs.map((one) => ({ number: one.number, html_url: one.url, title: one.title, created_at: one.createdAt, updated_at: one.updatedAt, head: { sha: one.head, repo: { full_name: "BitGo/BitGoJS" } }, base: { sha: one.base, ref: one.baseRef }, draft: one.draft }));
 
-  it("keeps open pull requests as the baseline, asks with its ETag, and dates a new one by its opening and a later push by its update", async () => {
-    const { reader } = lists({ [sha("d")]: [PONS, CASHCAT], [sha("b")]: [PONS], [sha("e")]: [PONS, NEW], [sha("f")]: [PONS], [sha("9")]: [PONS, NEW, CASHCAT] });
+  it("notes open pull requests' heads as the baseline, asks with its ETag, and dates a new one by its opening and a later push by its update", async () => {
+    const { reader } = lists({ [sha("d")]: [PONS, CASHCAT], [sha("b")]: [PONS], [sha("e")]: [PONS, NEW], [sha("f")]: [PONS], [sha("9")]: [PONS, NEW, CASHCAT], [sha("8")]: [PONS, CASHCAT, NEW] });
     const later = pr({ number: 9400, url: "https://github.com/BitGo/BitGoJS/pull/9400", head: sha("f"), createdAt: "2026-11-19T00:00:00.000Z" });
     const { requests, asked, table } = routes({ [PULLS]: json(listed(pr()), '"1"'), [FILES(9357)]: json([{ filename: EDITED, status: "modified" }]) });
     const { log, run } = harness(bitGoPullRequests(requests, reader, 60_000));
     await run();
-    expect(log.all().map(({ kind, detail, baseline }) => [kind, detail.id, baseline])).toEqual([["bitgo.pr_opened", "hoodeth:cashcat", true]]);
+    // The baseline reads no pull request's files: it notes their heads.
+    expect([log.size, asked.filter((url) => url.includes("/files")).length]).toEqual([0, 0]);
     table[PULLS] = () => (asked.at(-1)?.endsWith("(etag)") ? notModified() : json([])());
     await run();
     expect(asked.at(-1)).toBe(`${PULLS} (etag)`);
@@ -117,7 +118,18 @@ describe("the BitGo pull request poller", () => {
     expect(log.query().events.map(({ detail, at }) => [detail.pr, detail.id, at])).toEqual([[9500, "hoodeth:newcoin", opened.createdAt]]);
     table[PULLS] = json(listed({ ...later, head: sha("9"), updatedAt: "2026-11-19T13:00:00.000Z" }, opened), '"3"');
     await run();
-    expect(log.query({ since: { id: 2 } }).events.map(({ detail, at }) => [detail.pr, detail.id, at])).toEqual([[9400, "hoodeth:newcoin", "2026-11-19T13:00:00.000Z"], [9400, "hoodeth:cashcat", "2026-11-19T13:00:00.000Z"]]);
+    expect(log.query({ since: { id: 1 } }).events.map(({ detail, at }) => [detail.pr, detail.id, at])).toEqual([[9400, "hoodeth:newcoin", "2026-11-19T13:00:00.000Z"], [9400, "hoodeth:cashcat", "2026-11-19T13:00:00.000Z"]]);
+  });
+
+  it("reports for a pull request open at the baseline only what a later push adds", async () => {
+    const { reader } = lists({ [sha("d")]: [PONS, CASHCAT], [sha("b")]: [PONS], [sha("8")]: [PONS, CASHCAT, NEW] });
+    const { requests, table } = routes({ [PULLS]: json(listed(pr()), '"1"'), [FILES(9357)]: json([{ filename: EDITED, status: "modified" }]) });
+    const { log, run } = harness(bitGoPullRequests(requests, reader, 60_000));
+    await run();
+    table[PULLS] = json(listed(pr({ head: sha("8"), updatedAt: "2026-11-19T14:00:00.000Z" })), '"2"');
+    await run();
+    // Cash Cat was in the head the baseline saw, so only New Coin is new.
+    expect(log.query().events.map(({ detail, at }) => [detail.id, at])).toEqual([["hoodeth:newcoin", "2026-11-19T14:00:00.000Z"]]);
   });
 
   it("passes over a head whose lists cannot be read rather than failing every read", async () => {

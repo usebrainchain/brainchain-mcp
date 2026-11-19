@@ -119,9 +119,10 @@ describe("the watcher", () => {
     expect(await watcher.runOnce(poller)).toBe(600_000);
     expect(said.at(-1)).toBe("kucoin: GitHub said no Next try in 600 s.");
     now += 600_000;
+    // The wait for a refusal is no failure, so the failures that follow start the doubling from one.
+    expect(await watcher.runOnce(poller)).toBe(120_000);
     expect(await watcher.runOnce(poller)).toBe(240_000);
-    expect(await watcher.runOnce(poller)).toBe(480_000);
-    expect(watcher.status.get("kucoin")).toMatchObject({ failures: 3, lastError: "bad answer", baselined: false });
+    expect(watcher.status.get("kucoin")).toMatchObject({ failures: 2, lastError: "bad answer", baselined: false });
     expect(state.source("kucoin").baselined).toBeUndefined();
     expect(await watcher.runOnce(poller)).toBe(60_000);
     expect(log.all()[0]!.baseline).toBe(true);
