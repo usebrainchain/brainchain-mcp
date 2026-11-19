@@ -298,7 +298,7 @@ On its first run the watcher records what is already public, about 3,200 entries
 
 With `GITHUB_TOKEN` set, each GitHub source is read about once a minute with the ETag of its last answer, so an unchanged answer costs nothing against the token's allowance. Without it, each is read every 10 minutes, inside the 60 requests an hour GitHub allows one IP address, and the watcher says so when it starts. A source that answers 403 or 429 is left alone for as long as it asks, or longer each time it refuses again. Bitstamp's robots.txt closes its API to automated clients, so the watcher does not read it.
 
-An event says what became public and when. It does not say why, and none of them means an exchange will list the token: most tokens with these traces are never listed.
+An event says what became public and when. It does not say why, and it is not a forecast of a listing: most tokens with these traces are never listed.
 
 ## Payments and limits
 

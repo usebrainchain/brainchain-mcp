@@ -28,7 +28,7 @@ export const CHANGES_TOOL: Tool = {
     "For a token named only by symbol, `context.matches` lists the Robinhood Chain tokens the watcher knows by that symbol: two tokens can share one, so compare names before reading it as the same token. " +
     "Pass the `next` of your previous answer as `since` to get only what is new; `since` also takes a time in ISO 8601, for what the watcher saw from then on. Without `since` you get the newest events. " +
     "`kinds` keeps some kinds, or every kind from one source, such as `bitgo`; `tokens` keeps some tokens, by contract address, symbol or BitGo id; `limit` caps the answer at 1 to 1,000 events, 100 by default, and `more` says whether more matched. " +
-    "An event says what became public and when. It does not say why, and none of them means an exchange will list the token: most tokens with these traces are never listed. " +
+    "An event says what became public and when. It does not say why, and it is not a forecast of a listing: most tokens with these traces are never listed. " +
     "The watcher runs apart from this server, and BRAINCHAIN_WATCH_URL tells this server where. Without it the tool answers with how to start one. What was already public when the watcher first started is its baseline, which it never reports as new. " +
     "Free, no key and no payment. Not advice.",
   annotations: { readOnlyHint: true, openWorldHint: true },
