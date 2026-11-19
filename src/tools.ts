@@ -8,7 +8,7 @@ import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, within, type CustodyBoard, type CustodyToken } from "./custody.js";
 import type { SymbolRow } from "./dataset/format.js";
 import { datasetReader, DatasetError, type Dataset, type DatasetRef } from "./dataset/published.js";
-import { MAX_WORK_BYTES, RECORD_PAGE } from "./exams.js";
+import { MAX_WORK_BYTES, RECORD_PAGE, REFUNDS } from "./exams.js";
 import { blockOf, ChainError, inTurn, tokenFacts, type Moment } from "./history.js";
 import { MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
 import { MARKET_CAP_NAME, MARKET_CAP_TOOL, readMarketCap, type MarketCapBoard } from "./marketcap.js";
@@ -191,7 +191,7 @@ const GRADE_INPUT: Tool["inputSchema"] = {
   additionalProperties: false,
 };
 
-/** Grading work delivered elsewhere: a market whose poster approves the work can read Jev's verdict first. */
+/** Grading work delivered elsewhere: a market whose poster approves the work can read BrainChain's verdict first. */
 export function gradeTool(terms: Terms | string): Tool {
   const about =
     `Have BrainChain grade work delivered somewhere else, such as a job on another agent market, against the brief it answered. ` +
@@ -258,7 +258,7 @@ const SIT_EXAM_INPUT: Tool["inputSchema"] = {
     price: {
       type: "string",
       pattern: "^[1-9][0-9]{0,29}$",
-      description: `The most to pay for the sitting, in the token's base units (6 decimals, so 5000000 is 5 USDG or USDC): the \`priceUnits\` ${EXAM_INFO_NAME} gives. A desk that asks more is refused before anything is signed.`,
+      description: `The most the agent agrees to pay for the sitting, in base units (6 decimals, so 1000000 is 1 USDG): the \`priceUnits\` ${EXAM_INFO_NAME} gives. If the desk asks more, nothing is signed.`,
     },
     class: { type: "string", pattern: "^[a-z][a-z0-9-]{0,31}$", description: `Optional: the class of work to be examined in, one of those ${EXAM_INFO_NAME} lists. "code" when left out.` },
   },
@@ -281,13 +281,15 @@ export const EXAM_INFO_TOOL: Tool = {
   name: EXAM_INFO_NAME,
   title: "Read BrainChain's licence exam",
   description:
-    "What BrainChain's licence exam for ERC-8004 agents is and costs, as BrainChain states it: the price of a sitting, the classes of work, how many items a sitting has and how many of them are hard ones, the pass mark, the minutes allowed, how long a licence lasts, when an agent may sit again, how audits can suspend a licence, when a sitting is refunded (`sitting.refunds`) and how each signed message is built. " +
-    "`sitting.waitAfterFailingDays` is how many days an agent waits after a failed sitting before it may sit again, and `sitting.renewFromDaysBefore` how many days before its licence expires a licensed agent may sit again to renew it. " +
-    `\`priceUnits\` is the price of a sitting in the token's base units on the chain this server pays on, from the desk's own offer: pass it to ${SIT_EXAM_NAME} as \`price\`. It is left out when the desk offers no sitting on that chain. ` +
+    `What BrainChain's licence exam for ERC-8004 agents covers and costs, as BrainChain states it. Read it before ${SIT_EXAM_NAME}. ` +
+    `\`price\` is the price of a sitting in dollars, and \`priceUnits\` the same price in base units (6 decimals, so 1000000 is 1 USDG) on the chain this server pays on, read from the desk's own offer: pass it to ${SIT_EXAM_NAME} as \`price\`. It is left out when the desk offers no sitting on that chain. ` +
+    "`classes` are the kinds of work an agent can be examined in. `sitting.items` is how many items a sitting has and `sitting.hardItems` how many of them are hard ones, `sitting.passMark` how many accepted items make a pass, `sitting.minutes` the time allowed and `sitting.licenceDays` how long a licence lasts. " +
     "`sitting.levels` are the levels each item is graded against, best first, and `sitting.passes` is the level an item must reach to be accepted. " +
-    "`sitting.barBps` is how sure the judges must be, in basis points: an item with a hidden case wrong is never accepted, and one with every case right is accepted when the judges accept it with at least that confidence. " +
-    `Read it before ${SIT_EXAM_NAME}. \`pool.inUse\` is how many items are in use now: BrainChain lists each by its commitment, its template and how often it was drawn, which this tool counts. ` +
-    "`pool.usesPerItem` is how many sittings may draw one item, `pool.retired` how many items are published in full at `pool.retiredItems`, and `pool.templates` how often each kind of item was drawn and passed. Free, no key.",
+    "Each item's work is run on hidden cases, inputs whose expected answers the agent never sees, and read by the judges, Jev and the other models on BrainChain's grading panel. " +
+    "`sitting.barBps` is how sure the judges must be, in basis points (5000 is 50%): an item with a hidden case wrong is never accepted, and one with every case right is accepted when the judges accept it with at least that confidence. " +
+    "`sitting.waitAfterFailingDays` is how many days an agent waits after a failed sitting before it may sit again, and `sitting.renewFromDaysBefore` how many days before its licence expires a licensed agent may sit again to renew it. " +
+    "`sitting.audits` says how audits, tasks BrainChain gives a licensed agent that it cannot tell from any other, can suspend a licence, and `sitting.refunds` what the fee buys. `how` lists the steps and `messages` how each signed message is built. " +
+    "`pool.inUse` is how many items are in use now, `pool.usesPerItem` how many sittings may draw one item, `pool.retired` how many items are published in full at `pool.retiredItems`, and `pool.templates` how often each kind of item was drawn and passed. Free, no key.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
   annotations: { readOnlyHint: true, openWorldHint: true },
 };
@@ -296,8 +298,8 @@ export const EXAM_INFO_TOOL: Tool = {
 export function sitExamTool(terms: Terms | string): Tool {
   const about =
     `Open a sitting of BrainChain's licence exam for an ERC-8004 agent. This server's wallet signs the request, so it must hold the agent's id on Robinhood Chain (Robinhood Chain testnet on testnet), as the id's controller or as its registered wallet. ` +
-    `A sitting draws its items when it opens, each a brief that asks for one piece of work, with one deadline for all of them. Enough accepted items is a pass, and a pass is a licence BrainChain signs. ${EXAM_INFO_NAME} gives the counts, the pass mark, the time allowed and the price. ` +
-    `The fee pays for the sitting, pass or fail. If BrainChain cannot open a paid sitting, or cannot judge enough of it to decide, the sitting is void: it does not count against the agent, and the payment goes back to the paying wallet. `;
+    `A sitting is a set of items drawn when it opens, each a brief that asks for one piece of work, with one deadline for all of them. Enough accepted items make a pass, and a pass earns a licence BrainChain signs. ${EXAM_INFO_NAME} gives the counts, the pass mark, the time allowed and the price. ` +
+    `${REFUNDS} `;
   return {
     name: SIT_EXAM_NAME,
     title: "Sit BrainChain's licence exam",
@@ -306,15 +308,15 @@ export function sitExamTool(terms: Terms | string): Tool {
         ? `${invalidSetting(terms)}${about}`
         : (terms.problem ? invalidSetting(terms.problem) : "") +
           about +
-          `\`price\` is the most the agent agrees to pay, in base units: pass the \`priceUnits\` ${EXAM_INFO_NAME} gives. The tool reads the price from the desk again and pays exactly that from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, or refuses with nothing signed when the desk asks more than \`price\`. ` +
-          `The price can be above this server's default limit per payment, so for this one call that limit is the price the desk states, and no further. ` +
-          `A limit the operator set in BRAINCHAIN_MAX_PRICE_UNITS still holds. The payment counts against the budget and the daily limit, and a price above that limit, the daily limit or this server's budget of ${terms.budget} per run is refused with nothing charged. ` +
-          `BrainChain refuses a sitting it cannot open before any payment is signed: when the wallet does not hold the id, a licence is still valid or a failed sitting is too recent. The reply is then BrainChain's own reason, and nothing was charged. ` +
-          `An agent that already has a sitting gets that sitting in place of a second one: with its briefs, marked duplicate, when it is open and this wallet sits it, or with where it stands when it is paid for and not open yet. ` +
-          `The desk looks at only so many unpaid requests from one address in a minute. Past that the reply says to call again after retryAfterSeconds, and nothing was signed. ` +
+          `\`price\` is the most the agent agrees to pay, in base units: pass the \`priceUnits\` ${EXAM_INFO_NAME} gives. The tool reads the price from the desk again and pays exactly that from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. If the desk asks more than \`price\`, nothing is signed. ` +
+          `A sitting can cost more than this server's default limit per payment, so for this one payment the limit is the desk's price. A limit the operator set in BRAINCHAIN_MAX_PRICE_UNITS still holds. ` +
+          `The payment counts against the budget and the daily limit, and a price above that limit, the daily limit or this server's budget of ${terms.budget} per run is refused with nothing charged. ` +
+          `BrainChain refuses a sitting it cannot open before anything is signed: when the wallet does not hold the id, a licence is still valid or a failed sitting is too recent. The reply then gives BrainChain's reason, and nothing was charged. ` +
+          `An agent that already has a sitting gets that one back instead of a second: with its briefs, marked duplicate, when it is open and this wallet sits it, or with where it stands when it is paid for and not open yet. ` +
+          `The desk takes only so many unpaid requests from one address a minute. Past that, the reply says to call again after retryAfterSeconds, and nothing was signed. ` +
           `Returns the sitting id, the deadline and the briefs. Deliver each item with ${EXAM_SUBMIT_NAME} and follow the sitting with ${EXAM_STATUS_NAME}. ` +
-          `A reply that carries no briefs means the sitting is paid for and BrainChain has not opened it yet: call this tool again with the same agentId and class. While this server keeps running, that sends the same request with the same payment, which the desk does not charge twice. ` +
-          `A server that was restarted no longer holds that request. Its reply then names the sitting that is paid for, and ${EXAM_STATUS_NAME} with briefs: true reads the briefs once that sitting is open.`,
+          `A reply with no briefs means the sitting is paid for and BrainChain has not opened it yet: call this tool again with the same agentId and class. While this server keeps running, that sends the same request with the same payment, which the desk never charges twice. ` +
+          `After a restart this server no longer holds that request, so the reply names the sitting that is paid for, and ${EXAM_STATUS_NAME} with briefs: true reads its briefs once it is open.`,
     inputSchema: SIT_EXAM_INPUT,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   };
@@ -340,10 +342,11 @@ export const EXAM_STATUS_TOOL: Tool = {
   title: "Read an exam sitting",
   description:
     "Read a sitting of the licence exam: its state (open, passed, failed or void), its deadline, each item's state and outcome, and on a pass the licence BrainChain signed, with its expiry. " +
-    "A sitting is void when BrainChain cannot open it after it is paid for, or cannot judge enough of it to decide: it does not count against the agent, which may sit again, and the payment goes back to the paying wallet; `next` says where to write if it has not arrived. " +
-    "A judged item carries how many hidden cases it answered right (`right` of `of`), the judges' answer (`judges`: accept or refuse), how sure they were of it in basis points (`confidenceBps`) and its `decision`, so an item refused with every case right explains itself. " +
-    "Before a sitting opens it reads `paying` while its payment settles, `opening` once it is paid for and its items are being drawn, with BrainChain's reason when a draw failed, or `unpaid` when the payment did not settle and nothing was charged. Free, and without `briefs` it needs no key. " +
-    "With `briefs: true` the reply also carries the sitting's briefs, which BrainChain shows only to the wallet sitting it, so that request is signed with this server's key. " +
+    `${REFUNDS} For a void sitting, \`next\` says where to write if the payment has not arrived. ` +
+    "Each item's work is run on hidden cases, inputs whose expected answers the agent never sees, and read by the judges, Jev and the other models on BrainChain's grading panel. " +
+    "A judged item carries how many hidden cases it answered right (`right` of `of`), the judges' answer (`judges`: accept or refuse), how sure they were of it in basis points (`confidenceBps`, 5000 is 50%) and its `decision` on BrainChain, so an item refused with every case right explains itself. " +
+    "Before a sitting opens it reads `paying` while its payment settles, `opening` once it is paid for and its items are being drawn, with BrainChain's reason when a draw failed, or `unpaid` when the payment did not settle and nothing was charged. " +
+    "With `briefs: true` the reply also carries the briefs, which BrainChain shows only to the wallet sitting it, so that request is signed with this server's key; without it the tool needs no key. Free. " +
     "Call again after `retryAfterSeconds` until `done` is true.",
   inputSchema: {
     type: "object",
@@ -358,8 +361,11 @@ export const LICENCES_TOOL: Tool = {
   name: LICENCES_NAME,
   title: "Read an agent's BrainChain licences",
   description:
-    "List an ERC-8004 agent's BrainChain licences and the state of each. A licence past its expiry reads expired, whatever else was true of it. Before that it reads suspended after two failed audits in the last three, lapsed while the id has another controller or build than the licence was earned with, and valid otherwise. " +
-    "Each comes with the licence BrainChain signed, its expiry and its audit counts. `registry` says whether BrainChain could read the identity registry for this answer. When it reads `read`, `epoch` is the id's controller and declared build by a reading at most a minute old, null when no single account controls the id, and every state is held to it. When it reads `unreadable`, `epoch` is null and the states are from BrainChain's last own reading, up to ten minutes old. An agent that never passed has no licences. Free, no key.",
+    "List an ERC-8004 agent's BrainChain licences, each with its state, the licence BrainChain signed, its expiry and its audit counts. Audits are tasks BrainChain gives a licensed agent that it cannot tell from any other. " +
+    "A licence ties the agent's id to its epoch: the account that controls the id and its build, the version the controller declares for it in the identity registry. " +
+    "A licence past its expiry reads expired, whatever else was true of it. Before that it reads suspended after two failed audits in the last three, lapsed while the id has another controller or build than the licence was earned with, and valid otherwise. " +
+    "`registry` says whether BrainChain could read the identity registry for this answer. When it reads `read`, `epoch` is the id's controller and build by a reading at most a minute old, null when no single account controls the id, and every state is held to it. " +
+    "When it reads `unreadable`, `epoch` is null and the states are from BrainChain's last own reading, up to ten minutes old. An agent that never passed has no licences. Free, no key.",
   inputSchema: AGENT_INPUT,
   annotations: { readOnlyHint: true, openWorldHint: true },
 };
@@ -368,8 +374,8 @@ export const AGENT_RECORD_TOOL: Tool = {
   name: AGENT_RECORD_NAME,
   title: "Read an agent's record on BrainChain",
   description:
-    `Read what BrainChain has on record for an ERC-8004 agent. \`record\` has the signed head of the agent's numbered record and its first ${RECORD_PAGE} entries: tasks, exam sittings and audits, each accepted, rejected or undelivered, with \`next\` naming where the rest is. ` +
-    "`papers` sums up the agent's Papers, the file BrainChain signs for it: the epoch its id is in now (its controller and declared build), its licences, and its ceiling, the most it may hold in flight, counted in units of a 6-decimal dollar token. " +
+    `Read what BrainChain has on record for an ERC-8004 agent. \`record\` has its first ${RECORD_PAGE} entries, its tasks, exam sittings and audits, each accepted, rejected or undelivered, and its signed head: BrainChain's signed statement of how many entries the record has and the hash of the last. \`more\` is the address of the next entries, when there are more. ` +
+    "`papers` sums up the agent's Papers, the file BrainChain signs for it: its epoch (the account that controls its id now and the build it declares), its licences, and its ceiling, how much work the agent may hold in flight at once, in base units (6 decimals, so 1000000 is 1 USDG). " +
     "`verify` is the command that checks the whole record end to end, from its first entry to the signed head: `npx brainchain-verify <network> --record <agentId>`. Free, no key.",
   inputSchema: AGENT_INPUT,
   annotations: { readOnlyHint: true, openWorldHint: true },
@@ -389,7 +395,7 @@ export interface SittingRequest {
   price: bigint;
 }
 
-/** Work delivered somewhere else, sent for Jev's verdict against the brief it answered. */
+/** Work delivered somewhere else, sent for BrainChain's verdict against the brief it answered. */
 export interface GradeRequest {
   title?: string;
   brief: string;

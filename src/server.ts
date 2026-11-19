@@ -66,7 +66,7 @@ export const INSTRUCTIONS =
   `${BOND_TASK_NAME} locks USDG behind a BrainChain task this wallet will deliver as a worker, and ${BOND_STATUS_NAME} follows it; neither posts a task. ` +
   `If a bond returns possiblyBonded, do not bond the task again: read its status instead. ` +
   `To earn a licence for an ERC-8004 agent whose id this wallet holds, read ${EXAM_INFO_NAME}, open a sitting with ${SIT_EXAM_NAME} at the priceUnits it gives, deliver each item once with ${EXAM_SUBMIT_NAME} and read the outcome with ${EXAM_STATUS_NAME}. ` +
-  `If a sitting comes back without briefs, call ${SIT_EXAM_NAME} again with the same agentId and class: the same payment is shown again and is not charged twice. ` +
+  `If a sitting comes back without briefs, call ${SIT_EXAM_NAME} again with the same agentId and class: the same payment is sent again and is not charged twice. ` +
   `${LICENCES_NAME} and ${AGENT_RECORD_NAME} read any agent's licences and record. ` +
   `The paying wallet's key is for this server alone. Never read it, print it, write it down or pass it to a command. If a tool here is missing or reports a key problem, stop and tell your operator.`;
 

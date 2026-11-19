@@ -10,6 +10,9 @@ import type { Guidance } from "./payments.js";
 export const RECORD_PAGE = 20;
 /** The desk's cap on the work for one item of a sitting, as GET /exams states it. */
 export const MAX_WORK_BYTES = 48_000;
+/** What a sitting's fee buys, in the words of GET /exams `sitting.refunds`. */
+export const REFUNDS =
+  "The fee pays for the sitting, pass or fail. If BrainChain cannot open a paid sitting, or cannot judge enough of it to decide, the sitting is void: it does not count against the agent, and the payment goes back to the paying wallet.";
 
 export const sittingMessage = (chainId: number, agent: { chainId: number; id: string }, examClass: string, at: number): string =>
   `BrainChain exam v1\nchain ${chainId}\nagent ${agent.chainId}:${agent.id}\nclass ${examClass}\nat ${at}`;
@@ -23,12 +26,11 @@ const utc = (seconds: number) => new Date(seconds * 1000).toISOString().replace(
 const list = (numbers: number[]) => (numbers.length < 2 ? numbers.join("") : `${numbers.slice(0, -1).join(", ")} and ${numbers.at(-1)}`);
 
 /**
- * Why an item that answered every hidden case right was not accepted: the judges' answer, and how sure they were
- * of it. An answer to accept counts only at the exam's bar or above, which is named when the sitting carries it.
- * Said for a closed sitting, so a refusal with every case right explains itself. An item judged before the answer
- * was kept has only how sure the judges were, and one judged before that has nothing to give.
+ * For each item that passed every hidden case and was still not accepted, what the judges answered and how sure
+ * they were. An answer to accept counts only at the exam's bar or above, so the bar is named when the sitting
+ * gives it. Older sittings kept only the confidence, or nothing, and say only what they kept.
  */
-function doubted(items: { index?: unknown; accepted?: unknown; right?: unknown; of?: unknown; judges?: unknown; confidenceBps?: unknown }[], bar: number | undefined): string {
+function notAcceptedWithEveryCaseRight(items: { index?: unknown; accepted?: unknown; right?: unknown; of?: unknown; judges?: unknown; confidenceBps?: unknown }[], bar: number | undefined): string {
   return items
     .flatMap((item) => (item.accepted === false && typeof item.right === "number" && item.right === item.of && typeof item.confidenceBps === "number" ? [{ ...item, confidenceBps: item.confidenceBps }] : []))
     .map(({ index, judges, confidenceBps }) => {
@@ -47,27 +49,22 @@ function doubted(items: { index?: unknown; accepted?: unknown; right?: unknown; 
 /** What a sitting's state means for the agent sitting it, and when to look again. */
 export function sittingGuidance(view: Record<string, unknown>, now = Date.now()): Guidance {
   const items = Array.isArray(view.items) ? (view.items as { index?: unknown; state?: unknown; accepted?: unknown }[]) : [];
-  const accepted = `${items.filter((item) => item.accepted === true).length} of ${items.length} accepted`;
+  const accepted = `${items.filter((item) => item.accepted === true).length} of ${items.length} items accepted`;
   const bar = typeof view.barBps === "number" ? view.barBps : undefined;
   if (view.state === "passed") {
     const expiresAt = (view.licence as { licence?: { expiresAt?: unknown } } | undefined)?.licence?.expiresAt;
-    const until = typeof expiresAt === "number" ? ` It is valid until ${utc(expiresAt)}, for as long as the agent's id keeps its controller and its build.` : "";
-    return { done: true, next: `Passed, with ${accepted}. The licence is in licence.${until}${doubted(items, bar)}` };
+    const until = typeof expiresAt === "number" ? ` It is valid until ${utc(expiresAt)}, as long as the agent's id keeps the same controller and build.` : "";
+    return { done: true, next: `Passed: ${accepted}. The signed licence is in \`licence\`.${until}${notAcceptedWithEveryCaseRight(items, bar)}` };
   }
   if (view.state === "failed") {
     const mark = typeof view.passMark === "number" ? `, and a pass takes ${view.passMark}` : "";
-    return { done: true, next: `Failed, with ${accepted}${mark}. brainchain_exam_info says how long the agent waits before it may sit again.${doubted(items, bar)}` };
+    return { done: true, next: `Failed: ${accepted}${mark}. brainchain_exam_info says how long the agent waits before it may sit again.${notAcceptedWithEveryCaseRight(items, bar)}` };
   }
   if (view.state === "void") {
     const id = typeof view.sitting === "string" ? ` ${view.sitting}` : "";
-    return {
-      done: true,
-      next:
-        "BrainChain could not open this sitting after it was paid for, or could not judge enough of it to decide, so the sitting is void. It does not count against the agent, which may sit again now with brainchain_sit_exam, and the payment goes back to the paying wallet. " +
-        `If it has not arrived, write to hello@usebrainchain.com with the sitting id${id}.`,
-    };
+    return { done: true, next: `${REFUNDS} The agent may sit again now with brainchain_sit_exam. If the payment has not arrived, write to hello@usebrainchain.com with the sitting id${id}.` };
   }
-  if (view.state !== "open") return { done: false, next: "The sitting is in progress.", retryAfterSeconds: 60 };
+  if (view.state !== "open") return { done: false, next: `BrainChain reads the sitting as ${typeof view.state === "string" ? view.state : "not yet open"}. Read it again after retryAfterSeconds.`, retryAfterSeconds: 60 };
   const open = items.flatMap((item) => (item.state === "open" && typeof item.index === "number" ? [item.index] : []));
   const deadline = typeof view.deadline === "number" ? view.deadline : undefined;
   if (open.length === 0) return { done: false, next: "Every item is delivered or missed, and BrainChain is judging what was delivered. Read the sitting again after retryAfterSeconds.", retryAfterSeconds: 30 };

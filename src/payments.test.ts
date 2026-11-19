@@ -136,7 +136,7 @@ describe("posting", () => {
   });
 
   it("says how to let Permit2 spend the wallet's USDG when the desk answers 412, with nothing charged or held", async () => {
-    const unapproved = "Permit2 is not yet approved to spend this wallet's test USDG. Run `npx -y brainchain-mcp approve` once with the key this server uses; it needs a little ETH on Robinhood Chain testnet. Nothing was charged.";
+    const unapproved = "Permit2 is not yet approved to spend this wallet's test USDG. Ask your operator to run `npx -y brainchain-mcp approve` once with the key this server uses; it needs a little ETH on Robinhood Chain testnet. Nothing was charged.";
     // x402 answers 412 to a payment Permit2 may not move yet, before the desk takes anything; the code may be in the body or left out.
     for (const body of [{ error: "permit2_allowance_required" }, {}]) {
       const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
@@ -281,7 +281,7 @@ describe("posting", () => {
 
   it("explains the desk's balance and allowance codes as the wallet's own figures would when the chain cannot be read", async () => {
     const short = `The paying wallet holds less than the 1 test USDG a task costs on Robinhood Chain testnet. Nothing was charged. Send test USDG to ${signer.address} on Robinhood Chain testnet, then post again.`;
-    const unapproved = "Permit2 is not yet approved to spend this wallet's test USDG. Run `npx -y brainchain-mcp approve` once with the key this server uses; it needs a little ETH on Robinhood Chain testnet. Nothing was charged.";
+    const unapproved = "Permit2 is not yet approved to spend this wallet's test USDG. Ask your operator to run `npx -y brainchain-mcp approve` once with the key this server uses; it needs a little ETH on Robinhood Chain testnet. Nothing was charged.";
     const down = async () => Promise.reject(new Error("HTTP request failed.\n\nURL: http://127.0.0.1:47011"));
     for (const [code, said] of [
       ["permit2_insufficient_balance", short],
@@ -426,7 +426,7 @@ describe("posting", () => {
       const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify({ error: "insufficient_allowance" }), { status: 402 }));
       const d = createDesk({ config, signer, approveCommand, fetch: fetchImpl, funds: async () => ({ balance: 5_000_000n, allowance: 0n }) });
       const message = await d.post(task).catch((error: Error) => error.message);
-      expect(message).toBe(`Permit2 is not yet approved to spend this wallet's test USDG. Run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on Robinhood Chain testnet. Nothing was charged.`);
+      expect(message).toBe(`Permit2 is not yet approved to spend this wallet's test USDG. Ask your operator to run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on Robinhood Chain testnet. Nothing was charged.`);
     }
   });
 });
