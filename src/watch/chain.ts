@@ -1,6 +1,6 @@
 import { formatUnits, getAddress, isAddressEqual, zeroAddress, type Address, type Hash } from "viem";
 
-import { blockTime, ChainError, earliestLog, firstSince, tokenFacts, tooMany, tooSlow, transferEvent, transfersStart, type ChainHistory, type Dated, type Kept } from "../history.js";
+import { blockTime, ChainError, earliestLog, STRETCH_BLOCKS, tokenFacts, tooMany, tooSlow, transferEvent, type ChainHistory, type Dated, type Kept } from "../history.js";
 import { approvalEvent, firstApprovals, who, type Approval, type MakerWallet } from "../makers.js";
 import { initializeEvent, poolCreatedEvent, UNISWAP_V3, UNISWAP_V4 } from "../readiness.js";
 import type { EventToken, Found } from "./events.js";
@@ -32,10 +32,9 @@ export interface Firsts {
 export interface ChainKept {
   approvals: Kept<Approval>;
   starts: Kept<bigint>;
-  received: Kept<true>;
 }
 
-export const chainKept = (): ChainKept => ({ approvals: new Map(), starts: new Map(), received: new Map() });
+export const chainKept = (): ChainKept => ({ approvals: new Map(), starts: new Map() });
 
 /** Whether `maker` sent the transaction, or it was sent to the wallet or its Safe: the token's log alone can be written by anyone who deployed it. */
 async function own(reader: ChainHistory, maker: MakerWallet, transaction: Hash): Promise<boolean> {
@@ -47,36 +46,36 @@ async function own(reader: ChainHistory, maker: MakerWallet, transaction: Hash):
 const transfersTo = (reader: ChainHistory, token: Address, maker: MakerWallet, from: bigint, to: bigint) =>
   reader.getLogs({ address: token, event: transferEvent, args: { to: maker.wallet }, fromBlock: from, toBlock: to, strict: true });
 
+/** How far back each look for an earlier receipt reaches: a wallet that trades a token is found in the first, cheapest one. */
+export const LOOK_BACK = [100_000n, 1_000_000n, STRETCH_BLOCKS] as const;
+
 /**
- * Whether the wallet received any of `token` up to block `through`. Only whether, not when: a stretch the endpoint finds
- * too full or too slow to search has transfers in it, so a busy token is settled in a request or two rather than by a
- * search through millions of blocks for the oldest one.
+ * Whether the wallet received any of `token` up to block `through`. Only whether, not when, and looking back from
+ * `through` in growing ranges: the endpoint charges for a search by the logs it scans, so a busy token is settled by one
+ * small search of recent blocks, and a range too full or too slow to search has transfers in it.
  */
-async function receivedBy(reader: ChainHistory, token: Address, maker: MakerWallet, kept: ChainKept, through: bigint): Promise<boolean> {
-  const start = await transfersStart(reader, token, through, kept.starts);
-  if (start === undefined) return false;
-  const found = await firstSince(
-    kept.received,
-    `${token}:${maker.wallet}:received`,
-    through,
-    (from, to) =>
-      transfersTo(reader, token, maker, from, to).then(
-        (logs) => (logs.some((log) => log.args.value > 0n) ? (true as const) : undefined),
-        (error: unknown) => {
-          if (tooMany(error) || tooSlow(error)) return true as const;
-          throw error;
-        },
-      ),
-    start,
-  );
-  return found === true;
+async function receivedBy(reader: ChainHistory, token: Address, maker: MakerWallet, through: bigint): Promise<boolean> {
+  for (let high = through, step = 0; high >= 0n; step++) {
+    const size = LOOK_BACK[Math.min(step, LOOK_BACK.length - 1)]!;
+    const low = high - size + 1n > 0n ? high - size + 1n : 0n;
+    const found = await transfersTo(reader, token, maker, low, high).then(
+      (logs) => logs.some((log) => log.args.value > 0n),
+      (error: unknown) => {
+        if (tooMany(error) || tooSlow(error)) return true;
+        throw error;
+      },
+    );
+    if (found) return true;
+    high = low - 1n;
+  }
+  return false;
 }
 
 export function chainFirsts(reader: ChainHistory, kept: ChainKept): Firsts {
   return {
     approval: async (token, maker, newest) => (await firstApprovals(reader, token, [maker], kept, newest))[0],
     async receipt(token, maker, from, to) {
-      if (from > 0n && (await receivedBy(reader, token, maker, kept, from - 1n))) return "earlier";
+      if (from > 0n && (await receivedBy(reader, token, maker, from - 1n))) return "earlier";
       const log = await earliestLog(
         (low, high) => transfersTo(reader, token, maker, low, high),
         from,
@@ -121,7 +120,7 @@ interface ChainState {
 /**
  * Reads only new blocks, at most `SPAN` at a time, for three things: a pool created on Uniswap v3 or v4 for a token with a
  * public trace, paired with ETH, WETH, USDG or another such token; and a followed wallet's first approval, or first
- * receipt, of any token. The first read only notes the newest block: what came before is the baseline. A first approval
+ * receipt, of any token but ETH, WETH and USDG. The first read only notes the newest block: what came before is the baseline. A first approval
  * older than the blocks being read is recorded as baseline, and a wallet that had received a token before them is noted as
  * settled, so neither is reported as new.
  */
@@ -201,8 +200,8 @@ export function chainPoller({ reader, wallets, watched, firsts, interval = CHAIN
       ];
       for (const { kind, address, wallet, value, ...rest } of seen) {
         const key = `${rest.key}:${address.toLowerCase()}:${wallet.toLowerCase()}`;
-        // A zero approval takes an allowance away, and a zero transfer moves nothing.
-        if (value === 0n || settled.has(key)) continue;
+        // A zero approval takes an allowance away, a zero transfer moves nothing, and a wallet's ETH, WETH or USDG is never news.
+        if (value === 0n || BASES.has(address.toLowerCase()) || settled.has(key)) continue;
         const maker = makerOf(wallet);
         const contract = getAddress(address);
         const first = kind === "maker.approval" ? await firsts.approval(contract, maker, to) : await firsts.receipt(contract, maker, from, to);

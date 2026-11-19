@@ -149,6 +149,16 @@ describe("the chain poller", () => {
     expect(asked).toHaveLength(2);
   });
 
+  it("never asks about a wallet's ETH, WETH or USDG", async () => {
+    const { firsts, asked } = table();
+    const { reader } = endpoint([transfer(150n, WETH, WINTERMUTE.wallet), transfer(151n, USDG, B2C2.wallet), approval(152n, USDG, WINTERMUTE.wallet)], { newest: 100n });
+    const { log, run } = harness(reader, firsts);
+    await run();
+    (reader as { getBlockNumber: () => Promise<bigint> }).getBlockNumber = async () => 200n;
+    await run();
+    expect([asked, log.size]).toEqual([[], 0]);
+  });
+
   it("reports a followed wallet's first receipt of a token, counted in tokens, and settles a token it had received before quietly", async () => {
     const receipt: Receipt = { at: "2026-08-05T00:00:00.000Z", block: 150, transaction: hash(1), from: RANDOM, value: 25n * 10n ** 17n, confirmed: false };
     const { firsts, asked } = table({}, { [`${CASHCAT}:${WINTERMUTE.wallet}`]: receipt, [`${PONS}:${WINTERMUTE.wallet}`]: "earlier" });
@@ -192,6 +202,20 @@ describe("a wallet's first receipt", () => {
     expect(await chainFirsts(reader, chainKept()).receipt(CASHCAT, WINTERMUTE, 41n, 50n)).toBe("earlier");
     // Not one range was halved to find when.
     expect(searched.filter(({ to, from }) => to - from < 5n)).toEqual([]);
+  });
+
+  it("is looked for back from the blocks read, in ranges that grow, so a wallet that trades the token is settled by the first", async () => {
+    const { reader, searched } = endpoint([transfer(5_000_000n, CASHCAT, WINTERMUTE.wallet), transfer(8_950_000n, PONS, WINTERMUTE.wallet)], { newest: 20_000_000n });
+    const firsts = chainFirsts(reader, chainKept());
+    expect(await firsts.receipt(PONS, WINTERMUTE, 9_000_000n, 9_000_100n)).toBe("earlier");
+    expect(searched.map(({ from, to }) => [from, to])).toEqual([[8_900_000n, 8_999_999n]]);
+    searched.length = 0;
+    expect(await firsts.receipt(CASHCAT, WINTERMUTE, 9_000_000n, 9_000_100n)).toBe("earlier");
+    expect(searched.map(({ from, to }) => [from, to])).toEqual([
+      [8_900_000n, 8_999_999n],
+      [7_900_000n, 8_899_999n],
+      [0n, 7_899_999n],
+    ]);
   });
 });
 
