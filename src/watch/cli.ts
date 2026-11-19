@@ -78,6 +78,8 @@ export function watchArgs(argv: readonly string[]): WatchArgs {
 }
 
 export const GITHUB_EVERY = { withToken: 60_000, withoutToken: 10 * 60_000 };
+/** How often each GitHub source is read: about once a minute with a token, every ten minutes without one. */
+export const githubEvery = (token: boolean) => (token ? GITHUB_EVERY.withToken : GITHUB_EVERY.withoutToken);
 /** How many requests an hour the watcher allows itself: GitHub's API with and without a key, and each Robinhood Chain endpoint. */
 export const ALLOWANCES = { githubWithToken: 4_000, githubWithoutToken: 50, publicChain: 4_000, privateChain: 20_000 };
 
@@ -85,7 +87,7 @@ export const ALLOWANCES = { githubWithToken: 4_000, githubWithoutToken: 50, publ
  * Reads GitHub with the token in GITHUB_TOKEN_FILE's file or in GITHUB_TOKEN, checked as the MCP server checks it, and says
  * what is wrong with one it cannot use. Neither value is ever part of a message.
  */
-function githubToken(env: Record<string, string | undefined>): { token: boolean; note?: string } {
+export function githubToken(env: Record<string, string | undefined>): { token: boolean; note?: string } {
   const file = env.GITHUB_TOKEN_FILE?.trim();
   if (file && !existsSync(expandHome(file))) {
     useGitHubToken(undefined);
@@ -115,7 +117,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       ...(rpc ? [{ hosts: [rpc.host], perHour: ALLOWANCES.privateChain }] : []),
     ],
   });
-  const github = token ? GITHUB_EVERY.withToken : GITHUB_EVERY.withoutToken;
+  const github = githubEvery(token);
   const reader = chainReader(requests, rpc);
   const kept = chainKept();
   const capKept: CapKept = { starts: new Map(), pools: new Map(), swaps: new Map(), changes: new Map(), supply: new Map(), times: new Map(), index: new Map() };

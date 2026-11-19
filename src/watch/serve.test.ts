@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +11,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CHANGES_NAME, CHANGES_TOOL, changesQuery, createWatch, HOSTED_WATCH_URL, readChanges, removeWatch, UNWATCH_NAME, WATCH_NAME, WATCH_TOOL, watchUrl } from "../changes.js";
 import { createServer } from "../server.js";
 import { callTool, type Desk } from "../tools.js";
-import { watchArgs } from "./cli.js";
+import { githubEvery, githubToken, watchArgs } from "./cli.js";
+import { useGitHubToken } from "../github.js";
 import { Deliveries } from "./deliver.js";
 import { EventLog, type Found } from "./events.js";
 import type { Post } from "./net.js";
@@ -422,5 +423,19 @@ describe("the stream and health, read without a body", () => {
     const full = (await (await fetch(new URL("/health", base), { headers: { Authorization: `Bearer ${"a".repeat(40)}` } })).json()) as Record<string, unknown>;
     expect(full.version).toBe("x");
     expect(await (await fetch(new URL("/health", base), { headers: { Authorization: `Bearer ${"b".repeat(40)}` } })).json()).not.toHaveProperty("version");
+  });
+});
+
+describe("the watcher's GitHub token", () => {
+  it("is read from the file GITHUB_TOKEN_FILE names when it is there, which puts each GitHub source on its one-minute interval", () => {
+    const file = join(dir(), "watch-github.token");
+    expect(githubToken({ GITHUB_TOKEN_FILE: file })).toEqual({ token: false, note: expect.stringMatching(/^GITHUB_TOKEN_FILE names a file that is not there yet/) });
+    expect(githubEvery(false)).toBe(600_000);
+    writeFileSync(file, "github_pat_0123456789abcdefghijklmnopqrstuvwxyz\n");
+    expect(githubToken({ GITHUB_TOKEN_FILE: file })).toEqual({ token: true });
+    expect(githubEvery(true)).toBe(60_000);
+    writeFileSync(file, "not a token at all");
+    expect(githubToken({ GITHUB_TOKEN_FILE: file })).toEqual({ token: false, note: expect.stringMatching(/^GITHUB_TOKEN is not a GitHub token.*Fix it and restart the watcher\.$/) });
+    useGitHubToken(undefined);
   });
 });
