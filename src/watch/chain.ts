@@ -7,8 +7,11 @@ import type { EventToken, Found } from "./events.js";
 import type { Poller } from "./watcher.js";
 
 export const CHAIN_INTERVAL = 15_000;
-/** Without a contract address, Robinhood Chain's public endpoint searches at most 30,000 blocks in one request (read 2026-11-19). */
-export const SPAN = 30_000n;
+/**
+ * The most blocks one poll reads. Robinhood Chain's public endpoint searches at most 30,000 blocks without a contract
+ * address, and Chainstack's at most 10,000 (both read on 2026-11-19).
+ */
+export const SPAN = 10_000n;
 /**
  * What most pools are paired against: ETH, WETH and USDG, the three most paired on Robinhood Chain on 2026-11-19. A new pool
  * is news about the token on the other side, so no event is ever about one of these.
@@ -47,7 +50,7 @@ const transfersTo = (reader: ChainHistory, token: Address, maker: MakerWallet, f
   reader.getLogs({ address: token, event: transferEvent, args: { to: maker.wallet }, fromBlock: from, toBlock: to, strict: true });
 
 /** How far back each look for an earlier receipt reaches: a wallet that trades a token is found in the first, cheapest one. */
-export const LOOK_BACK = [100_000n, 1_000_000n, STRETCH_BLOCKS] as const;
+export const LOOK_BACK = [10_000n, 100_000n, 1_000_000n, STRETCH_BLOCKS] as const;
 
 /**
  * Whether the wallet received any of `token` up to block `through`. Only whether, not when, and looking back from

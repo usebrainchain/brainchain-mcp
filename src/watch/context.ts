@@ -1,10 +1,12 @@
 import { getAddress, type Address } from "viem";
 
-import { BITGO_START, type CustodyAddition, type CustodyBoard } from "../custody.js";
-import { ANSWER_MS, type ChainHistory } from "../history.js";
+import { BITGO_START, CustodyError, within, type CustodyAddition, type CustodyBoard } from "../custody.js";
+import { ANSWER_MS, ChainError, type ChainHistory } from "../history.js";
+import type { MarketCapBoard } from "../marketcap.js";
+import { SightingsError } from "../sightings.js";
 import type { MakerWallet } from "../makers.js";
 import { tokenTimeline, type TimelineReaders } from "../timeline.js";
-import type { EventLog, Found } from "./events.js";
+import type { EventLog, WatchEvent } from "./events.js";
 
 /** How long the context of one event may take before the event is written without its prior steps. */
 export const CONTEXT_MS = ANSWER_MS;
@@ -33,51 +35,88 @@ export interface ContextOptions {
   readers: Omit<TimelineReaders, "custody" | "listed">;
   wallets: readonly MakerWallet[];
   times: Map<string, Promise<bigint>>;
+  /** The token's market cap now, read as brainchain_token_market_cap reads it. */
+  worth?: (token: Address) => Promise<MarketCapBoard>;
   ms?: number;
 }
 
+/** What a token is worth when its event is published, and the pool that says so. */
+export interface Worth {
+  marketCapUsd?: string;
+  priceUsd: string;
+  supply?: string;
+  liquidityUsd: string;
+  thin: boolean;
+  pool: { version: string; address?: string; id?: string; pairedWith: string };
+  asOf: { block: number; at: string };
+}
+
+export const worthOf = (board: MarketCapBoard): Worth => ({
+  ...(board.marketCapUsd ? { marketCapUsd: board.marketCapUsd } : {}),
+  priceUsd: board.priceUsd,
+  ...(board.supply ? { supply: board.supply } : {}),
+  liquidityUsd: board.pool.liquidityUsd,
+  thin: board.pool.thin,
+  pool: { version: board.pool.version, ...(board.pool.address ? { address: board.pool.address } : {}), ...(board.pool.id ? { id: board.pool.id } : {}), pairedWith: board.pool.pairedWith },
+  asOf: board.asOf,
+});
+
+/** Why a read failed, in words written for a reader: a source's own error can carry a node's address, so only ours pass. */
+export const why = (error: unknown) =>
+  error instanceof ChainError || error instanceof CustodyError || error instanceof SightingsError || error instanceof LateError ? error.message : "Robinhood Chain or a list could not be read just now.";
+
+class LateError extends Error {}
+
 /**
  * What goes with a new event: `priorTraces`, the token's dated public steps before the event, read by the token timeline;
- * `priorEvents`, what this log already holds for the token; and, for a token a source names only by symbol, `matches`, the
- * tokens with an address that the log knows by that symbol. Two tokens can share a symbol, so the steps are read only for a
- * symbol that names exactly one.
+ * `worth`, its market cap, price and deepest pool's liquidity now, read as brainchain_token_market_cap reads them;
+ * `priorEvents`, what this log held for the token before; and, for a token a source names only by symbol, `matches`, the
+ * tokens with an address that the log knows by that symbol. Two tokens can share a symbol, so the steps and the worth are
+ * read only for a symbol that names exactly one. The steps and the worth are read side by side, each within `ms`, and one
+ * that is missing says why in `unread` or `worthMissing`.
  */
-export function eventContext({ log, readers, wallets, times, ms = CONTEXT_MS }: ContextOptions): (found: Found) => Promise<Record<string, unknown>> {
+export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT_MS }: ContextOptions): (event: WatchEvent) => Promise<Record<string, unknown>> {
   const full: TimelineReaders = { ...readers, custody: async () => custodyFromLog(log), listed: async () => [] };
-  return async (found) => {
-    const priorEvents = log.forToken(found).map(({ id, kind, at, observedAt, baseline }) => ({ id, kind, at, observedAt, ...(baseline ? { baseline } : {}) }));
-    let target = found.token.address ? getAddress(found.token.address) : undefined;
+  return async (event) => {
+    const priorEvents = log
+      .forToken(event)
+      .filter(({ id }) => id < event.id)
+      .map(({ id, kind, at, observedAt, baseline }) => ({ id, kind, at, observedAt, ...(baseline ? { baseline } : {}) }));
+    let target = event.token.address ? getAddress(event.token.address) : undefined;
     let matches: { address: string; symbol: string | null; name: string | null; kinds: string[] }[] | undefined;
-    if (!target && found.token.symbol) {
-      const symbol = found.token.symbol.toUpperCase();
+    if (!target && event.token.symbol) {
+      const symbol = event.token.symbol.toUpperCase();
       const byAddress = new Map<string, { address: string; symbol: string | null; name: string | null; kinds: Set<string> }>();
-      for (const event of log.all()) {
-        if (!event.token.address || event.token.symbol?.toUpperCase() !== symbol) continue;
-        const key = event.token.address.toLowerCase();
-        const entry = byAddress.get(key) ?? { address: event.token.address, symbol: event.token.symbol, name: event.token.name, kinds: new Set<string>() };
-        entry.kinds.add(event.kind);
+      for (const other of log.all()) {
+        if (!other.token.address || other.token.symbol?.toUpperCase() !== symbol) continue;
+        const key = other.token.address.toLowerCase();
+        const entry = byAddress.get(key) ?? { address: other.token.address, symbol: other.token.symbol, name: other.token.name, kinds: new Set<string>() };
+        entry.kinds.add(other.kind);
         byAddress.set(key, entry);
       }
       matches = [...byAddress.values()].map(({ kinds, ...entry }) => ({ ...entry, kinds: [...kinds] }));
       if (matches.length === 1) target = getAddress(matches[0]!.address);
     }
     const context: Record<string, unknown> = { ...(matches ? { matches } : {}), priorEvents };
-    if (!target) return context;
-    const before = Date.parse(found.at ?? new Date().toISOString());
-    let timer: NodeJS.Timeout | undefined;
-    try {
-      const board = await Promise.race([
-        tokenTimeline(full, target as Address, wallets, times),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`The token timeline was not read within ${ms / 1000} seconds.`)), ms);
-        }),
-      ]);
-      return { ...context, priorTraces: board.steps.filter((step) => Date.parse(step.at) < before), ...(board.unread.length ? { unread: board.unread } : {}) };
-    } catch (error) {
-      return { ...context, priorTraces: null, unread: [error instanceof Error ? error.message : String(error)] };
-    } finally {
-      clearTimeout(timer);
+    if (!target) {
+      const missing = matches
+        ? `${matches.length === 0 ? "No token in the log goes" : `${matches.length} tokens in the log go`} by this symbol with a contract address, so its worth was not read.`
+        : "The source gives no contract address for this token, so its worth was not read.";
+      return { ...context, worth: null, worthMissing: missing };
     }
+    const late = (what: string) => new LateError(`${what} was not read within ${ms / 1000} seconds.`);
+    const before = Date.parse(event.at ?? event.observedAt);
+    const [steps, value] = await Promise.allSettled([
+      within(ms, tokenTimeline(full, target, wallets, times), late("The token timeline")),
+      worth ? within(ms, worth(target), late("The market cap")) : Promise.reject(new LateError("This watcher reads no market cap.")),
+    ]);
+    return {
+      ...context,
+      ...(steps.status === "fulfilled"
+        ? { priorTraces: steps.value.steps.filter((step) => Date.parse(step.at) < before), ...(steps.value.unread.length ? { unread: steps.value.unread } : {}) }
+        : { priorTraces: null, unread: [why(steps.reason)] }),
+      ...(value.status === "fulfilled" ? { worth: worthOf(value.value) } : { worth: null, worthMissing: why(value.reason) }),
+    };
   };
 }
 

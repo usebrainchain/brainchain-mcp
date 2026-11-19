@@ -1,4 +1,5 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 
 import type { Validators } from "./http.js";
@@ -37,21 +38,26 @@ export class StateFile {
   }
 }
 
-/** The state folder, made if missing, held by this process alone. Returns the release. */
-export function lockStateDir(dir: string, pid = process.pid): () => void {
+/**
+ * The state folder, made if missing, held by this process alone. Returns the release. A lock is stale when its process is
+ * gone, when it names this process's own id, as after a container restarts with the same id, or when it was taken on
+ * another host, as a container's disk is after a redeploy.
+ */
+export function lockStateDir(dir: string, pid = process.pid, host = hostname()): () => void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const lock = join(dir, "watch.lock");
   const take = () => {
     const fd = openSync(lock, "wx");
-    writeSync(fd, String(pid));
+    writeSync(fd, `${pid} ${host}`);
     closeSync(fd);
   };
   try {
     take();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const holder = Number(readFileSync(lock, "utf8"));
-    if (holder > 0 && alive(holder)) throw new Error(`Another watcher (process ${holder}) is using ${dir}. Stop it, or pass another --state.`);
+    const [held, on] = readFileSync(lock, "utf8").trim().split(" ");
+    const holder = Number(held);
+    if (holder > 0 && holder !== pid && (on === undefined || on === host) && alive(holder)) throw new Error(`Another watcher (process ${holder}) is using ${dir}. Stop it, or pass another --state.`);
     unlinkSync(lock);
     take();
   }

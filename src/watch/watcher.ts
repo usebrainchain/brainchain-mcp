@@ -1,4 +1,4 @@
-import { dedupeKey, type EventLog, type Found, type WatchEvent } from "./events.js";
+import type { EventLog, Found, WatchEvent } from "./events.js";
 import { Backoff } from "./http.js";
 import type { SourceState, StateFile } from "./state.js";
 
@@ -42,12 +42,29 @@ export interface WatcherOptions {
   log: EventLog;
   state: StateFile;
   pollers: readonly Poller[];
-  /** What goes in a new event's `context`. A failure leaves it empty rather than holding the event back. */
-  context?: (found: Found) => Promise<Record<string, unknown>>;
-  /** Called with each new event once it is written, never with a baseline row. */
+  /**
+   * What goes in a new event's `context`. It is read after the event is written, never on a poller's path; a failure is
+   * written into the context rather than holding the event back.
+   */
+  context?: (event: WatchEvent) => Promise<Record<string, unknown>>;
+  /** How many contexts are read at once. */
+  readers?: number;
+  /** Called with each new event once it is published, in id order, never with a baseline row. */
   onEvent?: (event: WatchEvent) => void;
   say?: (message: string) => void;
+  /** Takes anything secret out of a message before it is logged or shown, such as a node's address. */
+  redact?: (text: string) => string;
   clock?: () => number;
+}
+
+export const CONTEXT_READERS = 2;
+
+/** An error in one line: a client library's short message and details rather than its full text, which repeats the request. */
+export function describe(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const { shortMessage, details } = error as { shortMessage?: unknown; details?: unknown };
+  const text = typeof shortMessage === "string" ? `${shortMessage}${typeof details === "string" && details ? ` ${details}` : ""}` : error.message;
+  return text.replace(/\s+/g, " ").trim().slice(0, 400);
 }
 
 /** Runs each poller on its own interval and writes what they find to the log. */
@@ -58,6 +75,9 @@ export class Watcher {
   private stopped = false;
   private readonly wakers = new Set<() => void>();
   private loops: Promise<void>[] = [];
+  private readonly queue: WatchEvent[] = [];
+  private reading = 0;
+  private readonly drained = new Set<() => void>();
 
   constructor(options: WatcherOptions) {
     this.options = options;
@@ -66,7 +86,42 @@ export class Watcher {
   }
 
   start(): void {
+    // Events written before a restart whose context was never read are read now.
+    for (const event of this.options.log.pending()) this.enqueue(event);
     this.loops = this.options.pollers.map((poller) => this.loop(poller));
+  }
+
+  /** Resolves once every queued context is read and its event published. */
+  idle(): Promise<void> {
+    if (this.queue.length === 0 && this.reading === 0) return Promise.resolve();
+    return new Promise((resolve) => this.drained.add(resolve));
+  }
+
+  private enqueue(event: WatchEvent): void {
+    this.queue.push(event);
+    this.pump();
+  }
+
+  private pump(): void {
+    const limit = this.options.readers ?? CONTEXT_READERS;
+    while (this.reading < limit && this.queue.length > 0) {
+      const event = this.queue.shift()!;
+      this.reading++;
+      void this.read(event).finally(() => {
+        this.reading--;
+        this.pump();
+        if (this.queue.length > 0 || this.reading > 0) return;
+        for (const resolve of this.drained) resolve();
+        this.drained.clear();
+      });
+    }
+  }
+
+  private async read(event: WatchEvent): Promise<void> {
+    const { context, log, onEvent } = this.options;
+    // A failure's own message can carry a node's address, so the event says only that its context was not read.
+    const extra = context ? await context(event).catch(() => ({ unread: ["The context could not be read."] })) : {};
+    for (const published of log.settle(event.id, extra)) if (!published.baseline) onEvent?.(published);
   }
 
   async stop(): Promise<void> {
@@ -118,7 +173,7 @@ export class Watcher {
       wait = more ? 0 : poller.interval;
     } catch (error) {
       status.failures++;
-      status.lastError = error instanceof Error ? error.message : String(error);
+      status.lastError = (this.options.redact ?? ((text: string) => text))(describe(error));
       const refused = backoffIn(error);
       wait = refused ? Math.max(refused.until - this.clock(), 1_000) : Math.min(poller.interval * 2 ** status.failures, MAX_WAIT_MS);
       this.say(`${poller.name}: ${status.lastError} Next try in ${Math.round(wait / 1000)} s.`);
@@ -128,29 +183,18 @@ export class Watcher {
     return wait;
   }
 
+  /** Writes what a poller found and returns at once: the context of a new event is read on the queue, off the poller's path. */
   private async record(found: readonly Found[], baseline: boolean): Promise<WatchEvent[]> {
-    const { log, context, onEvent } = this.options;
     const observedAt = new Date(this.clock()).toISOString();
-    const seen = new Set<string>();
-    const fresh = found.filter((row) => {
-      const key = dedupeKey(row);
-      if (seen.has(key) || log.has(row)) return false;
-      seen.add(key);
-      return true;
-    });
-    const quiet = fresh.filter((row) => baseline || row.baseline).map((row) => ({ ...row, baseline: true as const, observedAt }));
-    const written = log.append(quiet);
-    for (const row of fresh.filter((row) => !baseline && !row.baseline)) {
-      const extra = context ? await context(row).catch((error: unknown) => ({ unread: [error instanceof Error ? error.message : String(error)] })) : {};
-      const [event] = log.append([{ ...row, observedAt, context: extra }]);
-      if (!event) continue;
-      written.push(event);
-      onEvent?.(event);
-    }
+    const rows = found.map((row) => ({ ...row, ...(baseline || row.baseline ? { baseline: true as const } : {}), observedAt }));
+    const { written, published } = this.options.log.append(rows);
+    for (const event of published) if (!event.baseline) this.options.onEvent?.(event);
+    for (const event of written) if (!event.baseline) this.enqueue(event);
     return written;
   }
 
   private say(message: string): void {
-    (this.options.say ?? ((line: string) => console.error(line)))(message);
+    const redact = this.options.redact ?? ((text: string) => text);
+    (this.options.say ?? ((line: string) => console.error(line)))(redact(message));
   }
 }

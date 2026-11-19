@@ -46,6 +46,7 @@ describe("the watcher", () => {
     expect(printed).toEqual([]);
     expect(state.source("kucoin").baselined).toBe(true);
     await watcher.runOnce(poller);
+    await watcher.idle();
     expect(printed.map(({ id, token, context, baseline }) => [id, token.symbol, context, baseline])).toEqual([[3, "NEW", { about: "NEW" }, undefined]]);
     expect(log.query().events.map(({ id }) => id)).toEqual([3]);
   });
@@ -56,6 +57,7 @@ describe("the watcher", () => {
     const { log, watcher, printed } = open(dir(), [poller]);
     await watcher.runOnce(poller);
     await watcher.runOnce(poller);
+    await watcher.idle();
     expect(printed.map(({ token }) => token.symbol)).toEqual(["NEW"]);
     expect(log.all().map(({ token, baseline }) => [token.symbol, baseline === true])).toEqual([["OLD", true], ["NEW", false]]);
   });
@@ -64,10 +66,50 @@ describe("the watcher", () => {
     const poller = scripted([[], [listed("NEW")]]);
     const where = dir();
     const log = new EventLog(where);
-    const watcher = new Watcher({ log, state: new StateFile(where), pollers: [poller], context: async () => Promise.reject(new Error("timeline down")), say: () => {} });
+    const watcher = new Watcher({ log, state: new StateFile(where), pollers: [poller], context: async () => Promise.reject(new Error("https://node.example/secret-key timed out")), say: () => {} });
     await watcher.runOnce(poller);
     await watcher.runOnce(poller);
-    expect(log.all()[0]!.context).toEqual({ unread: ["timeline down"] });
+    await watcher.idle();
+    // Its own message can carry a node's address, so the event says only that.
+    expect(log.all()[0]!.context).toEqual({ unread: ["The context could not be read."] });
+  });
+
+  it("never holds a poller on an event's context, and publishes the event once the context is read", async () => {
+    let release!: () => void;
+    const slow = new Promise<void>((resolve) => (release = resolve));
+    const poller = scripted([[], [listed("NEW")]]);
+    const where = dir();
+    const log = new EventLog(where);
+    const printed: WatchEvent[] = [];
+    const watcher = new Watcher({ log, state: new StateFile(where), pollers: [poller], context: async () => (await slow, { worth: null }), onEvent: (event) => printed.push(event), say: () => {} });
+    await watcher.runOnce(poller);
+    expect(await watcher.runOnce(poller)).toBe(60_000);
+    expect([log.size, log.publishedThrough, printed.length]).toEqual([1, 0, 0]);
+    release();
+    await watcher.idle();
+    expect(printed.map(({ id, context }) => [id, context])).toEqual([[1, { worth: null }]]);
+  });
+
+  it("reads the context of events a restart left unread", async () => {
+    const where = dir();
+    const first = new EventLog(where);
+    first.append([{ ...listed("LEFT"), observedAt: "2026-11-19T12:00:00Z" }]);
+    first.close();
+    const { watcher, printed, log } = open(where, []);
+    watcher.start();
+    await watcher.idle();
+    await watcher.stop();
+    expect([printed.map(({ token }) => token.symbol), log.publishedThrough]).toEqual([["LEFT"], 1]);
+  });
+
+  it("keeps a secret address out of what it logs and shows", async () => {
+    const poller = scripted([new Error("HTTP request failed. URL: https://node.example/key-123 Details: node.example answered 429")]);
+    const where = dir();
+    const said: string[] = [];
+    const watcher = new Watcher({ log: new EventLog(where), state: new StateFile(where), pollers: [poller], say: (line) => said.push(line), redact: (text) => text.replace(/(?:https:\/\/)?node\.example\S*/g, "the configured RPC") });
+    await watcher.runOnce(poller);
+    expect(watcher.status.get("kucoin")!.lastError).toBe("HTTP request failed. URL: the configured RPC Details: the configured RPC answered 429");
+    expect(said.join(" ")).not.toContain("node.example");
   });
 
   it("waits until a refusal's time, and longer after each other failure, and keeps the baseline open until a read succeeds", async () => {
@@ -129,12 +171,19 @@ describe("the watcher", () => {
 describe("the state folder", () => {
   it("is held by one watcher at a time, and freed by a watcher that is gone", () => {
     const where = dir();
+    // This test's process holds the lock, as another watcher would, and a second one on this host is refused.
     const release = lockStateDir(where);
-    expect(() => lockStateDir(where)).toThrow(/Another watcher \(process \d+\) is using/);
+    expect(() => lockStateDir(where, 1)).toThrow(/Another watcher \(process \d+\) is using/);
     release();
     lockStateDir(where)();
-    // A lock left by a process that no longer runs is taken over.
+    // A lock taken on another host, as a container's disk after a redeploy, is stale.
+    lockStateDir(where, process.pid, "old-container")();
+    lockStateDir(where, process.pid, "old-container");
+    expect(() => lockStateDir(where, 2)).not.toThrow();
+    // A lock left by a process that no longer runs is taken over, and so is one that names this process, as after a container restart.
+    lockStateDir(where, 2 ** 22 + 12_345)();
     lockStateDir(where, 2 ** 22 + 12_345);
+    expect(() => lockStateDir(where)).not.toThrow();
     expect(() => lockStateDir(where)).not.toThrow();
   });
 });

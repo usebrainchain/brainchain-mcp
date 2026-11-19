@@ -18,42 +18,76 @@ const found = (more: Partial<Found> = {}): Found => ({
   ...more,
 });
 const at = (observedAt: string, row: Found) => ({ ...row, observedAt });
+/** Appends rows and settles each new event's context at once, as a watcher with no context to read does. */
+const settled = (log: EventLog, rows: (Found & { observedAt: string })[]) => {
+  const { written } = log.append(rows);
+  for (const event of written) log.settle(event.id, {});
+  return written;
+};
 
 describe("the event log", () => {
   it("numbers events from 1, keeps one per kind, token and ref, and writes each as a line", () => {
     const where = dir();
     const log = new EventLog(where);
-    const [first] = log.append([at("2026-11-19T10:00:00.000Z", found())]);
+    const [first] = settled(log, [at("2026-11-19T10:00:00.000Z", found())]);
     expect(first).toMatchObject({ id: 1, kind: "bitgo.merged", context: {} });
     // Another case of the same address is the same token.
-    expect(log.append([at("2026-11-19T10:01:00.000Z", found({ token: { address: CASHCAT.toLowerCase(), symbol: null, name: null } }))])).toEqual([]);
-    const [second] = log.append([at("2026-11-19T10:02:00.000Z", found({ kind: "bitgo.pr_opened", ref: "https://github.com/BitGo/BitGoJS/pull/9357" }))]);
+    expect(settled(log, [at("2026-11-19T10:01:00.000Z", found({ token: { address: CASHCAT.toLowerCase(), symbol: null, name: null } }))])).toEqual([]);
+    const [second] = settled(log, [at("2026-11-19T10:02:00.000Z", found({ kind: "bitgo.pr_opened", ref: "https://github.com/BitGo/BitGoJS/pull/9357" }))]);
     expect(second!.id).toBe(2);
     // Two rows of one write that are the same event are one.
-    expect(log.append([at("2026-11-19T10:03:00.000Z", found({ ref: "x" })), at("2026-11-19T10:03:00.000Z", found({ ref: "x" }))])).toHaveLength(1);
+    expect(settled(log, [at("2026-11-19T10:03:00.000Z", found({ ref: "x" })), at("2026-11-19T10:03:00.000Z", found({ ref: "x" }))])).toHaveLength(1);
     log.close();
     const lines = readFileSync(join(where, "events.jsonl"), "utf8").trim().split("\n");
     expect(lines.map((line) => (JSON.parse(line) as { id: number }).id)).toEqual([1, 2, 3]);
+  });
+
+  it("publishes an event once its context is settled and every event before it is published, in order", () => {
+    const where = dir();
+    const log = new EventLog(where);
+    const { written, published } = log.append([at("2026-11-19T10:00:00Z", found({ ref: "a" })), at("2026-11-19T10:00:00Z", found({ ref: "b" })), { ...at("2026-11-19T10:00:00Z", found({ ref: "c" })), baseline: true }]);
+    expect([written.length, published, log.publishedThrough]).toEqual([3, [], 0]);
+    // The second settles first, and waits for the first.
+    expect(log.settle(2, { worth: null })).toEqual([]);
+    expect(log.query().events).toEqual([]);
+    expect(log.settle(1, { worth: { marketCapUsd: "1" } }).map(({ id }) => id)).toEqual([1, 2, 3]);
+    expect(log.query().events.map(({ id, context }) => [id, context])).toEqual([[1, { worth: { marketCapUsd: "1" } }], [2, { worth: null }]]);
+    // An event settled twice keeps its first context.
+    expect(log.settle(1, {})).toEqual([]);
+    log.close();
+  });
+
+  it("keeps contexts beside the log, and opens with the events still to read", () => {
+    const where = dir();
+    const log = new EventLog(where);
+    log.append([at("2026-11-19T10:00:00Z", found({ ref: "a" })), at("2026-11-19T10:00:00Z", found({ ref: "b" }))]);
+    log.settle(1, { priorEvents: [] });
+    log.close();
+    const again = new EventLog(where);
+    expect(again.all()[0]!.context).toEqual({ priorEvents: [] });
+    expect([again.publishedThrough, again.pending().map(({ id }) => id)]).toEqual([1, [2]]);
+    expect(readFileSync(join(where, "context.jsonl"), "utf8").trim().split("\n")).toHaveLength(1);
+    again.close();
   });
 
   it("tells tokens apart by address, then BitGo's id, then symbol", () => {
     const log = new EventLog(dir());
     const robinhood = (symbol: string) => found({ kind: "robinhood.pair_added", token: { address: null, symbol, name: null }, ref: "pairs", detail: {} });
     const noContract = (id: string) => found({ token: { address: null, symbol: null, name: "Same name" }, detail: { id } });
-    expect(log.append([at("2026-11-19T10:00:00Z", robinhood("CASHCAT")), at("2026-11-19T10:00:00Z", robinhood("cashcat"))])).toHaveLength(1);
-    expect(log.append([at("2026-11-19T10:00:00Z", noContract("hoodeth:a")), at("2026-11-19T10:00:00Z", noContract("hoodeth:b"))])).toHaveLength(2);
+    expect(settled(log, [at("2026-11-19T10:00:00Z", robinhood("CASHCAT")), at("2026-11-19T10:00:00Z", robinhood("cashcat"))])).toHaveLength(1);
+    expect(settled(log, [at("2026-11-19T10:00:00Z", noContract("hoodeth:a")), at("2026-11-19T10:00:00Z", noContract("hoodeth:b"))])).toHaveLength(2);
   });
 
   it("opens again where it left off, dropping a line a crash cut short", () => {
     const where = dir();
     const log = new EventLog(where);
-    log.append([at("2026-11-19T10:00:00Z", found()), { ...at("2026-11-19T10:00:00Z", found({ ref: "b" })), baseline: true }]);
+    settled(log, [at("2026-11-19T10:00:00Z", found()), { ...at("2026-11-19T10:00:00Z", found({ ref: "b" })), baseline: true }]);
     log.close();
     appendFileSync(join(where, "events.jsonl"), '{"id":3,"kind":"bitgo.mer');
     const again = new EventLog(where);
     expect([again.size, again.lastId, again.baselineSize]).toEqual([2, 2, 1]);
     expect(again.has(found())).toBe(true);
-    expect(again.append([at("2026-11-19T11:00:00Z", found({ ref: "c" }))])[0]!.id).toBe(3);
+    expect(settled(again, [at("2026-11-19T11:00:00Z", found({ ref: "c" }))])[0]!.id).toBe(3);
     again.close();
     expect(readFileSync(join(where, "events.jsonl"), "utf8").trim().split("\n")).toHaveLength(3);
   });
@@ -61,10 +95,10 @@ describe("the event log", () => {
   describe("asked for events", () => {
     const filled = () => {
       const log = new EventLog(dir());
-      log.append([{ ...at("2026-11-19T09:00:00.000Z", found({ ref: "old" })), baseline: true }]);
-      log.append([at("2026-11-19T10:00:00.000Z", found({ kind: "bitgo.pr_opened", ref: "pr" }))]);
-      log.append([at("2026-11-19T11:00:00.000Z", found({ kind: "pool.created", ref: "0xabc", source: "Uniswap v4", detail: {} }))]);
-      log.append([at("2026-11-19T12:00:00.000Z", found({ kind: "robinhood.pair_added", token: { address: null, symbol: "PONS", name: "Pons" }, ref: "pairs#PONS", detail: {} }))]);
+      settled(log, [{ ...at("2026-11-19T09:00:00.000Z", found({ ref: "old" })), baseline: true }]);
+      settled(log, [at("2026-11-19T10:00:00.000Z", found({ kind: "bitgo.pr_opened", ref: "pr" }))]);
+      settled(log, [at("2026-11-19T11:00:00.000Z", found({ kind: "pool.created", ref: "0xabc", source: "Uniswap v4", detail: {} }))]);
+      settled(log, [at("2026-11-19T12:00:00.000Z", found({ kind: "robinhood.pair_added", token: { address: null, symbol: "PONS", name: "Pons" }, ref: "pairs#PONS", detail: {} }))]);
       return log;
     };
 

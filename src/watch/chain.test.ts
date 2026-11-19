@@ -173,16 +173,16 @@ describe("the chain poller", () => {
   });
 
   it("reads at most SPAN blocks at a time, halves a range the endpoint finds too full, and says when it is behind", async () => {
-    const { reader, searched } = endpoint([v4(25_000n, zeroAddress, CASHCAT)], { newest: 0n, most: 20_000 });
+    const { reader, searched } = endpoint([v4(7_500n, zeroAddress, CASHCAT)], { newest: 0n, most: 5_000 });
     const { log, state, run } = harness(reader, table().firsts);
     await run();
     (reader as { getBlockNumber: () => Promise<bigint> }).getBlockNumber = async () => 100_000n;
     expect(await run()).toBe(0);
     expect(state.source("chain").block).toBe(Number(SPAN));
     expect(searched.filter(({ what }) => what === "pools").map(({ from, to }) => [from, to])).toEqual([
-      [1n, 30_000n],
-      [1n, 15_000n],
-      [15_001n, 30_000n],
+      [1n, 10_000n],
+      [1n, 5_000n],
+      [5_001n, 10_000n],
     ]);
     expect(log.size).toBe(1);
   });
@@ -208,13 +208,17 @@ describe("a wallet's first receipt", () => {
     const { reader, searched } = endpoint([transfer(5_000_000n, CASHCAT, WINTERMUTE.wallet), transfer(8_950_000n, PONS, WINTERMUTE.wallet)], { newest: 20_000_000n });
     const firsts = chainFirsts(reader, chainKept());
     expect(await firsts.receipt(PONS, WINTERMUTE, 9_000_000n, 9_000_100n)).toBe("earlier");
-    expect(searched.map(({ from, to }) => [from, to])).toEqual([[8_900_000n, 8_999_999n]]);
+    expect(searched.map(({ from, to }) => [from, to])).toEqual([
+      [8_990_000n, 8_999_999n],
+      [8_890_000n, 8_989_999n],
+    ]);
     searched.length = 0;
     expect(await firsts.receipt(CASHCAT, WINTERMUTE, 9_000_000n, 9_000_100n)).toBe("earlier");
     expect(searched.map(({ from, to }) => [from, to])).toEqual([
-      [8_900_000n, 8_999_999n],
-      [7_900_000n, 8_899_999n],
-      [0n, 7_899_999n],
+      [8_990_000n, 8_999_999n],
+      [8_890_000n, 8_989_999n],
+      [7_890_000n, 8_889_999n],
+      [0n, 7_889_999n],
     ]);
   });
 });
