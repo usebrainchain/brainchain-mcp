@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -125,6 +125,16 @@ describe("the changes tool", () => {
     expect(() => watchUrl("localhost:8787")).toThrow("BRAINCHAIN_WATCH_URL must start with http:// or https://.");
     expect(() => watchUrl("not a url")).toThrow(/^BRAINCHAIN_WATCH_URL must be the address/);
     expect(() => watchUrl("https://user:secret@watch.example")).toThrow("BRAINCHAIN_WATCH_URL must not hold a user name or password.");
+  });
+
+  it("is in the README's tools, with the watcher it reads and what an event does not mean", () => {
+    const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+    const row = readme.split("\n").find((line) => line.startsWith(`| \`${CHANGES_NAME}\` |`))!;
+    expect(row).toContain("Reads the watcher `BRAINCHAIN_WATCH_URL` names; without it, the answer says how to start one. Free, no key.");
+    const section = readme.split("\n## Watch public changes\n")[1]!.split("\n## ")[0]!;
+    expect(section).toContain("none of them means an exchange will list the token: most tokens with these traces are never listed.");
+    expect(section).toContain("reports none of it as new, so a new watcher starts quiet.");
+    expect(section).not.toMatch(/\u2014|alpha|front-?run|insider/i);
   });
 
   it("describes changes in plain words and makes no forecast", () => {

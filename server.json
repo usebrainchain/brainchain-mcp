@@ -103,6 +103,12 @@
           "format": "string"
         },
         {
+          "name": "BRAINCHAIN_WATCH_URL",
+          "description": "The address of a running brainchain-mcp watch --serve, such as http://127.0.0.1:8787, which brainchain_changes reads. Without it the tool answers with how to start one.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
           "name": "BRAINCHAIN_DESK_URL",
           "description": "Advanced: a payment desk to use in place of the network's own. An https URL, or http on localhost or 127.0.0.1. A custom desk needs its own BRAINCHAIN_PAY_TO.",
           "isRequired": false,

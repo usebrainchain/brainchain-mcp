@@ -18,7 +18,8 @@ It also reads what stock tokens cost on Robinhood Chain, lists the Robinhood Cha
 exchanges and funds, has recently started to support, reads how much of a token on that chain a market maker's
 trading wallets hold, now or at a past block, reads how far along a token is (deployed, first minted, first pool
 created), reads which lists and exchanges already carry it, puts every dated public step of a token in one timeline,
-and reads a token's price, supply and market cap at a past block or now.
+reads a token's price, supply and market cap at a past block or now, and watches public sources for new changes about
+Robinhood Chain tokens.
 
 Usage:
   brainchain-mcp                 Start the server on stdio (what MCP clients run).
@@ -49,6 +50,8 @@ Environment:
   BRAINCHAIN_MAKER_WALLETS    More wallets for brainchain_market_maker_holdings and brainchain_token_timeline to follow, as
                               Name=0xAddress separated by commas (at most 20). Nobody checks whose wallets they are; their
                               entries say source configured.
+  BRAINCHAIN_WATCH_URL        The address of a running \`brainchain-mcp watch --serve\`, such as http://127.0.0.1:8787, which
+                              brainchain_changes reads.
   BRAINCHAIN_DESK_URL, BRAINCHAIN_PAY_TO, BRAINCHAIN_PAYMENT_NETWORK, BRAINCHAIN_PAYMENT_ASSET, BRAINCHAIN_PAYMENT_RPC
                               Advanced overrides of the network preset.
 `;

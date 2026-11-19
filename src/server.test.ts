@@ -88,7 +88,7 @@ describe("the server", () => {
       expect(logged[0]).toContain(problem);
 
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(13);
+      expect(tools).toHaveLength(14);
       const description = tools.find((tool) => tool.name === POST_TASK_NAME)!.description!;
       expect(description.startsWith(`Invalid setting: ${problem}`)).toBe(true);
       expect(description).not.toMatch(/USDG|USDC/);
@@ -322,8 +322,8 @@ describe("the server", () => {
     }
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
     expect(readme).toContain("A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_bond_task` and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working.");
-    expect(readme).toContain("A setting only payments read stops just the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; the other ten keep working.");
-    expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline` and `brainchain_token_market_cap`.");
+    expect(readme).toContain("A setting only payments read stops just the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; the other eleven keep working.");
+    expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap` and `brainchain_changes`.");
     expect(readme).toContain("`BRAINCHAIN_STATE_DIR` (including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set)");
     expect(readme).not.toContain("the task and bond tools return the error");
   });
