@@ -132,16 +132,16 @@ describe("the changes tool", () => {
     const row = readme.split("\n").find((line) => line.startsWith(`| \`${CHANGES_NAME}\` |`))!;
     expect(row).toContain("Reads the watcher `BRAINCHAIN_WATCH_URL` names; without it, the answer says how to start one. Free, no key.");
     const section = readme.split("\n## Watch public changes\n")[1]!.split("\n## ")[0]!;
-    expect(section).toContain("it is not a forecast of a listing: most tokens with these traces are never listed.");
+    expect(section).toContain("It does not say why, and most tokens with these traces are never listed.");
     expect(section).toContain("reports none of it as new, so a new watcher starts quiet.");
-    expect(section).not.toMatch(/\u2014|alpha|front-?run|insider|will list/i);
+    expect(section).not.toMatch(/\u2014|alpha|front-?run|insider|will list|forecast/i);
   });
 
   it("describes changes in plain words and makes no forecast", () => {
     const description = CHANGES_TOOL.description!;
     expect(description).toMatch(/^New public changes about Robinhood Chain tokens since your last call/);
-    expect(description).toContain("it is not a forecast of a listing");
-    for (const word of [/alpha/i, /front-?run/i, /insider/i, /\bleak/i, /signal/i, /score/i, /—/]) expect(description).not.toMatch(word);
+    expect(description).toContain("It does not say why, and most tokens with these traces are never listed.");
+    for (const word of [/alpha/i, /front-?run/i, /insider/i, /\bleak/i, /signal/i, /score/i, /will list/i, /forecast/i, /\u2014/]) expect(description).not.toMatch(word);
   });
 });
 
