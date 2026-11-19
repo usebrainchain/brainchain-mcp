@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { EventLog, type Found, type WatchEvent } from "./events.js";
 import { Backoff } from "./http.js";
 import { lockStateDir, StateFile } from "./state.js";
-import { MAX_WAIT_MS, Watcher, type Poller } from "./watcher.js";
+import { MAX_WAIT_MS, Watcher, type Poller, type Reading } from "./watcher.js";
 
 const listed = (symbol: string): Found => ({ kind: "kucoin.listed", token: { address: null, symbol, name: null }, source: "KuCoin", ref: "kucoin", at: null, detail: {} });
 
@@ -145,10 +145,12 @@ describe("the watcher", () => {
     const first = open(where, [scripted([[listed("A")]])]);
     await first.watcher.runOnce(scripted([[listed("A")]]));
     await first.watcher.runOnce(scripted([[listed("A"), listed("B")]]));
+    await first.watcher.idle();
     first.log.close();
     const again = open(where, [scripted([[listed("A"), listed("B"), listed("C")]])]);
     expect(again.state.source("kucoin")).toMatchObject({ baselined: true, reads: 1 });
     await again.watcher.runOnce(scripted([[listed("A"), listed("B"), listed("C")]]));
+    await again.watcher.idle();
     expect(again.printed.map(({ id, token }) => [id, token.symbol])).toEqual([[3, "C"]]);
   });
 
@@ -199,5 +201,53 @@ describe("a refusal wrapped in another error", () => {
     const poller = scripted([wrapped], "chain", 15_000);
     const { watcher } = open(dir(), [poller], () => 1_000_000);
     expect(await watcher.runOnce(poller)).toBe(240_000);
+  });
+});
+
+describe("an event's context, read in two steps", () => {
+  it("goes out with what is ready by the first deadline, and the rest follows as an update that names the event", async () => {
+    let finish!: () => void;
+    const later = new Promise<void>((resolve) => (finish = resolve));
+    const reading = (): Reading => {
+      let worth: Record<string, unknown> | undefined;
+      const done = later.then(() => (worth = { worth: { marketCapUsd: "38251409.00" } })).then(() => ({ priorEvents: [], ...worth }));
+      return { now: () => ({ priorEvents: [], ...(worth ?? { pending: ["worth"] }) }), done };
+    };
+    const poller = scripted([[], [listed("NEW")]]);
+    const where = dir();
+    const log = new EventLog(where);
+    const published: WatchEvent[] = [];
+    const updated: WatchEvent[] = [];
+    const watcher = new Watcher({ log, state: new StateFile(where), pollers: [poller], context: reading, first: 20, onEvent: (event) => published.push(structuredClone(event)), onUpdate: (event) => updated.push(structuredClone(event)), say: () => {} });
+    await watcher.runOnce(poller);
+    await watcher.runOnce(poller);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(published.map(({ id, context }) => [id, context])).toEqual([[1, { priorEvents: [], pending: ["worth"] }]]);
+    finish();
+    await watcher.idle();
+    expect(updated.map(({ id, context }) => [id, context])).toEqual([[1, { priorEvents: [], worth: { marketCapUsd: "38251409.00" } }]]);
+    expect(log.query().events[0]!.context).toEqual({ priorEvents: [], worth: { marketCapUsd: "38251409.00" } });
+    log.close();
+    // The update is a row of its own beside the first context, and the log opens with the event finished.
+    expect(readFileSync(join(where, "context.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { id: number; update?: true })).toEqual([
+      { id: 1, context: { priorEvents: [], pending: ["worth"] } },
+      { id: 1, update: true, context: { priorEvents: [], worth: { marketCapUsd: "38251409.00" } } },
+    ]);
+    expect(new EventLog(where).all()[0]!.context).toEqual({ priorEvents: [], worth: { marketCapUsd: "38251409.00" } });
+  });
+
+  it("finishes after a restart the contexts that went out unfinished", async () => {
+    const where = dir();
+    const first = new EventLog(where);
+    const { written } = first.append([{ ...listed("LEFT"), observedAt: "2026-11-19T12:00:00Z" }]);
+    first.settle(written[0]!.id, { pending: ["worth"] });
+    first.close();
+    const updated: WatchEvent[] = [];
+    const log = new EventLog(where);
+    const watcher = new Watcher({ log, state: new StateFile(where), pollers: [], context: async () => ({ worth: null, worthMissing: "No pool." }), onUpdate: (event) => updated.push(event), say: () => {} });
+    watcher.start();
+    await watcher.idle();
+    await watcher.stop();
+    expect(updated.map(({ id, context }) => [id, context])).toEqual([[1, { worth: null, worthMissing: "No pool." }]]);
   });
 });

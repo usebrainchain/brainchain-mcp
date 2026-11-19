@@ -10,7 +10,7 @@ import { readinessIn } from "../readiness.js";
 import { sightingsReader, tokenSightings } from "../sightings.js";
 import { bitGoLists, bitGoMerges, bitGoPullRequests, bitGoReleases } from "./bitgo.js";
 import { chainFirsts, chainKept, chainPoller } from "./chain.js";
-import { chainTurn, eventContext } from "./context.js";
+import { chainTurn, createdIn, eventContext } from "./context.js";
 import { Deliveries } from "./deliver.js";
 import { EventLog, type WatchEvent } from "./events.js";
 import { Requests } from "./http.js";
@@ -118,8 +118,15 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   const github = token ? GITHUB_EVERY.withToken : GITHUB_EVERY.withoutToken;
   const reader = chainReader(requests, rpc);
   const kept = chainKept();
-  const capKept: CapKept = { starts: new Map(), pools: new Map(), swaps: new Map(), changes: new Map(), supply: new Map(), times: new Map() };
+  const capKept: CapKept = { starts: new Map(), pools: new Map(), swaps: new Map(), changes: new Map(), supply: new Map(), times: new Map(), index: new Map() };
   const lists = bitGoLists(requests);
+  // Where each token's contract was created, so the search for its pools starts there and not at the chain's first block.
+  const created = new Map<string, Promise<bigint | undefined>>();
+  const createdBlock = (address: `0x${string}`) => {
+    const key = address.toLowerCase();
+    if (!created.has(key)) created.set(key, reader.getBlockNumber().then((newest) => createdIn(reader, address, newest)));
+    return created.get(key)!;
+  };
 
   let watchedAt = -1;
   let watched = new Set<string>();
@@ -132,7 +139,8 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   };
 
   const pollers: Poller[] = [
-    chainPoller({ reader, wallets, watched: tracked, firsts: chainFirsts(reader, kept) }),
+    // With a private endpoint the chain is read every 10 s, so an event is out within about 20 s of its block.
+    chainPoller({ reader, wallets, watched: tracked, firsts: chainFirsts(reader, kept), ...(rpc ? { interval: 10_000 } : {}) }),
     bitGoPullRequests(requests, lists, github),
     bitGoMerges(requests, lists, github),
     bitGoReleases(requests, lists),
@@ -162,7 +170,9 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       approvals: (chain, address, followed, newest) => firstApprovals(chain, address, followed, kept, newest),
       sightings: (address) => tokenSightings(sightings, address),
     },
-    worth: (address) => marketCap(reader, address, capKept),
+    // Off the delivery path, the slow parts get longer: what is not ready by the first deadline follows as an update.
+    ms: 90_000,
+    worth: async (address) => marketCap(reader, address, capKept, new Date(), undefined, await createdBlock(address)),
     say: (line) => say(line),
   });
 
@@ -171,6 +181,14 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   if (adminToken && !/^[\w-]{32,100}$/.test(adminToken)) throw new Error("BRAINCHAIN_WATCH_ADMIN_TOKEN must be 32 to 100 letters, digits, - or _.");
   const served = args.serve ? serveEvents({ log, health: () => health(), adminToken, deliveries, trustProxy: args.trustProxy }) : undefined;
   let ticking = false;
+  const deliver = () => {
+    if (ticking) return;
+    ticking = true;
+    setImmediate(() => {
+      ticking = false;
+      void deliveries.tick();
+    });
+  };
   const watcher = new Watcher({
     log,
     state,
@@ -183,12 +201,13 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     onEvent: (event: WatchEvent) => {
       if (args.print) process.stdout.write(`${JSON.stringify(event)}\n`);
       served?.publish([event]);
-      if (ticking) return;
-      ticking = true;
-      setImmediate(() => {
-        ticking = false;
-        void deliveries.tick();
-      });
+      deliver();
+    },
+    onUpdate: (event: WatchEvent) => {
+      if (args.print) process.stdout.write(`${JSON.stringify({ type: "update", id: event.id, context: event.context })}\n`);
+      served?.update(event);
+      deliveries.update(event);
+      deliver();
     },
   });
 
@@ -204,6 +223,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   if (pending.length) say(`Recording the baseline for ${pending.join(", ")}: what is public now is kept and none of it is reported as new.`);
 
   const startedAt = new Date().toISOString();
+  let stopping = false;
   const health = () => {
     const stats = requests.stats();
     const sources = Object.fromEntries([...watcher.status].map(([name, status]) => [name, { ...status, requests: stats[name] ?? { lastHour: 0, total: 0, notModified: 0 } }]));
@@ -233,8 +253,16 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   }
   watcher.start();
   deliveries.start();
+  // Warms the pool index for the tokens of recent events, one at a time, so their next event goes out with its worth.
+  void (async () => {
+    const recent = [...new Set(log.all().slice(-200).flatMap((event) => (!event.baseline && event.token.address ? [event.token.address] : [])))].slice(-30);
+    for (const address of recent) {
+      if (stopping) return;
+      await marketCap(reader, address as `0x${string}`, capKept, new Date(), undefined, await createdBlock(address as `0x${string}`)).catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 10_000).unref());
+    }
+  })();
 
-  let stopping = false;
   const stop = async () => {
     if (stopping) return;
     stopping = true;

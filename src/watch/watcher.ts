@@ -35,6 +35,19 @@ export function backoffIn(error: unknown): Backoff | undefined {
   return undefined;
 }
 
+/** A context being read: what is ready now, with `pending` naming what is not, and the whole once every part is read. */
+export interface Reading {
+  now(): Record<string, unknown>;
+  done: Promise<Record<string, unknown>>;
+}
+
+/** A context read at once, as a test or a watcher with nothing slow to read gives it. */
+export const readAtOnce = (context: Promise<Record<string, unknown>>): Reading => {
+  let ready: Record<string, unknown> | undefined;
+  const done = context.then((value) => (ready = value));
+  return { now: () => ready ?? { pending: ["context"] }, done };
+};
+
 /** The longest a source that keeps failing waits between tries. */
 export const MAX_WAIT_MS = 30 * 60_000;
 
@@ -43,14 +56,19 @@ export interface WatcherOptions {
   state: StateFile;
   pollers: readonly Poller[];
   /**
-   * What goes in a new event's `context`. It is read after the event is written, never on a poller's path; a failure is
-   * written into the context rather than holding the event back.
+   * What goes in a new event's `context`. It is read after the event is written, never on a poller's path. The event goes
+   * out with what is ready after `first` milliseconds, and the rest follows as an update; a failure is written into the
+   * context rather than holding the event back.
    */
-  context?: (event: WatchEvent) => Promise<Record<string, unknown>>;
-  /** How many contexts are read at once. */
+  context?: (event: WatchEvent) => Reading | Promise<Record<string, unknown>>;
+  /** How long an event waits for its context before it goes out with what is ready. */
+  first?: number;
+  /** How many events wait for their context at once. */
   readers?: number;
   /** Called with each new event once it is published, in id order, never with a baseline row. */
   onEvent?: (event: WatchEvent) => void;
+  /** Called with an event whose context was finished after it went out. */
+  onUpdate?: (event: WatchEvent) => void;
   say?: (message: string) => void;
   /** Takes anything secret out of a message before it is logged or shown, such as a node's address. */
   redact?: (text: string) => string;
@@ -58,6 +76,8 @@ export interface WatcherOptions {
 }
 
 export const CONTEXT_READERS = 2;
+/** The longest an event waits for its context before it goes out with what is ready. */
+export const FIRST_MS = 10_000;
 
 /** An error in one line: a client library's short message and details rather than its full text, which repeats the request. */
 export function describe(error: unknown): string {
@@ -86,15 +106,36 @@ export class Watcher {
   }
 
   start(): void {
-    // Events written before a restart whose context was never read are read now.
+    // Events written before a restart whose context was never read are read now, and those that went out unfinished are finished.
     for (const event of this.options.log.pending()) this.enqueue(event);
+    for (const event of this.options.log.unfinished()) this.finish(event, this.reading_(event).done);
     this.loops = this.options.pollers.map((poller) => this.loop(poller));
   }
 
-  /** Resolves once every queued context is read and its event published. */
-  idle(): Promise<void> {
-    if (this.queue.length === 0 && this.reading === 0) return Promise.resolve();
-    return new Promise((resolve) => this.drained.add(resolve));
+  /** Resolves once every queued context is read, its event published and every update written. */
+  async idle(): Promise<void> {
+    if (this.queue.length > 0 || this.reading > 0) await new Promise<void>((resolve) => this.drained.add(resolve));
+    while (this.finishing.size > 0) await Promise.all([...this.finishing]);
+  }
+
+  private readonly finishing = new Set<Promise<void>>();
+
+  private reading_(event: WatchEvent): Reading {
+    const made = this.options.context ? this.options.context(event) : readAtOnce(Promise.resolve({}));
+    const reading = "then" in made ? readAtOnce(made) : made;
+    // A failure's own message can carry a node's address, so the event says only that its context was not read.
+    const failed = { unread: ["The context could not be read."] };
+    return { now: () => reading.now(), done: reading.done.catch(() => failed) };
+  }
+
+  /** Writes the rest of an event's context once it is read, as an update, and tells whoever follows the events. */
+  private finish(event: WatchEvent, done: Promise<Record<string, unknown>>): void {
+    const finishing = done.then((context) => {
+      const updated = this.options.log.update(event.id, context);
+      if (updated) this.options.onUpdate?.(updated);
+    });
+    this.finishing.add(finishing);
+    void finishing.finally(() => this.finishing.delete(finishing));
   }
 
   private enqueue(event: WatchEvent): void {
@@ -118,10 +159,20 @@ export class Watcher {
   }
 
   private async read(event: WatchEvent): Promise<void> {
-    const { context, log, onEvent } = this.options;
-    // A failure's own message can carry a node's address, so the event says only that its context was not read.
-    const extra = context ? await context(event).catch(() => ({ unread: ["The context could not be read."] })) : {};
-    for (const published of log.settle(event.id, extra)) if (!published.baseline) onEvent?.(published);
+    const { log, onEvent, context } = this.options;
+    if (!context) {
+      for (const published of log.settle(event.id, {})) if (!published.baseline) onEvent?.(published);
+      return;
+    }
+    const reading = this.reading_(event);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const wait = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), this.options.first ?? FIRST_MS);
+    });
+    const whole = await Promise.race([reading.done, wait]);
+    clearTimeout(timer);
+    for (const published of log.settle(event.id, whole ?? reading.now())) if (!published.baseline) onEvent?.(published);
+    if (!whole) this.finish(event, reading.done);
   }
 
   async stop(): Promise<void> {

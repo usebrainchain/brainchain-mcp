@@ -27,7 +27,8 @@ export const CHANGES_TOOL: Tool = {
     "and `kucoin.listed`, `gate.listed`, `lifi.listed` and `coingecko.listed`, a token's contract appearing on those lists. " +
     "Each event has `id`; `kind`; `token`, with `address`, `symbol` and `name`, any of which can be null, since Robinhood names a token by symbol only; `source`; `ref`, a link, transaction or commit to check it by; " +
     "`at`, when the source dates the change, or null for a source that publishes no date; `observedAt`, when the watcher saw it; `detail`; and `context`. " +
-    "`context.priorTraces` lists the token's dated public steps before the event, as brainchain_token_timeline reads them, and `context.priorEvents` what the watcher had already recorded for the token. " +
+    "`context.worth` is the token's market cap, price and deepest pool's liquidity when the event went out, or null with `worthMissing` saying why; `context.priorTraces` lists the token's dated public steps before the event, as brainchain_token_timeline reads them, and `context.priorEvents` what the watcher had already recorded for the token. " +
+    "An event goes out at most 10 seconds after the watcher sees it, with the context ready by then: `context.pending` names what is still being read, and the event is filled in once it is, so read it again by its `id` to see the rest. " +
     "For a token named only by symbol, `context.matches` lists the Robinhood Chain tokens the watcher knows by that symbol: two tokens can share one, so compare names before reading it as the same token. " +
     "Pass the `next` of your previous answer as `since` to get only what is new; `since` also takes a time in ISO 8601, for what the watcher saw from then on. Without `since` you get the newest events. " +
     "`kinds` keeps some kinds, or every kind from one source, such as `bitgo`; `tokens` keeps some tokens, by contract address, symbol or BitGo id; `limit` caps the answer at 1 to 1,000 events, 100 by default, and `more` says whether more matched. " +
@@ -201,8 +202,8 @@ export const WATCH_TOOL: Tool = {
   title: "Have new public changes about Robinhood Chain tokens sent to you",
   description:
     "Has each new public change about a Robinhood Chain token sent to an https address as the watcher sees it, so an agent or its user hears without asking. " +
-    "`url` can be a Discord or Slack incoming webhook, or a Telegram bot's sendMessage URL with ?chat_id=, which get one line per change: what changed, the token, what it is worth now and the link to check it. " +
-    "Any other https endpoint gets each event as JSON, the same as brainchain_changes returns it, signed: X-BrainChain-Signature is v1= and the hex HMAC-SHA256, keyed with `secret`, of X-BrainChain-Timestamp, a full stop and the body. Refuse a delivery whose timestamp is more than 300 seconds off. " +
+    "`url` can be a Discord or Slack incoming webhook, or a Telegram bot's sendMessage URL with ?chat_id=, which get one line per change: what changed, the token, what it is worth now and the link to check it, and a second short line with the worth when it was read after the change went out. " +
+    "Any other https endpoint gets each event as JSON, the same as brainchain_changes returns it, and later a `{type: \"update\", id, context}` with the finished context when the event went out unfinished, each signed: X-BrainChain-Signature is v1= and the hex HMAC-SHA256, keyed with `secret`, of X-BrainChain-Timestamp, a full stop and the body. Refuse a delivery whose timestamp is more than 300 seconds off. " +
     "`kinds` and `tokens` keep only some changes, as in brainchain_changes. Only changes after the watch is made are sent, in order, each once. " +
     "The answer has `id`, `secret` and `manageToken`. Keep all three private: the watcher shows `manageToken` only this once, and it removes the watch with brainchain_unwatch. The watcher keeps the URL to send to and never shows it again. " +
     "An endpoint that fails is tried again for about two hours, then the watch is switched off. The url must be https, on port 443, at a public address. One address can hold 5 watches and make 10 an hour. " +

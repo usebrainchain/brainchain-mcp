@@ -32,6 +32,8 @@ export interface Watch {
   lastError?: string;
   /** Set once the watch is switched off after failing `MAX_FAILURES` times in a row. */
   off?: { at: string; reason: string };
+  /** Events it was sent before their context was finished, whose finished context is still to be sent, oldest first. */
+  updates?: number[];
 }
 
 /** A failing watch is tried again after these waits, then switched off: about two hours from the first failure. */
@@ -127,10 +129,19 @@ export function line(event: WatchEvent): string {
   return `${change(event, named)}${value} ${link}`;
 }
 
-/** What a watch posts for an event, and the headers that go with it. */
-export function message(watch: Pick<Watch, "id" | "format" | "secret" | "url">, event: WatchEvent, now: number): { body: string; headers: Record<string, string> } {
+/** A chat's follow-up for an event whose worth was read after it went out: one short line. */
+export function followUp(event: WatchEvent): string | undefined {
+  const worth = event.context.worth as { marketCapUsd?: string; liquidityUsd?: string } | null | undefined;
+  if (!worth?.marketCapUsd) return undefined;
+  const { address, symbol, name } = event.token;
+  const label = [name, symbol].find((text) => text && !LINKISH.test(text)) ?? "the token";
+  return `Worth now for ${label}${address ? ` (${short(address)})` : ""}: ${compact(worth.marketCapUsd)} market cap${worth.liquidityUsd ? `, ${compact(worth.liquidityUsd)} in its deepest pool` : ""}.`;
+}
+
+/** What a watch posts for an event, or for an event's finished context with `update`, and the headers that go with it. */
+export function message(watch: Pick<Watch, "id" | "format" | "secret" | "url">, event: WatchEvent, now: number, update = false): { body: string; headers: Record<string, string> } {
   const base = { "Content-Type": "application/json", "User-Agent": "brainchain-watch" };
-  const text = line(event);
+  const text = update ? (followUp(event) ?? "") : line(event);
   switch (watch.format) {
     case "discord":
       return { body: JSON.stringify({ content: text.slice(0, 2000), allowed_mentions: { parse: [] }, flags: 4 }), headers: base };
@@ -141,10 +152,13 @@ export function message(watch: Pick<Watch, "id" | "format" | "secret" | "url">, 
       return { body: JSON.stringify({ chat_id: chat, text: text.slice(0, 4096), link_preview_options: { is_disabled: true } }), headers: base };
     }
     case "webhook": {
-      const body = JSON.stringify(event);
+      const body = JSON.stringify(update ? { type: "update", id: event.id, kind: event.kind, token: event.token, context: event.context } : event);
       const timestamp = String(Math.floor(now / 1000));
       const signature = createHmac("sha256", watch.secret).update(`${timestamp}.${body}`).digest("hex");
-      return { body, headers: { ...base, "X-BrainChain-Watch": watch.id, "X-BrainChain-Event": String(event.id), "X-BrainChain-Timestamp": timestamp, "X-BrainChain-Signature": `v1=${signature}` } };
+      return {
+        body,
+        headers: { ...base, "X-BrainChain-Watch": watch.id, "X-BrainChain-Event": String(event.id), ...(update ? { "X-BrainChain-Update": "1" } : {}), "X-BrainChain-Timestamp": timestamp, "X-BrainChain-Signature": `v1=${signature}` },
+      };
     }
   }
 }
@@ -298,8 +312,31 @@ export class Deliveries {
     }
   }
 
-  /** Sends the watch's matching events in order until it is caught up or one fails; events that do not match move its cursor past them. */
+  /**
+   * Queues an event's finished context for each watch that was sent the event before it was finished: a plain webhook
+   * gets the whole context, a chat the worth, when there is one. A watch not sent the event yet gets it finished.
+   */
+  update(event: WatchEvent): void {
+    for (const watch of this.watches.values()) {
+      if (watch.off || event.baseline || watch.cursor < event.id || !matches(event, watch)) continue;
+      if (watch.format !== "webhook" && !followUp(event)) continue;
+      watch.updates = [...new Set([...(watch.updates ?? []), event.id])].slice(-200);
+      this.dirty = true;
+    }
+  }
+
+  /** Sends a watch's queued updates, then its matching events in order, until it is caught up or one fails. */
   private async next(watch: Watch): Promise<void> {
+    while (watch.updates?.length) {
+      const event = this.options.log.all()[watch.updates[0]! - 1];
+      if (event) {
+        const failure = await this.send(watch, event, true);
+        if (failure) return this.failed(watch, event, failure);
+        watch.failures = 0;
+      }
+      watch.updates.shift();
+      this.dirty = true;
+    }
     for (;;) {
       const waiting = this.options.log.after(watch.cursor);
       const due = waiting.find((event) => !event.baseline && matches(event, watch));
@@ -309,29 +346,33 @@ export class Deliveries {
         this.dirty = true;
       }
       if (!due || watch.off) return;
+      const unfinished = Array.isArray(due.context.pending);
       const failure = await this.send(watch, due);
-      if (!failure) {
-        Object.assign(watch, { cursor: due.id, delivered: watch.delivered + 1, failures: 0 });
-        delete watch.retryAt;
-        delete watch.lastError;
-        this.dirty = true;
-        continue;
-      }
-      watch.failures++;
-      watch.lastError = failure;
-      if (watch.failures >= MAX_FAILURES) {
-        watch.off = { at: new Date(this.clock()).toISOString(), reason: `Switched off after ${watch.failures} failed tries in a row on event ${due.id}; the last: ${failure} Make a new watch to start again.` };
-        delete watch.retryAt;
-        this.options.say?.(`watch ${watch.id} switched off after ${watch.failures} failed tries.`);
-      } else watch.retryAt = this.clock() + RETRY_MS[watch.failures - 1]!;
+      if (failure) return this.failed(watch, due, failure);
+      Object.assign(watch, { cursor: due.id, delivered: watch.delivered + 1, failures: 0 });
+      delete watch.retryAt;
+      delete watch.lastError;
       this.dirty = true;
-      return;
+      // Finished while it was on its way: the finished context follows.
+      if (unfinished && !Array.isArray(due.context.pending)) this.update(due);
     }
   }
 
-  /** Posts one event; the failure, written for the watch's maker, or nothing. */
-  private async send(watch: Watch, event: WatchEvent): Promise<string | undefined> {
-    const { body, headers } = message(watch, event, this.clock());
+  /** Counts a failed try, and switches the watch off once it has failed `MAX_FAILURES` times in a row. */
+  private failed(watch: Watch, event: WatchEvent, failure: string): void {
+    watch.failures++;
+    watch.lastError = failure;
+    if (watch.failures >= MAX_FAILURES) {
+      watch.off = { at: new Date(this.clock()).toISOString(), reason: `Switched off after ${watch.failures} failed tries in a row on event ${event.id}; the last: ${failure} Make a new watch to start again.` };
+      delete watch.retryAt;
+      this.options.say?.(`watch ${watch.id} switched off after ${watch.failures} failed tries.`);
+    } else watch.retryAt = this.clock() + RETRY_MS[watch.failures - 1]!;
+    this.dirty = true;
+  }
+
+  /** Posts one event, or its finished context; the failure, written for the watch's maker, or nothing. */
+  private async send(watch: Watch, event: WatchEvent, update = false): Promise<string | undefined> {
+    const { body, headers } = message(watch, event, this.clock(), update);
     try {
       const { status } = await this.options.post(new URL(watch.url), body, headers);
       // Only the status: echoing what the endpoint said would let a watch read the answers to posts from this address.

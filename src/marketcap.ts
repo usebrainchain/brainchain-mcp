@@ -150,7 +150,12 @@ export interface CapKept {
   changes: Map<string, Promise<bigint>>;
   supply: Map<string, Promise<bigint>>;
   times: Map<string, Promise<bigint>>;
+  /** Each set of pairs' pools found so far, from one block through another: a later read scans only the blocks after. */
+  index: Map<string, { from: bigint; through: bigint; pools: Pool[] }>;
 }
+
+/** Ranges up to this many blocks are searched in one request; longer ones a stretch at a time. */
+export const ONE_RANGE = 200_000n;
 
 const poolCreated = parseAbiItem("event PoolCreated(address indexed token0, address indexed token1, uint24 indexed fee, int24 tickSpacing, address pool)");
 const initialize = parseAbiItem("event Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)");
@@ -178,20 +183,21 @@ const sorted = (a: Address, b: Address): [Address, Address] => (BigInt(a) < BigI
 const same = (a: Address, b: Address) => isAddressEqual(a, b);
 
 /**
- * The pools on Uniswap v3 and v4 created by `upTo` that pair one of `assets` with one of `quotes`, read a stretch at a
- * time from the stretch that holds `from`. Each pair is asked for by both its tokens, one value in each place, which the
- * endpoint searches over a whole stretch; a v3 pool cannot hold ETH itself.
+ * The pools on Uniswap v3 and v4 created from `from` through `to` that pair one of `pairs`, read in one range when it is
+ * short and a stretch at a time when it is not. A whole stretch that has settled is kept. Each pair is asked for by both
+ * its tokens, one value in each place, which the endpoint searches over a whole stretch; a v3 pool cannot hold ETH itself.
  */
-async function poolsFor(reader: ChainHistory, assets: readonly Address[], quotes: readonly Address[], from: bigint, upTo: bigint, newest: bigint, kept: CapKept): Promise<Pool[]> {
-  const pairs = assets.flatMap((asset) => quotes.filter((quote) => !same(asset, quote)).map((quote) => sorted(asset, quote)));
+async function scanPools(reader: ChainHistory, pairs: readonly [Address, Address][], from: bigint, to: bigint, newest: bigint, kept: CapKept): Promise<Pool[]> {
   const full = () => new ChainError("More than 10,000 pools were created for one pair in a single block, more than this tool can read.");
+  const ranges: [bigint, bigint][] = [];
+  if (to - from < ONE_RANGE) ranges.push([from, to]);
+  else for (let start = from; start <= to; start = (start / STRETCH_BLOCKS + 1n) * STRETCH_BLOCKS) ranges.push([start, (start / STRETCH_BLOCKS + 1n) * STRETCH_BLOCKS - 1n < to ? (start / STRETCH_BLOCKS + 1n) * STRETCH_BLOCKS - 1n : to]);
   const found: Pool[] = [];
-  for (let start = (from / STRETCH_BLOCKS) * STRETCH_BLOCKS; start <= upTo; start += STRETCH_BLOCKS) {
-    const end = start + STRETCH_BLOCKS - 1n < newest ? start + STRETCH_BLOCKS - 1n : newest;
+  for (const [start, end] of ranges) {
     for (const [currency0, currency1] of pairs) {
       if (!same(currency0, zeroAddress)) {
         found.push(
-          ...(await settled(kept.pools, `v3:${currency0}:${currency1}:${start}`, end, newest, async () =>
+          ...(await settled(kept.pools, `v3:${currency0}:${currency1}:${start}-${end}`, end, newest, async () =>
             (await allLogs((low, high) => reader.getLogs({ address: UNISWAP_V3, event: poolCreated, args: { token0: currency0, token1: currency1 }, fromBlock: low, toBlock: high, strict: true }), start, end, full)).map(
               (log): Pool => ({ version: "Uniswap v3", key: getAddress(log.args.pool), currency0, currency1, fee: log.args.fee, created: log.blockNumber }),
             ),
@@ -199,7 +205,7 @@ async function poolsFor(reader: ChainHistory, assets: readonly Address[], quotes
         );
       }
       found.push(
-        ...(await settled(kept.pools, `v4:${currency0}:${currency1}:${start}`, end, newest, async () =>
+        ...(await settled(kept.pools, `v4:${currency0}:${currency1}:${start}-${end}`, end, newest, async () =>
           (await allLogs((low, high) => reader.getLogs({ address: UNISWAP_V4, event: initialize, args: { currency0, currency1 }, fromBlock: low, toBlock: high, strict: true }), start, end, full)).map(
             (log): Pool => ({ version: "Uniswap v4", key: log.args.id, currency0, currency1, fee: log.args.fee, hooks: getAddress(log.args.hooks), created: log.blockNumber }),
           ),
@@ -207,7 +213,24 @@ async function poolsFor(reader: ChainHistory, assets: readonly Address[], quotes
       );
     }
   }
-  return found.filter((pool) => pool.created <= upTo);
+  return found;
+}
+
+/**
+ * The pools on Uniswap v3 and v4 created by `upTo` that pair one of `assets` with one of `quotes`, from block `from` on.
+ * What was found is kept as an index through the newest block, so the next read for the same pairs scans only the blocks
+ * after it: a token's pools are searched once from its start, and then a few blocks at a time.
+ */
+async function poolsFor(reader: ChainHistory, assets: readonly Address[], quotes: readonly Address[], from: bigint, upTo: bigint, newest: bigint, kept: CapKept): Promise<Pool[]> {
+  const pairs = assets.flatMap((asset) => quotes.filter((quote) => !same(asset, quote)).map((quote) => sorted(asset, quote)));
+  const key = pairs.map((pair) => pair.join(":")).join(",").toLowerCase();
+  const known = kept.index.get(key);
+  const covered = known !== undefined && known.from <= from;
+  if (!covered || known.through < upTo) {
+    const scanned = await scanPools(reader, pairs, covered ? known.through + 1n : from, newest, newest, kept);
+    kept.index.set(key, { from: covered ? known.from : from, through: newest, pools: [...(covered ? known.pools : []), ...scanned] });
+  }
+  return kept.index.get(key)!.pools.filter((pool) => pool.created <= upTo);
 }
 
 /** The later of two swaps, in chain order. */
@@ -267,7 +290,8 @@ async function lastSwaps(reader: ChainHistory, name: string, pools: readonly Poo
   let from = block + 1n;
   let recent = false;
   while (to >= earliest && block - to < LOOKBACK_BLOCKS) {
-    from = (to / CHUNK_BLOCKS) * CHUNK_BLOCKS;
+    // No pool here traded before the oldest was created, so a chunk starts no earlier than that.
+    from = (to / CHUNK_BLOCKS) * CHUNK_BLOCKS > earliest ? (to / CHUNK_BLOCKS) * CHUNK_BLOCKS : earliest;
     const end = to;
     const live = pools.filter((pool) => pool.created <= end);
     const chunk = await settled(kept.swaps, `${name}:${from}-${end}`, end, newest, () => swapsIn(reader, live, from, end));
@@ -490,14 +514,18 @@ async function minted(reader: ChainHistory, token: Address, start: bigint, block
  * last swap (see `deepest`); a past supply is rebuilt from the token's mints and burns, and given only when the same sum
  * comes to the token's totalSupply at the newest block.
  */
-export async function marketCap(reader: ChainHistory, token: Address, kept: CapKept, now = new Date(), moment?: Moment): Promise<MarketCapBoard> {
+/**
+ * `from`, when given, is a block known to be at or before the token's first transfer, such as the block its contract was
+ * created in: the search for its pools starts there rather than at the start of the chain.
+ */
+export async function marketCap(reader: ChainHistory, token: Address, kept: CapKept, now = new Date(), moment?: Moment, from?: bigint): Promise<MarketCapBoard> {
   if (same(token, USDG)) throw new ChainError("USDG is the dollar this tool prices in: it counts one USDG as one dollar.");
   const newest = await reader.getBlockNumber();
   const facts = await tokenFacts(reader, token, [], newest);
   if (!facts) throw noContract(token);
   const { decimals, supply, name, symbol } = facts;
   const asOf = moment ? await blockOf(reader, moment, newest, kept.times) : { block: newest, at: await blockTime(reader, newest) };
-  const start = await transfersStart(reader, token, newest, kept.starts);
+  const start = from ?? (await transfersStart(reader, token, newest, kept.starts));
   if (start === undefined || start > asOf.block) throw new ChainError(`The contract at ${token} had logged no transfers by block ${asOf.block}, so nobody had traded it.`);
   const label = symbol || "token";
   const asset: Asset = same(token, WETH) ? ETH : { addresses: [token], decimals, symbol: label };
@@ -537,7 +565,7 @@ export async function marketCap(reader: ChainHistory, token: Address, kept: CapK
   };
 }
 
-const kept: CapKept = { starts: new Map(), pools: new Map(), swaps: new Map(), changes: new Map(), supply: new Map(), times: new Map() };
+const kept: CapKept = { starts: new Map(), pools: new Map(), swaps: new Map(), changes: new Map(), supply: new Map(), times: new Map(), index: new Map() };
 
 export function readMarketCap(token: Address, moment?: Moment): Promise<MarketCapBoard> {
   return inTurn((reader) => marketCap(reader, token, kept, new Date(), moment));

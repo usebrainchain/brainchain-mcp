@@ -127,8 +127,9 @@ function lines(path: string): unknown[] {
 /**
  * The watcher's record: one JSON line per event in `events.jsonl`, appended and never rewritten, with an index in memory.
  * An event is written the moment it is found, and its context is read after and appended to `context.jsonl`. An event is
- * published, which is when it is served, streamed and sent, once its context is settled and every event before it is
- * published, so ids reach readers in order and a cursor never skips one. Baseline rows are published as they are written.
+ * published, which is when it is served, streamed and sent, once its first context is settled and every event before it is
+ * published, so ids reach readers in order and a cursor never skips one; what was not ready then follows as an update row
+ * for the same event. Baseline rows are published as they are written.
  */
 export class EventLog {
   readonly path: string;
@@ -231,6 +232,24 @@ export class EventLog {
       if (!event.baseline) this.unsettled.add(event.id);
     }
     return { written: fresh, published: this.advance() };
+  }
+
+  /**
+   * Writes the rest of a published event's context, which was read after it went out, as a row of its own that names the
+   * event. The event is served with it from then on. Returns the event, or nothing for one not yet published.
+   */
+  update(id: number, context: Record<string, unknown>): WatchEvent | undefined {
+    const event = this.events[id - 1];
+    if (!event || this.unsettled.has(id)) return undefined;
+    writeSync(this.contextFd, `${JSON.stringify({ id, update: true, context })}\n`);
+    fsyncSync(this.contextFd);
+    event.context = context;
+    return event;
+  }
+
+  /** Published events whose context went out unfinished, to be read again after a restart. */
+  unfinished(): WatchEvent[] {
+    return this.events.slice(0, this.published).filter((event) => !event.baseline && Array.isArray(event.context.pending));
   }
 
   /** Writes an event's context, and returns the events that became published, in order. */

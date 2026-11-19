@@ -75,7 +75,7 @@ const pool = (at: string) => event({ kind: "pool.created", token: { address: CAS
 describe("an event's context", () => {
   it("lists the token's public steps before the event, BitGo's merge from the log included, and what the log already holds", async () => {
     const { of } = context(filled());
-    const extra = await of(pool("2026-08-07T10:00:00.000Z"));
+    const extra = await of(pool("2026-08-07T10:00:00.000Z")).done;
     expect((extra.priorTraces as { step: string; at: string }[]).map(({ step, at }) => [step, at])).toEqual([
       ["mint", "2026-06-30T10:00:00.000Z"],
       ["custody", "2026-07-28T07:09:00.000Z"],
@@ -91,12 +91,12 @@ describe("an event's context", () => {
     const log = filled();
     const { of, read } = context(log);
     const pair = event({ kind: "robinhood.pair_added", token: { address: null, symbol: "cashcat", name: "Cash Cat" }, source: "Robinhood", ref: "pairs#CASHCAT", at: null, detail: {} });
-    const one = await of(pair);
+    const one = await of(pair).done;
     expect(one.matches).toEqual([{ address: CASHCAT, symbol: "CASHCAT", name: "Cash Cat", kinds: ["kucoin.listed"] }]);
     expect(read).toEqual([CASHCAT]);
     expect(one.priorTraces).toHaveLength(3);
     log.append([{ kind: "lifi.listed", token: { address: OTHER, symbol: "CASHCAT", name: "Cash Cat Copy" }, source: "LI.FI", ref: "lifi", at: null, detail: {}, observedAt: "2026-11-19T00:00:00.000Z" }]);
-    const two = await of(pair);
+    const two = await of(pair).done;
     expect((two.matches as unknown[]).length).toBe(2);
     expect(two.priorTraces).toBeUndefined();
     expect(read).toHaveLength(1);
@@ -104,7 +104,7 @@ describe("an event's context", () => {
 
   it("goes out without the steps, saying why, when the timeline is slow or fails", async () => {
     const { of } = context(filled(), () => new Promise(() => {}), 20);
-    expect(await of(pool("2026-08-07T10:00:00.000Z"))).toMatchObject({ priorTraces: null, unread: ["The token timeline was not read within 0.02 seconds."] });
+    expect(await of(pool("2026-08-07T10:00:00.000Z")).done).toMatchObject({ priorTraces: null, unread: ["The token timeline was not read within 0.02 seconds."] });
   });
 
   it("puts BitGo's merges from the log in the form the timeline reads, one entry per commit", () => {
@@ -116,13 +116,13 @@ describe("an event's context", () => {
   it("says what the token is worth now: its market cap, price and deepest pool, as the market cap tool reads them", async () => {
     const asked: Address[] = [];
     const { of } = context(filled(), undefined, undefined, async (token) => (asked.push(token), CAP));
-    const extra = await of(pool("2026-08-07T10:00:00.000Z"));
+    const extra = await of(pool("2026-08-07T10:00:00.000Z")).done;
     expect(extra.worth).toEqual({ marketCapUsd: "38251409.00", priceUsd: "0.03825", supply: "1000000000", liquidityUsd: "1250000.00", thin: false, pool: { version: "Uniswap v4", id: TX, pairedWith: OTHER }, asOf: CAP.asOf });
     expect([asked, extra.worthMissing]).toEqual([[CASHCAT], undefined]);
   });
 
   it("says why the worth is missing: no pool, too slow, a read that failed, or no address to read", async () => {
-    const reasons = async (worth: (token: Address) => Promise<MarketCapBoard>, ms?: number) => (await context(filled(), undefined, ms, worth).of(pool("2026-08-07T10:00:00.000Z"))).worthMissing;
+    const reasons = async (worth: (token: Address) => Promise<MarketCapBoard>, ms?: number) => (await context(filled(), undefined, ms, worth).of(pool("2026-08-07T10:00:00.000Z")).done).worthMissing;
     expect(await reasons(async () => Promise.reject(new ChainError("No pool on Uniswap v3 or v4 that pairs it with USDG, ETH or WETH traded.")))).toBe("No pool on Uniswap v3 or v4 that pairs it with USDG, ETH or WETH traded.");
     expect(await reasons(() => new Promise(() => {}), 20)).toBe("The market cap was not read within 0.02 seconds.");
     expect(await reasons(async () => Promise.reject(new Error("HTTP request failed.", { cause: new Backoff("rpc answered 429", 1) })))).toBe(
@@ -130,7 +130,7 @@ describe("an event's context", () => {
     );
     // A client library's own error can carry a node's address with its key, so it never reaches the event.
     expect(await reasons(async () => Promise.reject(new Error("HTTP request failed. URL: https://node.example/key")))).toBe("Robinhood Chain or a list could not be read just now.");
-    const unnamed = await context(filled(), undefined, undefined, async () => CAP).of(event({ kind: "robinhood.page_added", token: { address: null, symbol: "NOPE", name: null }, source: "Robinhood", ref: "x", at: null, detail: {} }));
+    const unnamed = await context(filled(), undefined, undefined, async () => CAP).of(event({ kind: "robinhood.page_added", token: { address: null, symbol: "NOPE", name: null }, source: "Robinhood", ref: "x", at: null, detail: {} })).done;
     expect([unnamed.worth, unnamed.worthMissing]).toEqual([null, "No token in the log goes by this symbol with a contract address, so its worth was not read."]);
   });
 
@@ -145,8 +145,21 @@ describe("an event's context", () => {
       say: (line) => said.push(line),
       readers: { chain: (work) => work(reader), readiness: async (_, token) => board(token), approvals: async () => [], sightings: async (token) => sightings(token) },
     });
-    expect((await of(pool("2026-08-07T10:00:00.000Z"))).worthMissing).toBe("Robinhood Chain or a list could not be read just now.");
+    expect((await of(pool("2026-08-07T10:00:00.000Z")).done).worthMissing).toBe("Robinhood Chain or a list could not be read just now.");
     expect(said).toEqual(["event 99: the market cap could not be read: HTTP request failed: 429"]);
+  });
+
+  it("gives what is ready at any moment, naming what is still being read", async () => {
+    let release!: (board: MarketCapBoard) => void;
+    const { of } = context(filled(), undefined, undefined, () => new Promise((resolve) => (release = resolve)));
+    const reading = of(pool("2026-08-07T10:00:00.000Z"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The worth is read first, and the timeline after it.
+    const early = reading.now();
+    expect([early.pending, early.worth, early.priorTraces, early.priorEvents]).toEqual([["worth", "priorTraces"], undefined, undefined, expect.any(Array)]);
+    release(CAP);
+    const whole = await reading.done;
+    expect([whole.pending, (whole.worth as { marketCapUsd: string }).marketCapUsd, (whole.priorTraces as unknown[]).length]).toEqual([undefined, "38251409.00", 2]);
   });
 
   it("puts a market cap board in the shape an event carries", () => {

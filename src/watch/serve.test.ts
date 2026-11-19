@@ -219,6 +219,21 @@ describe("GET /events/stream", () => {
     events.close();
   });
 
+  it("sends an event's finished context as an update frame to a stream that had the event", async () => {
+    const { base, log, served } = await serving();
+    const events = await stream(new URL("/events/stream", base));
+    const { written } = log.append([{ ...found("pool.created", "0xfeed"), observedAt: "2026-11-19T13:00:00.000Z" }]);
+    served.publish(log.settle(written[0]!.id, { pending: ["worth"] }));
+    expect(idOf(await events.next())).toBe(5);
+    served.update(log.update(5, { worth: { marketCapUsd: "1.00" } })!);
+    const update = await events.next();
+    expect(/^id:/m.test(update)).toBe(false);
+    expect([/^event: (.+)$/m.exec(update)?.[1], JSON.parse(/^data: (.+)$/m.exec(update)![1]!)]).toEqual(["update", { id: 5, kind: "pool.created", token: found("pool.created", "x").token, context: { worth: { marketCapUsd: "1.00" } } }]);
+    // A read of the events now shows it finished.
+    expect(((await get(new URL("/events?since=4", base))).body.events as { context: unknown }[])[0]!.context).toEqual({ worth: { marketCapUsd: "1.00" } });
+    events.close();
+  });
+
   it("starts at the newest event without a cursor, and keeps only the kinds and tokens asked for", async () => {
     const { base, log, served } = await serving();
     const pools = await stream(new URL("/events/stream?kinds=pool", base));

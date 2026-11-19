@@ -7,7 +7,7 @@ import { SightingsError } from "../sightings.js";
 import type { MakerWallet } from "../makers.js";
 import { tokenTimeline, type TimelineReaders } from "../timeline.js";
 import type { EventLog, WatchEvent } from "./events.js";
-import { backoffIn, describe } from "./watcher.js";
+import { backoffIn, describe, type Reading } from "./watcher.js";
 
 /** How long the context of one event may take before the event is written without its prior steps. */
 export const CONTEXT_MS = ANSWER_MS;
@@ -80,9 +80,9 @@ class LateError extends Error {}
  * read only for a symbol that names exactly one. The steps and the worth are read side by side, each within `ms`, and one
  * that is missing says why in `unread` or `worthMissing`.
  */
-export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT_MS, say }: ContextOptions): (event: WatchEvent) => Promise<Record<string, unknown>> {
+export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT_MS, say }: ContextOptions): (event: WatchEvent) => Reading {
   const full: TimelineReaders = { ...readers, custody: async () => custodyFromLog(log), listed: async () => [] };
-  return async (event) => {
+  return (event) => {
     const priorEvents = log
       .forToken(event)
       .filter(({ id }) => id < event.id)
@@ -107,25 +107,66 @@ export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT
       const missing = matches
         ? `${matches.length === 0 ? "No token in the log goes" : `${matches.length} tokens in the log go`} by this symbol with a contract address, so its worth was not read.`
         : "The source gives no contract address for this token, so its worth was not read.";
-      return { ...context, worth: null, worthMissing: missing };
+      const whole = { ...context, worth: null, worthMissing: missing };
+      return { now: () => whole, done: Promise.resolve(whole) };
     }
     const late = (what: string) => new LateError(`${what} was not read within ${ms / 1000} seconds.`);
     const before = Date.parse(event.at ?? event.observedAt);
-    const [steps, value] = await Promise.allSettled([
-      within(ms, tokenTimeline(full, target, wallets, times), late("The token timeline")),
-      worth ? within(ms, worth(target), late("The market cap")) : Promise.reject(new LateError("This watcher reads no market cap.")),
-    ]);
-    for (const [what, read] of [["token timeline", steps], ["market cap", value]] as const) {
-      if (read.status === "rejected" && why(read.reason) === UNREAD) say?.(`event ${event.id}: the ${what} could not be read: ${describe(read.reason)}`);
-    }
-    return {
-      ...context,
-      ...(steps.status === "fulfilled"
-        ? { priorTraces: steps.value.steps.filter((step) => Date.parse(step.at) < before), ...(steps.value.unread.length ? { unread: steps.value.unread } : {}) }
-        : { priorTraces: null, unread: [why(steps.reason)] }),
-      ...(value.status === "fulfilled" ? { worth: worthOf(value.value) } : { worth: null, worthMissing: why(value.reason) }),
+    // Each part goes into the context the moment it is read, so what is ready can go out before the rest.
+    const parts: Record<string, Record<string, unknown>> = {};
+    // The worth first: both read the same endpoints, and the worth is what a reader wants soonest.
+    const worthRead = worth ? within(ms, worth(target), late("The market cap")) : Promise.reject(new LateError("This watcher reads no market cap."));
+    const steps = within(
+      ms,
+      worthRead.then(
+        () => tokenTimeline(full, target, wallets, times),
+        () => tokenTimeline(full, target, wallets, times),
+      ),
+      late("The token timeline"),
+    ).then(
+      (board) => (parts.priorTraces = { priorTraces: board.steps.filter((step) => Date.parse(step.at) < before), ...(board.unread.length ? { unread: board.unread } : {}) }),
+      (error: unknown) => {
+        if (why(error) === UNREAD) say?.(`event ${event.id}: the token timeline could not be read: ${describe(error)}`);
+        parts.priorTraces = { priorTraces: null, unread: [why(error)] };
+      },
+    );
+    const value = worthRead.then(
+      (board) => (parts.worth = { worth: worthOf(board) }),
+      (error: unknown) => {
+        if (why(error) === UNREAD) say?.(`event ${event.id}: the market cap could not be read: ${describe(error)}`);
+        parts.worth = { worth: null, worthMissing: why(error) };
+      },
+    );
+    const now = () => {
+      const pending = ["worth", "priorTraces"].filter((part) => !parts[part]);
+      return { ...context, ...parts.priorTraces, ...parts.worth, ...(pending.length ? { pending } : {}) };
     };
+    return { now, done: Promise.all([steps, value]).then(now) };
   };
+}
+
+/**
+ * The block a contract was created in, found by halving on whether it had code: about 27 reads of state and none of logs,
+ * which an archive node answers at once. Nothing when the contract has no code now or the halving fails; a search for its
+ * pools then starts from the chain's first block, as it would without it.
+ */
+export async function createdIn(reader: ChainHistory, contract: Address, newest: bigint): Promise<bigint | undefined> {
+  const has = async (block: bigint) => {
+    const code = await reader.getCode({ address: contract, blockNumber: block });
+    return code !== undefined && code !== "0x";
+  };
+  try {
+    if (!(await has(newest))) return undefined;
+    let [low, high] = [0n, newest];
+    while (low < high) {
+      const middle = (low + high) / 2n;
+      if (await has(middle)) high = middle;
+      else low = middle + 1n;
+    }
+    return low;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Runs a timeline's chain reads against the watcher's own reader, so they share its pace and its count of requests. */

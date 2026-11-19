@@ -200,6 +200,8 @@ export interface Served {
   server: Server;
   /** Sends published events to the open streams that want them. */
   publish(events: readonly WatchEvent[]): void;
+  /** Sends an event's finished context to the open streams that were sent the event, as an `update` frame with no id of its own. */
+  update(event: WatchEvent): void;
   close(): void;
 }
 
@@ -333,6 +335,11 @@ export function serveEvents({ log, health, adminToken, deliveries, trustProxy = 
           if (!event.baseline && matches(event, open.wanted)) push(open, frame(event));
         }
       }
+    },
+    update(event) {
+      if (event.baseline) return;
+      const frame = `event: update\ndata: ${JSON.stringify({ id: event.id, kind: event.kind, token: event.token, context: event.context })}\n\n`;
+      for (const open of streams) if (open.cursor >= event.id && matches(event, open.wanted)) push(open, frame);
     },
     close() {
       for (const { response } of streams) response.end();

@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { compact, Deliveries, formatOf, line, MAX_FAILURES, message, RETRY_MS } from "./deliver.js";
+import { compact, Deliveries, followUp, formatOf, line, MAX_FAILURES, message, RETRY_MS } from "./deliver.js";
 import { EventLog, KINDS, type Found, type WatchEvent } from "./events.js";
 import { DeliveryError, type Post } from "./net.js";
 
@@ -196,5 +196,58 @@ describe("a token's name in a chat", () => {
       expect(text).toContain("EVIL (0x020b…18b4)");
     }
     expect(line(event({ token: { address: null, symbol: "free.money", name: null }, context: {} }))).toContain("a token named like a link");
+  });
+});
+
+describe("a finished context", () => {
+  const worth = { worth: { marketCapUsd: "38251409.00", liquidityUsd: "1250000.00" } };
+
+  it("follows a chat as one short line with the worth, and a plain webhook as a signed update", () => {
+    expect(followUp(event({ context: worth }))).toBe("Worth now for Cash Cat (0x020b…18b4): $38.3M market cap, $1.3M in its deepest pool.");
+    expect(followUp(event({ context: { worth: null, worthMissing: "No pool." } }))).toBeUndefined();
+    const watch = { id: "w".repeat(22), secret: "s".repeat(43), url: "https://hooks.example.com/x" };
+    const { body, headers } = message({ ...watch, format: "webhook" }, event({ context: worth }), 1_795_000_000_000, true);
+    expect(JSON.parse(body)).toEqual({ type: "update", id: 7, kind: "bitgo.pr_opened", token: event().token, context: worth });
+    expect([headers["X-BrainChain-Update"], headers["X-BrainChain-Signature"]]).toEqual(["1", `v1=${createHmac("sha256", watch.secret).update(`1795000000.${body}`).digest("hex")}`]);
+    expect(JSON.parse(message({ ...watch, format: "discord" }, event({ context: worth }), 0, true).body).content).toBe(followUp(event({ context: worth })));
+  });
+
+  it("is sent to a watch that had the event before it was finished, and only then", async () => {
+    const sent: { id: number; update: boolean }[] = [];
+    const { log, deliveries } = harness(async (_url, body) => {
+      const parsed = JSON.parse(body) as { id: number; type?: string };
+      sent.push({ id: parsed.id, update: parsed.type === "update" });
+      return { status: 200, body: "" };
+    });
+    await deliveries.create({ url: "https://hooks.example.com/x" }, "1.2.3.4");
+    const { written } = log.append([{ ...found("bitgo.merged", "early"), observedAt: "2026-11-19T12:00:00Z" }, { ...found("bitgo.merged", "late"), observedAt: "2026-11-19T12:00:00Z" }]);
+    log.settle(written[0]!.id, { pending: ["worth"] });
+    await deliveries.tick();
+    // The first went out unfinished; the second is not published yet, so it will go out finished.
+    deliveries.update(log.update(1, worth)!);
+    log.settle(written[1]!.id, worth);
+    await deliveries.tick();
+    expect(sent).toEqual([{ id: 1, update: false }, { id: 1, update: true }, { id: 2, update: false }]);
+  });
+
+  it("follows an event that was finished while it was on its way", async () => {
+    const sent: string[] = [];
+    let finishNow = () => {};
+    const { log, deliveries } = harness(async (_url, body) => {
+      const parsed = JSON.parse(body) as { id: number; type?: string };
+      sent.push(`${parsed.type ?? "event"} ${parsed.id}`);
+      finishNow();
+      return { status: 200, body: "" };
+    });
+    await deliveries.create({ url: "https://hooks.example.com/x" }, "1.2.3.4");
+    const { written } = log.append([{ ...found("bitgo.merged", "m"), observedAt: "2026-11-19T12:00:00Z" }]);
+    log.settle(written[0]!.id, { pending: ["worth"] });
+    finishNow = () => {
+      finishNow = () => {};
+      log.update(1, worth);
+    };
+    await deliveries.tick();
+    await deliveries.tick();
+    expect(sent).toEqual(["event 1", "update 1"]);
   });
 });

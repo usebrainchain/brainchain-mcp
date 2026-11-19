@@ -38,7 +38,7 @@ const ETH_POOL = hash("15");
 const NEWEST = 118_000_000n;
 const CUTOFF = 21_401_123n;
 const TOKENS = 10n ** 18n;
-const fresh = (): CapKept => ({ starts: new Map(), pools: new Map(), swaps: new Map(), changes: new Map(), supply: new Map(), times: new Map() });
+const fresh = (): CapKept => ({ starts: new Map(), pools: new Map(), swaps: new Map(), changes: new Map(), supply: new Map(), times: new Map(), index: new Map() });
 
 interface Token {
   decimals: number;
@@ -390,6 +390,21 @@ describe("marketCap", () => {
     expect(again).toEqual(first);
     // Only the mints and burns in the stretch that holds the newest block are read again, for the check against totalSupply.
     expect(asked.slice(reads).map(({ event, from }) => `${event} ${from}`)).toEqual(["Transfer 110000000", "Transfer 110000000"]);
+  });
+
+  it("searches for pools from the block it is given, and later only the blocks since, from the index it keeps", async () => {
+    const kept = fresh();
+    const first = chain({ newest: CUTOFF });
+    const board = await marketCap(first.reader, CASHCAT, kept, NOW, undefined, 88_836n);
+    expect(board.pool).toMatchObject({ id: DEEP });
+    const created = (asked: Asked[]) => asked.filter(({ event }) => event === "PoolCreated" || event === "Initialize");
+    expect(created(first.asked)[0]).toMatchObject({ from: 88_836n, to: 9_999_999n });
+    // No search for transfers from the start of the chain: the block given stands for the token's start.
+    expect(first.asked.some(({ event, from }) => event === "Transfer" && from === 0n)).toBe(false);
+    const later = chain({ newest: CUTOFF + 5_000n });
+    expect((await marketCap(later.reader, CASHCAT, kept, NOW, undefined, 88_836n)).pool).toMatchObject({ id: DEEP });
+    expect(created(later.asked).map(({ from, to }) => [from, to])).toEqual(created(later.asked).map(() => [CUTOFF + 1n, CUTOFF + 5_000n]));
+    expect(created(later.asked).length).toBeGreaterThan(0);
   });
 
   it("refuses USDG itself and an address with no contract", async () => {
