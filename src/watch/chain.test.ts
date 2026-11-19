@@ -85,7 +85,7 @@ const approval = (block: bigint, token: Address, owner: Address, value = 1n): Lo
 const transfer = (block: bigint, token: Address, to: Address, value = 10n ** 18n, sender: Address = RANDOM): Log => ({ address: token, blockNumber: block, logIndex: 3, transactionHash: hash(70_000 + Number(block)), eventName: "Transfer", args: { from: sender, to, value } });
 
 /** Firsts that answer from a table, and count how often they were asked. */
-function table(approvals: Record<string, Approval> = {}, receipts: Record<string, Receipt> = {}) {
+function table(approvals: Record<string, Approval> = {}, receipts: Record<string, Receipt | "earlier"> = {}) {
   const asked: string[] = [];
   const firsts: Firsts = {
     approval: async (token, maker) => (asked.push(`approval:${token}:${maker.wallet}`), approvals[`${token}:${maker.wallet}`]),
@@ -149,15 +149,17 @@ describe("the chain poller", () => {
     expect(asked).toHaveLength(2);
   });
 
-  it("reports a followed wallet's first receipt of a token, counted in tokens", async () => {
+  it("reports a followed wallet's first receipt of a token, counted in tokens, and settles a token it had received before quietly", async () => {
     const receipt: Receipt = { at: "2026-08-05T00:00:00.000Z", block: 150, transaction: hash(1), from: RANDOM, value: 25n * 10n ** 17n, confirmed: false };
-    const { firsts } = table({}, { [`${CASHCAT}:${WINTERMUTE.wallet}`]: receipt });
-    const { reader } = endpoint([transfer(150n, CASHCAT, WINTERMUTE.wallet), transfer(151n, CASHCAT, WINTERMUTE.wallet)], { newest: 100n });
-    const { log, run } = harness(reader, firsts);
+    const { firsts, asked } = table({}, { [`${CASHCAT}:${WINTERMUTE.wallet}`]: receipt, [`${PONS}:${WINTERMUTE.wallet}`]: "earlier" });
+    const { reader } = endpoint([transfer(150n, CASHCAT, WINTERMUTE.wallet), transfer(151n, CASHCAT, WINTERMUTE.wallet), transfer(152n, PONS, WINTERMUTE.wallet), transfer(153n, PONS, WINTERMUTE.wallet)], { newest: 100n });
+    const { log, state, run } = harness(reader, firsts);
     await run();
     (reader as { getBlockNumber: () => Promise<bigint> }).getBlockNumber = async () => 200n;
     await run();
     expect(log.all().map(({ kind, detail }) => [kind, detail.amount, detail.from, detail.confirmed])).toEqual([["maker.receipt", "2.5", RANDOM, false]]);
+    expect(asked).toEqual([`receipt:${CASHCAT}:${WINTERMUTE.wallet}`, `receipt:${PONS}:${WINTERMUTE.wallet}`]);
+    expect(state.source("chain").settled).toEqual([`receipt:${CASHCAT.toLowerCase()}:${WINTERMUTE.wallet.toLowerCase()}`, `receipt:${PONS.toLowerCase()}:${WINTERMUTE.wallet.toLowerCase()}`]);
   });
 
   it("reads at most SPAN blocks at a time, halves a range the endpoint finds too full, and says when it is behind", async () => {
@@ -177,12 +179,19 @@ describe("the chain poller", () => {
 });
 
 describe("a wallet's first receipt", () => {
-  it("is its first transfer in of the token, confirmed when the wallet sent the transaction", async () => {
+  it("is its first transfer in of the token within the blocks read, confirmed when the wallet sent the transaction", async () => {
     const own = hash(70_000 + 40);
     const { reader } = endpoint([transfer(30n, CASHCAT, B2C2.wallet, 0n), transfer(40n, CASHCAT, WINTERMUTE.wallet, 5n), transfer(41n, CASHCAT, WINTERMUTE.wallet, 7n)], { from: { [own]: WINTERMUTE.wallet } });
     const firsts = chainFirsts(reader, chainKept());
-    expect(await firsts.receipt(CASHCAT, WINTERMUTE, 1_000n)).toEqual({ at: new Date((1_790_000_000 + 40) * 1000).toISOString(), block: 40, transaction: own, from: RANDOM, value: 5n, confirmed: true });
-    expect(await firsts.receipt(CASHCAT, B2C2, 1_000n)).toBeUndefined();
+    expect(await firsts.receipt(CASHCAT, WINTERMUTE, 35n, 50n)).toEqual({ at: new Date((1_790_000_000 + 40) * 1000).toISOString(), block: 40, transaction: own, from: RANDOM, value: 5n, confirmed: true });
+    expect(await firsts.receipt(CASHCAT, B2C2, 0n, 50n)).toBeUndefined();
+  });
+
+  it("is earlier when the wallet had received the token before, which a stretch too full to search proves", async () => {
+    const { reader, searched } = endpoint([transfer(40n, CASHCAT, WINTERMUTE.wallet, 5n), transfer(41n, CASHCAT, WINTERMUTE.wallet, 7n)], { most: 5 });
+    expect(await chainFirsts(reader, chainKept()).receipt(CASHCAT, WINTERMUTE, 41n, 50n)).toBe("earlier");
+    // Not one range was halved to find when.
+    expect(searched.filter(({ to, from }) => to - from < 5n)).toEqual([]);
   });
 });
 

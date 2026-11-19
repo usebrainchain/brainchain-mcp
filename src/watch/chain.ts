@@ -23,17 +23,19 @@ export interface Receipt extends Dated {
 
 /** How a wallet's first approval and first receipt of a token are found. A test passes its own. */
 export interface Firsts {
+  /** The wallet's first approval of the token, whenever it was made. */
   approval(token: Address, maker: MakerWallet, newest: bigint): Promise<Approval | undefined>;
-  receipt(token: Address, maker: MakerWallet, newest: bigint): Promise<Receipt | undefined>;
+  /** The wallet's first receipt of the token between two blocks, or "earlier" when it had received some before `from`. */
+  receipt(token: Address, maker: MakerWallet, from: bigint, to: bigint): Promise<Receipt | "earlier" | undefined>;
 }
 
 export interface ChainKept {
   approvals: Kept<Approval>;
   starts: Kept<bigint>;
-  receipts: Kept<Receipt>;
+  received: Kept<true>;
 }
 
-export const chainKept = (): ChainKept => ({ approvals: new Map(), starts: new Map(), receipts: new Map() });
+export const chainKept = (): ChainKept => ({ approvals: new Map(), starts: new Map(), received: new Map() });
 
 /** Whether `maker` sent the transaction, or it was sent to the wallet or its Safe: the token's log alone can be written by anyone who deployed it. */
 async function own(reader: ChainHistory, maker: MakerWallet, transaction: Hash): Promise<boolean> {
@@ -42,17 +44,41 @@ async function own(reader: ChainHistory, maker: MakerWallet, transaction: Hash):
   return isAddressEqual(sent.from, maker.wallet) || ours(sent.to);
 }
 
-/** The first transfer of `token` to the wallet, found a stretch at a time from the token's first transfer, as makers.ts finds a first approval. */
-async function firstReceipt(reader: ChainHistory, token: Address, maker: MakerWallet, kept: ChainKept, newest: bigint): Promise<Receipt | undefined> {
-  const start = await transfersStart(reader, token, newest, kept.starts);
-  if (start === undefined) return undefined;
-  return firstSince(
-    kept.receipts,
-    `${token}:${maker.wallet}:receipt`,
-    newest,
-    async (from, to) => {
+const transfersTo = (reader: ChainHistory, token: Address, maker: MakerWallet, from: bigint, to: bigint) =>
+  reader.getLogs({ address: token, event: transferEvent, args: { to: maker.wallet }, fromBlock: from, toBlock: to, strict: true });
+
+/**
+ * Whether the wallet received any of `token` up to block `through`. Only whether, not when: a stretch the endpoint finds
+ * too full or too slow to search has transfers in it, so a busy token is settled in a request or two rather than by a
+ * search through millions of blocks for the oldest one.
+ */
+async function receivedBy(reader: ChainHistory, token: Address, maker: MakerWallet, kept: ChainKept, through: bigint): Promise<boolean> {
+  const start = await transfersStart(reader, token, through, kept.starts);
+  if (start === undefined) return false;
+  const found = await firstSince(
+    kept.received,
+    `${token}:${maker.wallet}:received`,
+    through,
+    (from, to) =>
+      transfersTo(reader, token, maker, from, to).then(
+        (logs) => (logs.some((log) => log.args.value > 0n) ? (true as const) : undefined),
+        (error: unknown) => {
+          if (tooMany(error) || tooSlow(error)) return true as const;
+          throw error;
+        },
+      ),
+    start,
+  );
+  return found === true;
+}
+
+export function chainFirsts(reader: ChainHistory, kept: ChainKept): Firsts {
+  return {
+    approval: async (token, maker, newest) => (await firstApprovals(reader, token, [maker], kept, newest))[0],
+    async receipt(token, maker, from, to) {
+      if (from > 0n && (await receivedBy(reader, token, maker, kept, from - 1n))) return "earlier";
       const log = await earliestLog(
-        (low, high) => reader.getLogs({ address: token, event: transferEvent, args: { to: maker.wallet }, fromBlock: low, toBlock: high, strict: true }),
+        (low, high) => transfersTo(reader, token, maker, low, high),
         from,
         to,
         (transfer) => transfer.args.value > 0n,
@@ -61,14 +87,6 @@ async function firstReceipt(reader: ChainHistory, token: Address, maker: MakerWa
       if (!log) return undefined;
       return { at: await blockTime(reader, log.blockNumber), block: Number(log.blockNumber), transaction: log.transactionHash, from: log.args.from, value: log.args.value, confirmed: await own(reader, maker, log.transactionHash) };
     },
-    start,
-  );
-}
-
-export function chainFirsts(reader: ChainHistory, kept: ChainKept): Firsts {
-  return {
-    approval: async (token, maker, newest) => (await firstApprovals(reader, token, [maker], kept, newest))[0],
-    receipt: (token, maker, newest) => firstReceipt(reader, token, maker, kept, newest),
   };
 }
 
@@ -103,8 +121,9 @@ interface ChainState {
 /**
  * Reads only new blocks, at most `SPAN` at a time, for three things: a pool created on Uniswap v3 or v4 for a token with a
  * public trace, paired with ETH, WETH, USDG or another such token; and a followed wallet's first approval, or first
- * receipt, of any token. The first read only notes the newest block: what came before is the baseline. A first approval or
- * receipt found to be older than the blocks being read is recorded as baseline, so it is never reported as new.
+ * receipt, of any token. The first read only notes the newest block: what came before is the baseline. A first approval
+ * older than the blocks being read is recorded as baseline, and a wallet that had received a token before them is noted as
+ * settled, so neither is reported as new.
  */
 export function chainPoller({ reader, wallets, watched, firsts, interval = CHAIN_INTERVAL }: ChainOptions): Poller {
   const facts = new Map<string, Promise<{ token: EventToken; decimals?: number }>>();
@@ -186,8 +205,13 @@ export function chainPoller({ reader, wallets, watched, firsts, interval = CHAIN
         if (value === 0n || settled.has(key)) continue;
         const maker = makerOf(wallet);
         const contract = getAddress(address);
-        const first = kind === "maker.approval" ? await firsts.approval(contract, maker, to) : await firsts.receipt(contract, maker, to);
+        const first = kind === "maker.approval" ? await firsts.approval(contract, maker, to) : await firsts.receipt(contract, maker, from, to);
         if (!first) continue;
+        if (first === "earlier") {
+          settled.add(key);
+          state.settled = [...settled];
+          continue;
+        }
         const { token, decimals } = await describe(contract);
         const what = "spender" in first ? { spender: first.spender } : { from: first.from, amount: decimals === undefined ? first.value.toString() : formatUnits(first.value, decimals) };
         const detail = { maker: who(maker), ...what, confirmed: first.confirmed, block: first.block, transaction: first.transaction };
