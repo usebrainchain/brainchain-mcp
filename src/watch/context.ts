@@ -7,7 +7,7 @@ import { SightingsError } from "../sightings.js";
 import type { MakerWallet } from "../makers.js";
 import { tokenTimeline, type TimelineReaders } from "../timeline.js";
 import type { EventLog, WatchEvent } from "./events.js";
-import { describe } from "./watcher.js";
+import { backoffIn, describe } from "./watcher.js";
 
 /** How long the context of one event may take before the event is written without its prior steps. */
 export const CONTEXT_MS = ANSWER_MS;
@@ -66,7 +66,9 @@ export const worthOf = (board: MarketCapBoard): Worth => ({
 
 /** Why a read failed, in words written for a reader: a source's own error can carry a node's address, so only ours pass. */
 const UNREAD = "Robinhood Chain or a list could not be read just now.";
-export const why = (error: unknown) => (error instanceof ChainError || error instanceof CustodyError || error instanceof SightingsError || error instanceof LateError ? error.message : UNREAD);
+const ASKED_TO_WAIT = "Robinhood Chain's public endpoint asked the watcher to wait, so this was not read; the long searches it needs are served by that endpoint alone.";
+export const why = (error: unknown) =>
+  error instanceof ChainError || error instanceof CustodyError || error instanceof SightingsError || error instanceof LateError ? error.message : backoffIn(error) ? ASKED_TO_WAIT : UNREAD;
 
 class LateError extends Error {}
 

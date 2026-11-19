@@ -25,14 +25,48 @@ export function rpcSetting(value: string | undefined): URL | undefined {
   return url;
 }
 
+/** The most blocks Chainstack's endpoint searches for logs in one request (read 2026-11-19). */
+export const PRIVATE_SPAN = 10_000n;
+/** A log search up to this many blocks is split into `PRIVATE_SPAN` pieces on the private endpoint; a longer one goes to the public endpoint, which searches ten million at a time. */
+export const MAX_SPLIT = 200_000n;
+/** The public endpoint's own limit on logs in one answer, kept when pieces are joined, so a caller halves a full range as before. */
+const MAX_LOGS = 10_000;
+
+/**
+ * A fetch for an endpoint that searches at most `PRIVATE_SPAN` blocks for logs: a log search over more, up to `MAX_SPLIT`,
+ * is sent as pieces and answered as one, and anything else is sent as it is. A piece that fails fails the whole, so the
+ * fallback takes it to the public endpoint.
+ */
+export function splitting(fetchImpl: typeof fetch): typeof fetch {
+  return async (input, init) => {
+    const call = typeof init?.body === "string" ? (JSON.parse(init.body) as { id?: unknown; method?: unknown; params?: [Record<string, unknown>] }) : undefined;
+    const filter = call?.method === "eth_getLogs" ? call.params?.[0] : undefined;
+    const [from, to] = [filter?.fromBlock, filter?.toBlock].map((block) => (typeof block === "string" && /^0x[0-9a-f]+$/i.test(block) ? BigInt(block) : undefined));
+    if (!call || !filter || from === undefined || to === undefined || to - from + 1n <= PRIVATE_SPAN || to - from + 1n > MAX_SPLIT) return fetchImpl(input, init);
+    const logs: unknown[] = [];
+    for (let low = from; low <= to; low += PRIVATE_SPAN) {
+      const high = low + PRIVATE_SPAN - 1n < to ? low + PRIVATE_SPAN - 1n : to;
+      const body = JSON.stringify({ ...call, params: [{ ...filter, fromBlock: `0x${low.toString(16)}`, toBlock: `0x${high.toString(16)}` }] });
+      const answer = await fetchImpl(input, { ...init, body });
+      if (!answer.ok) return answer;
+      const piece = (await answer.json()) as { result?: unknown[]; error?: unknown };
+      if (!Array.isArray(piece.result)) return Response.json(piece);
+      logs.push(...piece.result);
+      if (logs.length > MAX_LOGS) return Response.json({ jsonrpc: "2.0", id: call.id, error: { code: -32005, message: `logs matched by query exceeds limit of ${MAX_LOGS}` } });
+    }
+    return Response.json({ jsonrpc: "2.0", id: call.id, result: logs });
+  };
+}
+
 /**
  * A reader for Robinhood Chain: the RPC in the setting first, and the public endpoint when it fails, refuses a range it
  * does not serve, or is held back after a 429. Without the setting, the public endpoint alone.
  */
 export function chainReader(requests: Requests, primary?: URL): ChainHistory {
-  const transport = (url: string, gap: number) => http(url, { fetchFn: paced(requests.fetchFor("chain"), gap), retryCount: 2, retryDelay: RETRY_MS, timeout: 15_000 });
-  const publicEndpoint = transport(ROBINHOOD_RPC, PUBLIC_GAP_MS);
-  return createPublicClient({ transport: primary ? fallback([transport(primary.href, PRIVATE_GAP_MS), publicEndpoint], { retryCount: 1 }) : publicEndpoint });
+  const transport = (url: string, fetchImpl: typeof fetch, gap: number) => http(url, { fetchFn: paced(fetchImpl, gap), retryCount: 2, retryDelay: RETRY_MS, timeout: 30_000 });
+  const publicEndpoint = transport(ROBINHOOD_RPC, requests.fetchFor("chain"), PUBLIC_GAP_MS);
+  if (!primary) return createPublicClient({ transport: publicEndpoint });
+  return createPublicClient({ transport: fallback([transport(primary.href, splitting(requests.fetchFor("chain")), PRIVATE_GAP_MS), publicEndpoint], { retryCount: 1 }) });
 }
 
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -30,7 +30,7 @@ export interface SourceStatus {
 }
 
 /** A refusal behind an error, such as one a client library wrapped in its own. */
-function backoffIn(error: unknown): Backoff | undefined {
+export function backoffIn(error: unknown): Backoff | undefined {
   for (let cause = error, depth = 0; cause instanceof Error && depth < 10; cause = cause.cause, depth++) if (cause instanceof Backoff) return cause;
   return undefined;
 }

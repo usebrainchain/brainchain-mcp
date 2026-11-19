@@ -147,7 +147,11 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     lifi(requests),
     coingecko(requests),
   ];
-  const sightings = sightingsReader(requests.fetchFor("context"));
+  // The timeline takes only Trust Wallet's and MetaMask's dates from the sightings, so the context reads their files and no
+  // other list: Bitstamp's robots.txt closes its API to a watcher, and the exchanges' lists are megabytes each.
+  const allSightings = sightingsReader(requests.fetchFor("context"));
+  const GITHUB_HOSTS = new Set(["raw.githubusercontent.com", "github.com", "api.github.com"]);
+  const sightings: typeof allSightings = { get: (source) => (GITHUB_HOSTS.has(new URL(source.url).host) ? allSightings.get(source) : Promise.reject(new Error("Not read by the watcher."))) };
   const context = eventContext({
     log,
     wallets,
@@ -172,6 +176,8 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     state,
     pollers,
     context,
+    // One context at a time: each can take dozens of searches on the public endpoint, which turns away a busy address.
+    readers: 1,
     say,
     redact,
     onEvent: (event: WatchEvent) => {

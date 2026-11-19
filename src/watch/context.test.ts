@@ -11,6 +11,7 @@ import { ChainError, type History as History } from "../history.js";
 import type { MarketCapBoard } from "../marketcap.js";
 import { custodyFromLog, eventContext, worthOf } from "./context.js";
 import { EventLog, type Found, type WatchEvent } from "./events.js";
+import { Backoff } from "./http.js";
 
 const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4" as Address;
 const OTHER = getAddress("0x0000000000000000000000000000000000000c0c");
@@ -124,6 +125,9 @@ describe("an event's context", () => {
     const reasons = async (worth: (token: Address) => Promise<MarketCapBoard>, ms?: number) => (await context(filled(), undefined, ms, worth).of(pool("2026-08-07T10:00:00.000Z"))).worthMissing;
     expect(await reasons(async () => Promise.reject(new ChainError("No pool on Uniswap v3 or v4 that pairs it with USDG, ETH or WETH traded.")))).toBe("No pool on Uniswap v3 or v4 that pairs it with USDG, ETH or WETH traded.");
     expect(await reasons(() => new Promise(() => {}), 20)).toBe("The market cap was not read within 0.02 seconds.");
+    expect(await reasons(async () => Promise.reject(new Error("HTTP request failed.", { cause: new Backoff("rpc answered 429", 1) })))).toBe(
+      "Robinhood Chain's public endpoint asked the watcher to wait, so this was not read; the long searches it needs are served by that endpoint alone.",
+    );
     // A client library's own error can carry a node's address with its key, so it never reaches the event.
     expect(await reasons(async () => Promise.reject(new Error("HTTP request failed. URL: https://node.example/key")))).toBe("Robinhood Chain or a list could not be read just now.");
     const unnamed = await context(filled(), undefined, undefined, async () => CAP).of(event({ kind: "robinhood.page_added", token: { address: null, symbol: "NOPE", name: null }, source: "Robinhood", ref: "x", at: null, detail: {} }));
