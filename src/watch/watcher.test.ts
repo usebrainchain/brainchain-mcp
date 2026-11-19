@@ -236,6 +236,18 @@ describe("an event's context, read in two steps", () => {
     expect(new EventLog(where).all()[0]!.context).toEqual({ priorEvents: [], worth: { marketCapUsd: "38251409.00" } });
   });
 
+  it("sends events found together within one first deadline, not one deadline after another", async () => {
+    const slow = (): Reading => ({ now: () => ({ pending: ["worth"] }), done: new Promise(() => {}) });
+    const poller = scripted([[], [listed("ONE"), listed("TWO"), listed("THREE")]]);
+    const where = dir();
+    const published: number[] = [];
+    const watcher = new Watcher({ log: new EventLog(where), state: new StateFile(where), pollers: [poller], context: slow, first: 100, onEvent: ({ id }) => published.push(id), say: () => {} });
+    await watcher.runOnce(poller);
+    await watcher.runOnce(poller);
+    await new Promise((resolve) => setTimeout(resolve, 170));
+    expect(published).toEqual([1, 2, 3]);
+  });
+
   it("finishes after a restart the contexts that went out unfinished", async () => {
     const where = dir();
     const first = new EventLog(where);

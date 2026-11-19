@@ -225,8 +225,6 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     state,
     pollers,
     context,
-    // One context at a time: each can take dozens of searches on the public endpoint, which turns away a busy address.
-    readers: 1,
     say,
     redact,
     onEvent: (event: WatchEvent) => {

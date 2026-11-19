@@ -75,7 +75,11 @@ export interface WatcherOptions {
   clock?: () => number;
 }
 
-export const CONTEXT_READERS = 2;
+/**
+ * How many events wait for their context at once. Each waits at most `FIRST_MS` and the rest is read after it goes out,
+ * and every read shares one paced client per endpoint, so this bounds only how long a burst of events waits in line.
+ */
+export const CONTEXT_READERS = 8;
 /** The longest an event waits for its context before it goes out with what is ready: under the ten seconds promised, so a chain event is out within about 20 seconds of its block. */
 export const FIRST_MS = 8_000;
 
