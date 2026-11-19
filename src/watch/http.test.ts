@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { useGitHubToken } from "../github.js";
 
 import { Backoff, FIRST_REFUSED_MS, GITHUB_RESERVE, QUIET_MS, Requests } from "./http.js";
 
@@ -22,6 +24,8 @@ function serving(answer: (sent: Sent) => Response) {
 }
 
 describe("the watcher's requests", () => {
+  afterEach(() => void useGitHubToken(undefined));
+
   it("ask again with the validators only once what the answer said was recorded, and count a 304 as nothing new", async () => {
     const { sent, fetchImpl } = serving(({ headers }) => (headers.get("if-none-match") === '"v1"' ? new Response(null, { status: 304 }) : new Response("[]", { headers: { etag: '"v1"', "last-modified": "Wed, 18 Nov 2026 17:02:42 GMT" } })));
     const requests = new Requests({ fetch: fetchImpl });
@@ -46,7 +50,8 @@ describe("the watcher's requests", () => {
 
   it("send GITHUB_TOKEN to GitHub's API alone", async () => {
     const { sent, fetchImpl } = serving(() => new Response("[]"));
-    const requests = new Requests({ fetch: fetchImpl, githubToken: "ghp_0123456789abcdefghij" });
+    useGitHubToken("ghp_0123456789abcdefghij");
+    const requests = new Requests({ fetch: fetchImpl });
     await requests.get("bitgo-prs", API);
     await requests.get("bitgo-lists", RAW);
     await requests.fetchFor("bitgo-lists")(API);

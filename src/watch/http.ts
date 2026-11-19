@@ -1,3 +1,5 @@
+import { gitHubAuth, hasGitHubToken } from "../github.js";
+
 /** A request held back, by a host that refused or by the watcher's own budget, until `until`. */
 export class Backoff extends Error {
   constructor(
@@ -62,7 +64,6 @@ const GITHUB_API = "api.github.com";
 export interface RequestsOptions {
   fetch?: typeof fetch;
   clock?: () => number;
-  githubToken?: string;
   allowances?: readonly Allowance[];
   validators?: Record<string, Validators>;
 }
@@ -70,12 +71,11 @@ export interface RequestsOptions {
 /**
  * Every request the watcher makes goes through here: counted by the source that made it, held to the allowance of its
  * host, and refused at once while a host that turned the watcher away has not said it is ready again. GitHub's API is
- * read with GITHUB_TOKEN when it is set; no other host is sent a key.
+ * read with the token useGitHubToken set, as the MCP server reads it; no other host is sent a key.
  */
 export class Requests {
   private readonly fetchImpl: typeof fetch;
   private readonly clock: () => number;
-  private readonly token?: string;
   private readonly allowances: readonly Allowance[];
   private readonly sent = new Map<Allowance, number[]>();
   private readonly blocked = new Map<string, { until: number; message: string; refusals: number; at: number }>();
@@ -83,16 +83,11 @@ export class Requests {
   readonly validators: Record<string, Validators>;
   github?: GitHubLimit;
 
-  constructor({ fetch: fetchImpl = fetch, clock = Date.now, githubToken, allowances = [], validators = {} }: RequestsOptions = {}) {
+  constructor({ fetch: fetchImpl = fetch, clock = Date.now, allowances = [], validators = {} }: RequestsOptions = {}) {
     this.fetchImpl = fetchImpl;
     this.clock = clock;
-    this.token = githubToken;
     this.allowances = allowances;
     this.validators = validators;
-  }
-
-  get hasGitHubToken(): boolean {
-    return this.token !== undefined;
   }
 
   /** A `fetch` for a reader written against it, such as BitGo's or the chain's: its requests count for `source` and keep to the same rules. */
@@ -100,13 +95,13 @@ export class Requests {
     return async (input, init) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const headers = new Headers(init?.headers);
-      for (const [name, value] of Object.entries(this.auth(url))) headers.set(name, value);
+      for (const [name, value] of Object.entries(gitHubAuth(url))) headers.set(name, value);
       return this.send(source, url, { ...init, headers });
     };
   }
 
   async get(source: string, url: string, { accept = "application/json", conditional = false }: GetOptions = {}): Promise<Got> {
-    const headers: Record<string, string> = { Accept: accept, "User-Agent": "brainchain-mcp", ...this.auth(url) };
+    const headers: Record<string, string> = { Accept: accept, "User-Agent": "brainchain-mcp", ...gitHubAuth(url) };
     const kept = conditional ? this.validators[url] : undefined;
     if (kept?.etag) headers["If-None-Match"] = kept.etag;
     if (kept?.lastModified) headers["If-Modified-Since"] = kept.lastModified;
@@ -136,10 +131,6 @@ export class Requests {
   waiting(): Record<string, { until: string; message: string }> {
     const now = this.clock();
     return Object.fromEntries([...this.blocked].filter(([, { until }]) => until > now).map(([host, { until, message }]) => [host, { until: new Date(until).toISOString(), message }]));
-  }
-
-  private auth(url: string): Record<string, string> {
-    return this.token && new URL(url).host === GITHUB_API ? { Authorization: `Bearer ${this.token}` } : {};
   }
 
   private count(source: string) {
@@ -177,7 +168,7 @@ export class Requests {
     const [limit, remaining, reset] = ["limit", "remaining", "reset"].map((name) => Number(response.headers.get(`x-ratelimit-${name}`) ?? NaN));
     if ([limit, remaining, reset].some((value) => Number.isNaN(value))) return;
     this.github = { limit: limit!, remaining: remaining!, reset: reset! * 1000 };
-    const reserve = this.token ? GITHUB_RESERVE.withToken : GITHUB_RESERVE.withoutToken;
+    const reserve = hasGitHubToken() ? GITHUB_RESERVE.withToken : GITHUB_RESERVE.withoutToken;
     if (remaining! <= reserve && response.status < 400) {
       const message = `GitHub has ${remaining} requests left this hour, which the watcher leaves for other use.`;
       this.blocked.set(GITHUB_API, { until: reset! * 1000, message, refusals: 0, at: this.clock() });

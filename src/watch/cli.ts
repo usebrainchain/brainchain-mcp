@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { expandHome } from "../config.js";
+import { hasGitHubToken, useGitHubToken } from "../github.js";
 import { configuredMakers, firstApprovals, MARKET_MAKERS } from "../makers.js";
 import { marketCap, type CapKept } from "../marketcap.js";
 import { ROBINHOOD_RPC } from "../premiums.js";
@@ -74,24 +75,22 @@ export function watchArgs(argv: readonly string[]): WatchArgs {
   return args;
 }
 
-/** GitHub's tokens, classic and fine-grained, are letters, digits and underscores. */
-const GITHUB_TOKEN = /^[A-Za-z0-9_]{20,255}$/;
 export const GITHUB_EVERY = { withToken: 60_000, withoutToken: 10 * 60_000 };
 /** How many requests an hour the watcher allows itself: GitHub's API with and without a key, and each Robinhood Chain endpoint. */
 export const ALLOWANCES = { githubWithToken: 4_000, githubWithoutToken: 50, publicChain: 4_000, privateChain: 20_000 };
 
-/** The GitHub token from GITHUB_TOKEN_FILE or GITHUB_TOKEN, checked. Neither value is ever part of a message. */
-function githubToken(env: Record<string, string | undefined>): { token?: string; note?: string } {
+/**
+ * Reads GitHub with the token in GITHUB_TOKEN_FILE's file or in GITHUB_TOKEN, checked as the MCP server checks it, and says
+ * what is wrong with one it cannot use. Neither value is ever part of a message.
+ */
+function githubToken(env: Record<string, string | undefined>): { token: boolean; note?: string } {
   const file = env.GITHUB_TOKEN_FILE?.trim();
-  if (file) {
-    const path = expandHome(file);
-    if (!existsSync(path)) return { note: "GITHUB_TOKEN_FILE names a file that is not there yet, so GitHub is read without a key until the watcher restarts with it." };
-    const token = readFileSync(path, "utf8").trim();
-    return GITHUB_TOKEN.test(token) ? { token } : { note: "The file GITHUB_TOKEN_FILE names holds no GitHub token, so GitHub is read without a key." };
+  if (file && !existsSync(expandHome(file))) {
+    useGitHubToken(undefined);
+    return { token: false, note: "GITHUB_TOKEN_FILE names a file that is not there yet, so GitHub is read without a key until the watcher restarts with it." };
   }
-  const token = env.GITHUB_TOKEN?.trim() || undefined;
-  if (token && !GITHUB_TOKEN.test(token)) throw new Error("GITHUB_TOKEN is not a GitHub token, which is letters, digits and underscores. Fix it or unset it.");
-  return token ? { token } : {};
+  const problem = useGitHubToken(file ? readFileSync(expandHome(file), "utf8").trim() : env.GITHUB_TOKEN?.trim());
+  return { token: hasGitHubToken(), ...(problem ? { note: problem.replace("Fix it in this server's environment and restart the server.", "Fix it and restart the watcher.") } : {}) };
 }
 
 export async function runWatch(argv: readonly string[], env: Record<string, string | undefined>, version: string): Promise<void> {
@@ -107,7 +106,6 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   const log = new EventLog(dir);
   const state = new StateFile(dir);
   const requests = new Requests({
-    githubToken: token,
     validators: state.state.validators,
     allowances: [
       { hosts: ["api.github.com"], perHour: token ? ALLOWANCES.githubWithToken : ALLOWANCES.githubWithoutToken },
@@ -207,7 +205,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       readAt: new Date().toISOString(),
       events: { total: log.size, baseline: log.baselineSize, lastId: log.lastId, published: log.publishedThrough },
       chain: { block: chain.block ?? null, startBlock: chain.startBlock ?? null, rpc: rpc ? "configured, public endpoint as fallback" : "public endpoint" },
-      github: { token: requests.hasGitHubToken, ...(requests.github ? { limit: requests.github.limit, remaining: requests.github.remaining, reset: new Date(requests.github.reset).toISOString() } : {}) },
+      github: { token, ...(requests.github ? { limit: requests.github.limit, remaining: requests.github.remaining, reset: new Date(requests.github.reset).toISOString() } : {}) },
       watches: deliveries.active,
       waiting,
       sources,
