@@ -34,6 +34,9 @@ CoinGecko's lists. The first run records what is already public as a baseline an
 Environment: GITHUB_TOKEN lets the watcher read GitHub about once a minute; without it each GitHub source is read every
 ten minutes, inside the 60 requests an hour GitHub allows one IP address. BRAINCHAIN_MAKER_WALLETS adds wallets to follow.`;
 
+/** An argument the command cannot take: the usage goes out with it. */
+export class UsageError extends Error {}
+
 export interface WatchArgs {
   state?: string;
   serve?: { host: string; port: number };
@@ -48,14 +51,14 @@ export function watchArgs(argv: readonly string[]): WatchArgs {
     if (arg === "--print") args.print = true;
     else if (arg === "--state") {
       const dir = argv[++i];
-      if (!dir) throw new Error("--state needs a folder.");
+      if (!dir) throw new UsageError("--state needs a folder.");
       args.state = dir;
     } else if (arg === "--serve") {
       const given = argv[++i] ?? "";
       const [, host = "127.0.0.1", port] = /^(?:([\w.-]+|\[[0-9a-fA-F:]+\]):)?(\d{1,5})$/.exec(given) ?? [];
-      if (!port || Number(port) < 1 || Number(port) > 65_535) throw new Error("--serve needs a port, such as 8787, or a host and a port, such as 0.0.0.0:8787.");
+      if (!port || Number(port) < 1 || Number(port) > 65_535) throw new UsageError("--serve needs a port, such as 8787, or a host and a port, such as 0.0.0.0:8787.");
       args.serve = { host: host.replace(/^\[|\]$/g, ""), port: Number(port) };
-    } else throw new Error(`Unknown argument ${arg}.`);
+    } else throw new UsageError(`Unknown argument ${arg}.`);
   }
   return args;
 }

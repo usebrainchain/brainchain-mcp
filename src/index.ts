@@ -88,7 +88,7 @@ if (command === undefined) {
   if (hint) console.error(hint);
   await createServer(process.env, version).connect(new StdioServerTransport());
 } else if (watch) {
-  await watch.runWatch(process.argv.slice(3), process.env, version).catch((error: unknown) => fail(`${error instanceof Error ? error.message : String(error)}\n\n${watch.WATCH_USAGE}`));
+  await watch.runWatch(process.argv.slice(3), process.env, version).catch((error: unknown) => fail(error instanceof watch.UsageError ? `${error.message}\n\n${watch.WATCH_USAGE}` : error instanceof Error ? error.message : String(error)));
 } else if (command === "wallet") {
   const { config, account } = settings();
   const funds = await walletFunds(config, account.address).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
