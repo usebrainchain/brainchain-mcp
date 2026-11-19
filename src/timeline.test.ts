@@ -133,7 +133,7 @@ describe("the timeline tool's words", () => {
   });
 
   it("name the answer's fields as the answer does", () => {
-    const fields = ["`steps`", "`at`", "`step`", "`source`", "`block`", "`transaction`", "`custody`", "`id`", "`name`", "`commit`", "`deploy`", "`mint`", "`to`", "`pool`", "`pairedWith`", "`approval`", "`maker`", "`spender`", "`confirmed`", "`listing`", "`link`", "`until`", "`undated`", "`by`", "`deployed`", "`token`", "`contract`", "`symbol`", "`unread`", "`readAt`", "`atBlock`"];
+    const fields = ["`steps`", "`at`", "`step`", "`source`", "`block`", "`transaction`", "`custody`", "`id`", "`name`", "`commit`", "`deploy`", "`mint`", "`to`", "`pool`", "`pairedWith`", "`approval`", "`maker`", "`spender`", "`confirmed`", "`listing`", "`link`", "`until`", "`undated`", "`by`", "`withheld`", "`deployed`", "`token`", "`contract`", "`symbol`", "`unread`", "`readAt`", "`atBlock`"];
     for (const text of [TIMELINE_TOOL.description!, row]) for (const field of fields) expect(text, field).toContain(field);
   });
 
@@ -231,7 +231,9 @@ describe("tokenTimeline", () => {
     expect(kinds(board)).not.toContain("custody BitGo");
     expect(board.undated).toEqual([{ step: "custody", source: "BitGo", id: "hoodeth:cashcat", name: "Cash Cat", by: "2026-05-09T00:00:00.000Z" }]);
     expect((await timeline(readers, { time: Date.parse("2026-05-09T00:00:00Z") })).undated).toHaveLength(1);
-    expect((await timeline(readers, { time: Date.parse("2026-05-08T23:59:59Z") })).undated).toEqual([]);
+    const before = await timeline(readers, { time: Date.parse("2026-05-08T23:59:59Z") });
+    expect(before.undated).toEqual([]);
+    expect(before.withheld).toEqual([{ step: "custody", source: "BitGo", id: "hoodeth:cashcat", name: "Cash Cat" }]);
   });
 
   it("gives a token BitGo has since removed from its lists its BitGo step", async () => {
@@ -255,7 +257,12 @@ describe("tokenTimeline", () => {
     const board = await timeline(readers);
     expect(kinds(board).filter((kind) => kind.startsWith("listing"))).toEqual([]);
     expect(board.undated).toEqual([{ step: "listing", source: "Trust Wallet", link: TRUST, by: "2026-08-06T23:58:00.000Z" }]);
-    expect((await timeline(readers, { block: 820_611n })).undated).toEqual([]);
+    expect(board).not.toHaveProperty("withheld");
+    // Before the lists were read the listing cannot be placed, so it is named rather than dropped.
+    const cut = await timeline(readers, { block: 820_611n });
+    expect(cut.undated).toEqual([]);
+    expect(cut.withheld).toEqual([{ step: "listing", source: "Trust Wallet", link: TRUST }]);
+    expect((await timeline(readers, { time: Date.parse("2026-08-06T23:58:00Z") })).withheld).toEqual([]);
   });
 
   it("leaves out a list's entry for a token it does not list, or only warns about", async () => {

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { getAddress } from "viem";
 import { describe, expect, it, vi } from "vitest";
 
+import { useGitHubToken } from "./github.js";
 import { KEEP_MS, MAX_KEPT, SIGHTINGS_NAME, SIGHTINGS_TOOL, SightingsError, sightingsReader, tokenSightings, type Page, type SightingsReader, type Source } from "./sightings.js";
 
 const CASHCAT = getAddress("0x020bfc650a365f8bb26819deaabf3e21291018b4");
@@ -21,8 +22,17 @@ const BITSTAMP = "https://www.bitstamp.net/api/v2/currencies/";
 const SITEMAP = "https://robinhood.com/us/en/sitemap-crypto.xml";
 const PAIRS = "https://nummus.robinhood.com/currency_pairs/";
 
+// The commits that added Cash Cat's files, and the pull requests that brought them into master: trustwallet/assets#37322 and MetaMask/contract-metadata#1860.
+const TRUST_COMMIT = "3395ce27756be284b31307bf69637e94b433bd94";
+const METAMASK_COMMIT = "2116181818759a2af67c243714f5aa9cba331b4e";
+const pulls = (repo: string, commit: string) => `https://api.github.com/repos/${repo}/commits/${commit}/pulls`;
+const TRUST_PULLS = pulls("trustwallet/assets", TRUST_COMMIT);
+const METAMASK_PULLS = pulls("MetaMask/contract-metadata", METAMASK_COMMIT);
+
 type Served = Page | Error;
-const feed = (...dates: string[]) => `<feed>${dates.map((date) => `<entry><id>x</id><updated>${date}</updated></entry>`).join("")}</feed>`;
+/** A file's commit feed as GitHub serves it, newest first: each entry is a commit and when it was made. */
+const feed = (...entries: [string, string][]) => `<feed>${entries.map(([commit, date]) => `<entry><id>tag:github.com,2008:Grit::Commit/${commit}</id><updated>${date}</updated></entry>`).join("")}</feed>`;
+const commitOf = (n: number) => n.toString(16).padStart(40, "0");
 const page = (body: string): Page => ({ status: 200, body });
 const json = (value: unknown) => page(JSON.stringify(value));
 const sitemap = (...symbols: string[]) => page(`<urlset>${symbols.map((symbol) => `<url><loc>https://robinhood.com/us/en/crypto/${symbol}/</loc></url>`).join("")}</urlset>`);
@@ -32,9 +42,11 @@ const pair = (code: string, name: string, tradability: "tradable" | "untradable"
 // Shaped as each source answered for Cash Cat on 2026-11-16, cut down to the fields read.
 const everywhere = (): Record<string, Served> => ({
   [TRUST_FILE]: json({ name: "Cash Cat", type: "ROBINHOODCHAIN", symbol: "CASHCAT", decimals: 18, status: "active" }),
-  [TRUST_FEED]: page(feed("2026-07-08T05:36:21Z")),
+  [TRUST_FEED]: page(feed([TRUST_COMMIT, "2026-07-08T05:36:21Z"])),
+  [TRUST_PULLS]: json([{ number: 37322, state: "closed", merged_at: "2026-07-08T05:36:22Z", base: { ref: "master" } }]),
   [METAMASK_FILE]: json({ name: "Cash Cat", symbol: "CASHCAT", decimals: 18, erc20: true }),
-  [METAMASK_FEED]: page(feed("2026-07-08T17:24:52Z")),
+  [METAMASK_FEED]: page(feed([METAMASK_COMMIT, "2026-07-08T17:24:52Z"])),
+  [METAMASK_PULLS]: json([{ number: 1860, state: "closed", merged_at: "2026-07-08T17:24:52Z", base: { ref: "master" } }]),
   [LIFI]: lifi({ address: CASHCAT, chainId: 4663, name: "Cash Cat", symbol: "CASHCAT", decimals: 18 }),
   [COINGECKO]: json({ tokens: [{ chainId: 4663, address: LOWER, name: "Cash Cat", symbol: "CASHCAT", decimals: 18 }] }),
   [KUCOIN]: json({ code: "200000", data: [{ currency: "CASHCAT", fullName: "Cash Cat", chains: [{ chainName: "Robinhood", chainId: "robinhood", contractAddress: CASHCAT, isDepositEnabled: true, isWithdrawEnabled: false }] }, { currency: "LOKI", chains: null }] }),
@@ -68,7 +80,10 @@ describe("the sightings tool's words", () => {
       expect(text).toContain("of letters and digits that the six sources give the token.");
       expect(text).toContain("Two tokens can share a symbol, so compare that `name` with the token's own before reading an entry as this token: a token on Robinhood Chain that calls itself DOGE is not Dogecoin.");
       expect(text).toContain("An entry with a `page` and no `pair` has no name to compare, so it says only that Robinhood has a page under that symbol.");
-      expect(text).toContain("The tool does not read the chain, so an address that is not a token is listed nowhere.");
+      expect(text).toContain("The tool reads the chain only for the time of `atBlock`, so an address that is not a token is listed nowhere.");
+      expect(text).toContain("the time the pull request that added it was merged, which can be days after its commit was made.");
+      expect(text).toContain("A Trust Wallet or MetaMask entry stays when its `since` is at or before that time.");
+      expect(text).toContain("so a token listed there now may or may not have been listed then");
       expect(text).toContain("A list that was read is kept for ten minutes while the server runs, so what an entry says can be that old.");
       expect(text).toContain("its entry then has `listed` false and a `status` of `spam` or `abandoned`.");
       expect(text).toContain("The first answer takes a few seconds, and later ones within those ten minutes come at once.");
@@ -78,10 +93,11 @@ describe("the sightings tool's words", () => {
   });
 
   it("name the answer's fields as the answer does, and are counted with the tools that only read", () => {
-    const fields = ["`token`", "`lists`", "`source`", "`listed`", "`status`", "`since`", "`link`", "`exchanges`", "`deposits`", "`withdrawals`", "`robinhood`", "`symbol`", "`page`", "`pair`", "`name`", "`tradable`", "`bitstamp`", "`unread`", "`readAt`"];
+    const fields = ["`token`", "`lists`", "`source`", "`listed`", "`status`", "`since`", "`link`", "`exchanges`", "`deposits`", "`withdrawals`", "`robinhood`", "`symbol`", "`page`", "`pair`", "`name`", "`tradable`", "`bitstamp`", "`unread`", "`readAt`", "`atBlock`", "`at`", "`until`", "`withheld`"];
     for (const text of [SIGHTINGS_TOOL.description!, row]) for (const field of fields) expect(text).toContain(field);
     expect(SIGHTINGS_TOOL.annotations).toEqual({ readOnlyHint: true, openWorldHint: true });
     expect(SIGHTINGS_TOOL.inputSchema).toMatchObject({ required: ["token"], additionalProperties: false });
+    expect(Object.keys(SIGHTINGS_TOOL.inputSchema.properties!)).toEqual(["token", "atBlock", "at"]);
     expect(readme).toContain(`- \`${SIGHTINGS_NAME}\` `);
   });
 });
@@ -93,7 +109,7 @@ describe("tokenSightings", () => {
       token: { contract: CASHCAT, symbol: "CASHCAT", name: "Cash Cat" },
       readAt: "2026-11-16T22:00:00.000Z",
       lists: [
-        { source: "Trust Wallet", listed: true, since: "2026-07-08T05:36:21.000Z", link: `https://github.com/trustwallet/assets/blob/master/blockchains/robinhoodchain/assets/${CASHCAT}/info.json` },
+        { source: "Trust Wallet", listed: true, since: "2026-07-08T05:36:22.000Z", link: `https://github.com/trustwallet/assets/blob/master/blockchains/robinhoodchain/assets/${CASHCAT}/info.json` },
         { source: "MetaMask", listed: true, since: "2026-07-08T17:24:52.000Z", link: `https://github.com/MetaMask/contract-metadata/blob/master/metadata/eip155:4663/erc20:${CASHCAT}.json` },
         { source: "LI.FI", listed: true },
         { source: "CoinGecko", listed: true },
@@ -195,7 +211,7 @@ describe("tokenSightings", () => {
     // As Trust Wallet's file for 0x02865C612393CeB2482FDc08FB30fCE113305d12 read on 2026-11-17.
     const pages: Record<string, Served> = {
       [TRUST_FILE]: json({ name: "FAKE Ethereum", symbol: "ETH", status: "spam", description: "This token is malicious do not interact" }),
-      [TRUST_FEED]: page(feed("2026-08-01T00:00:00Z")),
+      [TRUST_FEED]: page(feed([commitOf(1), "2026-08-01T00:00:00Z"])),
       [LIFI]: lifi(),
       [COINGECKO]: json({ tokens: [] }),
       [KUCOIN]: json({ code: "200000", data: [] }),
@@ -264,19 +280,105 @@ describe("tokenSightings", () => {
     ]);
   });
 
-  it("dates a listing by the oldest commit of its file, and leaves the date out when the feed is full, empty or unread", async () => {
+  it("dates a listing by when master took its file: the merge of the pull request behind the file's first commit", async () => {
+    // The first commit was made on July 8 and merged on July 10, so the file was public on master from July 10.
     const dated = everywhere();
-    dated[TRUST_FEED] = page(feed("2026-08-01T00:00:00Z", "2026-07-08T05:36:21Z"));
-    dated[METAMASK_FEED] = page(feed(...Array.from({ length: 20 }, (_, i) => `2026-07-${String(i + 1).padStart(2, "0")}T00:00:00Z`)));
-    const { lists } = await sightings(dated);
-    expect(lists[0]).toMatchObject({ source: "Trust Wallet", since: "2026-07-08T05:36:21.000Z" });
-    expect(lists[1]).toEqual({ source: "MetaMask", listed: true, link: expect.stringContaining("MetaMask/contract-metadata") });
+    dated[TRUST_FEED] = page(feed([commitOf(2), "2026-08-01T00:00:00Z"], [commitOf(1), "2026-07-08T05:36:21Z"]));
+    dated[pulls("trustwallet/assets", commitOf(1))] = json([
+      { number: 3, state: "closed", merged_at: null, base: { ref: "master" } },
+      { number: 4, state: "closed", merged_at: "2026-07-09T00:00:00Z", base: { ref: "release" } },
+      { number: 5, state: "closed", merged_at: "2026-07-11T00:00:00Z", base: { ref: "master" } },
+      { number: 6, state: "closed", merged_at: "2026-07-10T00:00:00Z", base: { ref: "master" } },
+    ]);
+    expect((await sightings(dated)).lists[0]).toMatchObject({ source: "Trust Wallet", since: "2026-07-10T00:00:00.000Z" });
+  });
 
-    for (const served of [page(feed()), page("<html>Access denied</html>"), { status: 404, body: "" } as const, new Error("fetch failed")]) {
-      const board = await sightings({ ...everywhere(), [TRUST_FEED]: served });
-      expect(board.lists[0]).toEqual({ source: "Trust Wallet", listed: true, link: expect.stringContaining("trustwallet/assets") });
+  it("leaves the date out when it cannot be shown, and reads no pull request for a feed that may not reach the first commit", async () => {
+    const asked: string[] = [];
+    const watching = (pages: Record<string, Served>): SightingsReader => ({
+      get: (source) => (asked.push(source.url), serving(pages).get(source)),
+    });
+    const undated = (pages: Record<string, Served>) => tokenSightings(watching(pages), CASHCAT, NOW);
+    const full = Array.from({ length: 20 }, (_, i): [string, string] => [commitOf(i + 1), `2026-07-${String(20 - i).padStart(2, "0")}T00:00:00Z`]);
+    for (const [url, served] of [
+      // Pushed to master without a pull request, or merged only into another branch: when master took it is not on record.
+      [TRUST_PULLS, json([])],
+      [TRUST_PULLS, json([{ number: 7, merged_at: "2026-07-08T05:36:22Z", base: { ref: "release" } }])],
+      [TRUST_PULLS, json({ message: "API rate limit exceeded" })],
+      [TRUST_PULLS, new Error("api.github.com answered 403.")],
+      [TRUST_PULLS, { status: 404, body: "" }],
+      [TRUST_FEED, page(feed(...full))],
+      [TRUST_FEED, page(feed())],
+      [TRUST_FEED, page("<feed><entry><id>x</id><updated>2026-07-08T05:36:21Z</updated></entry></feed>")],
+      [TRUST_FEED, page("<html>Access denied</html>")],
+      [TRUST_FEED, { status: 404, body: "" }],
+      [TRUST_FEED, new Error("fetch failed")],
+    ] as const) {
+      asked.length = 0;
+      const board = await undated({ ...everywhere(), [url]: served });
+      expect(board.lists[0], `${url} ${JSON.stringify(served)}`).toEqual({ source: "Trust Wallet", listed: true, link: expect.stringContaining("trustwallet/assets") });
       expect(board.unread).toEqual([]);
+      if (url === TRUST_FEED) expect(asked.filter((read) => read.startsWith("https://api.github.com/repos/trustwallet"))).toEqual([]);
     }
+  });
+
+  it("keeps only what was public by a past time, and names what it cannot place on either side", async () => {
+    const board = await tokenSightings(serving(everywhere()), CASHCAT, NOW, { at: Date.parse("2026-08-06T00:00:00Z") });
+    expect(board).toEqual({
+      chain: "Robinhood Chain",
+      token: { contract: CASHCAT, symbol: "CASHCAT", name: "Cash Cat" },
+      readAt: "2026-11-16T22:00:00.000Z",
+      until: { at: "2026-08-06T00:00:00.000Z" },
+      lists: [
+        { source: "Trust Wallet", listed: true, since: "2026-07-08T05:36:22.000Z", link: `https://github.com/trustwallet/assets/blob/master/blockchains/robinhoodchain/assets/${CASHCAT}/info.json` },
+        { source: "MetaMask", listed: true, since: "2026-07-08T17:24:52.000Z", link: `https://github.com/MetaMask/contract-metadata/blob/master/metadata/eip155:4663/erc20:${CASHCAT}.json` },
+      ],
+      exchanges: [],
+      robinhood: [],
+      withheld: [
+        { source: "LI.FI" },
+        { source: "CoinGecko" },
+        { source: "KuCoin" },
+        { source: "Gate" },
+        { source: "Robinhood's site", symbol: "CASHCAT" },
+        { source: "Robinhood's pairs", symbol: "CASHCAT", name: "Cash Cat" },
+        { source: "Bitstamp", symbol: "CASHCAT" },
+      ],
+      unread: [],
+    });
+  });
+
+  it("leaves out a listing made after the cut-off, to the second of the merge, and says which block a cut-off was given as", async () => {
+    const at = async (time: string, block?: bigint) => tokenSightings(serving(everywhere()), CASHCAT, NOW, { at: Date.parse(time), ...(block !== undefined ? { block } : {}) });
+    expect((await at("2026-07-08T12:00:00Z")).lists.map(({ source }) => source)).toEqual(["Trust Wallet"]);
+    // Trust Wallet's commit is dated a second before the merge; until the merge the file was not on master.
+    expect((await at("2026-07-08T05:36:21Z")).lists).toEqual([]);
+    expect((await at("2026-07-08T05:36:22Z")).lists.map(({ source }) => source)).toEqual(["Trust Wallet"]);
+    expect((await at("2026-07-08T05:36:22Z")).withheld!.map(({ source }) => source)).not.toContain("Trust Wallet");
+    expect((await at("2026-08-06T00:00:00Z", 28_900_542n)).until).toEqual({ block: 28_900_542, at: "2026-08-06T00:00:00.000Z" });
+  });
+
+  it("withholds a listing or a mark it cannot date, and gives no entry for a source that does not list the token now", async () => {
+    const pages = everywhere();
+    pages[METAMASK_PULLS] = json([]);
+    pages[TRUST_FILE] = json({ name: "FAKE Ethereum", symbol: "ETH", status: "spam" });
+    delete pages[COINGECKO];
+    pages[GATE] = json([]);
+    const board = await tokenSightings(serving(pages), CASHCAT, NOW, { at: Date.parse("2026-08-06T00:00:00Z") });
+    expect(board.lists).toEqual([]);
+    expect(board.withheld!.slice(0, 3)).toEqual([
+      { source: "Trust Wallet", status: "spam" },
+      { source: "MetaMask", link: `https://github.com/MetaMask/contract-metadata/blob/master/metadata/eip155:4663/erc20:${CASHCAT}.json` },
+      { source: "LI.FI" },
+    ]);
+    expect(board.withheld!.map(({ source }) => source)).not.toContain("CoinGecko");
+    expect(board.withheld!.map(({ source }) => source)).not.toContain("Gate");
+    expect(board.unread).toEqual(["CoinGecko"]);
+  });
+
+  it("withholds nothing for a cut-off at or after the time the sources were read", async () => {
+    const board = await tokenSightings(serving(everywhere()), CASHCAT, NOW, { at: NOW.getTime() });
+    expect(board).toEqual({ ...(await sightings(everywhere())), until: { at: NOW.toISOString() }, withheld: [] });
   });
 
   it("looks up only a symbol made of letters and digits, and cleans what the sources call the token", async () => {
@@ -354,6 +456,36 @@ describe("sightingsReader", () => {
     await expect(reader.get(strict)).rejects.toThrow("The source did not answer with its list.");
     expect(await reader.get(strict)).toBe("200 list");
     expect(asked.map((url) => url.slice(-1))).toEqual(["a", "a", "g", "b", "b", "c", "c"]);
+  });
+
+  it("keeps a document as long as its source asks, past ten minutes", async () => {
+    let time = 0;
+    const { reader, asked } = fetching(() => new Response("[]"), () => time);
+    const merge = { ...at("pulls"), keep: Infinity };
+    await reader.get(merge);
+    time = 365 * 86_400_000;
+    await reader.get(merge);
+    expect(asked).toHaveLength(1);
+  });
+
+  it("sends GITHUB_TOKEN to GitHub's API only, and nothing like a key anywhere without it", async () => {
+    const headers = new Map<string, Headers>();
+    const reader = sightingsReader((async (url: string, init?: RequestInit) => {
+      headers.set(url, new Headers(init?.headers));
+      return new Response("[]");
+    }) as typeof fetch);
+    const urls = [TRUST_PULLS, TRUST_FILE, TRUST_FEED, LIFI];
+    const token = `ghp_${"a".repeat(36)}`;
+    try {
+      expect(useGitHubToken(token)).toBeUndefined();
+      for (const url of urls) await reader.get({ url, parse: told, keep: 0 });
+      expect(urls.map((url) => headers.get(url)!.get("authorization"))).toEqual([`Bearer ${token}`, null, null, null]);
+      useGitHubToken(undefined);
+      for (const url of urls) await reader.get({ url, parse: told, keep: 0 });
+      expect(urls.map((url) => headers.get(url)!.get("authorization"))).toEqual([null, null, null, null]);
+    } finally {
+      useGitHubToken(undefined);
+    }
   });
 
   it("shares one request between answers asked together, and hands every request an abort signal", async () => {

@@ -17,7 +17,7 @@ export const TIMELINE_TOOL: Tool = {
     "The tool lists dated public steps and does not forecast a listing, so it gives no score. A step is a lead to look into: none says why it happened, and together they do not mean an exchange will list the token. " +
     "`steps` can hold BitGo's merge of the token into its lists (`custody`, with BitGo's `id` and `name` and a link to the `commit`), the contract's creation (`deploy`, given only when the transaction that first minted the token also created its contract), " +
     "its first mint (`mint`, with `to`, the address that received it), the first pool on each Uniswap venue (`pool`, with `pairedWith`), the first approval of the token by each wallet brainchain_market_maker_holdings follows (`approval`, with the wallet as `maker`, the `spender` and `confirmed`), " +
-    "and the first commit of the token's file in Trust Wallet's and MetaMask's lists (`listing`, with its `link`). " +
+    "and the merge that added the token's file to Trust Wallet's and MetaMask's lists (`listing`, with its `link`), dated when the list's master branch took it, not when its commit was made. " +
     "Each step has `at`, `step` and `source`, and one read from the chain also has its `block` and `transaction`. " +
     "brainchain_custody_additions, brainchain_token_readiness, brainchain_market_maker_holdings and brainchain_token_sightings read the same steps and say what each does and does not show: an `approval` counts only when its `confirmed` is true, and anyone can create a pool for any token. " +
     "Pass the token's contract address as `token`; the `contract` of an entry from brainchain_custody_additions works. " +
@@ -25,11 +25,13 @@ export const TIMELINE_TOOL: Tool = {
     "To see only what was public at a point in the past, pass `atBlock`, a block number, or `at`, a time in ISO 8601 such as 2026-11-01T00:00:00Z. " +
     "A step read from the chain is kept when its block is at or before that block, or the last block made at or before that time, and any other step when its time is at or before the block's time, or the time given. `until` then gives the `block` and the time (`at`) used. " +
     "BitGo's merges are read from May 11, 2026, when BitGo added its first Robinhood Chain token, so a token BitGo added at any time since has its merge, including one it has since removed. A token BitGo removed again within 16 merges, a few days at its pace, can be missed. " +
-    "`undated` has a listing whose first commit could not be dated, with `by`, a time it had happened by, in place of `at`. " +
+    "`undated` has a listing whose merge could not be dated, with `by`, a time it had happened by, in place of `at`. " +
+    "With a cut-off, an undated step whose `by` is after it goes to `withheld`: it is public now, and nothing shows whether it was public by then, so it is named rather than left out. " +
     "Robinhood, Bitstamp, KuCoin, Gate, LI.FI and CoinGecko publish no date for a listing, so brainchain_token_sightings reads them and they are not steps here. " +
     "`deployed` says whether a contract is at the address, `token` holds its `contract` and the `name` and `symbol` it gives itself, and `unread` names a source that could not be read just now: BitGo, Trust Wallet or MetaMask. `readAt` is when the answer was made. " +
     "The tool answers one request at a time, in turn with the other tools that read the chain. The first answer for a token can take half a minute; an answer that is not ready after 45 seconds says so, and asking again goes on from where it stopped. " +
     "The first answer after the server starts also reads BitGo's history, with about a dozen of the 60 requests an hour GitHub allows one IP address without a key; the server keeps what it worked out, and later answers read only BitGo's changes since. If that history is not read within 45 seconds, `unread` names BitGo, and asking again goes on from where it stopped. " +
+    "A server whose operator set GITHUB_TOKEN reads GitHub with that token's allowance. " +
     "Free, no key and no payment. Not advice.",
   annotations: { readOnlyHint: true, openWorldHint: true },
   inputSchema: {
@@ -57,8 +59,11 @@ export type Step =
   | ({ at: string; step: "approval"; source: "Robinhood Chain"; maker: ReturnType<typeof who>; spender: Address; confirmed: boolean } & OnChain)
   | { at: string; step: "listing"; source: "Trust Wallet" | "MetaMask"; link: string };
 
+/** Under a cut-off, an undated step not known to have happened by then: public now, but on neither side of the cut. */
+export type Withheld = { step: "custody"; source: "BitGo"; id: string; name?: string } | { step: "listing"; source: "Trust Wallet" | "MetaMask"; link: string };
+
 /** A step whose time is not known, with `by`, a time it had happened by. */
-export type Undated = { step: "custody"; source: "BitGo"; id: string; name?: string; by: string } | { step: "listing"; source: "Trust Wallet" | "MetaMask"; link: string; by: string };
+export type Undated = Withheld & { by: string };
 
 export interface TimelineBoard {
   chain: "Robinhood Chain";
@@ -68,6 +73,7 @@ export interface TimelineBoard {
   deployed: boolean;
   steps: Step[];
   undated: Undated[];
+  withheld?: Withheld[];
   unread: ("BitGo" | "Trust Wallet" | "MetaMask")[];
 }
 
@@ -149,6 +155,7 @@ export async function tokenTimeline(readers: TimelineReaders, token: Address, wa
   // Given a time, a step dated by time is weighed against that time itself, not the time of the last block before it.
   const cut = cutoff && { block: Number(cutoff.block), time: until && "time" in until ? until.time : Date.parse(cutoff.at) };
   const known = (step: Step) => !cut || ("block" in step ? step.block <= cut.block : Date.parse(step.at) <= cut.time);
+  const late = ({ by }: Undated) => cut !== undefined && Date.parse(by) > cut.time;
   return {
     chain: "Robinhood Chain",
     token: { contract: token, ...(readiness.token.name ? { name: readiness.token.name } : {}), ...(readiness.token.symbol ? { symbol: readiness.token.symbol } : {}) },
@@ -156,7 +163,8 @@ export async function tokenTimeline(readers: TimelineReaders, token: Address, wa
     ...(cut ? { until: { block: cut.block, at: new Date(cut.time).toISOString() } } : {}),
     deployed: readiness.deployed,
     steps: steps.filter(known).sort(inOrder),
-    undated: undated.filter(({ by }) => !cut || Date.parse(by) <= cut.time),
+    undated: undated.filter((step) => !late(step)),
+    ...(cut ? { withheld: undated.filter(late).map(({ by, ...step }) => step) } : {}),
     unread,
   };
 }

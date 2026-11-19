@@ -2,7 +2,8 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { Address } from "viem";
 
 import { BY_SYMBOL, TOKEN_INPUT, within } from "./custody.js";
-import { label } from "./history.js";
+import { gitHubAuth } from "./github.js";
+import { blockOf, inTurn, label, type Moment } from "./history.js";
 
 export const SIGHTINGS_NAME = "brainchain_token_sightings";
 
@@ -30,10 +31,12 @@ export const SIGHTINGS_TOOL: Tool = {
     "Pass the token's contract address as `token`; the `contract` of an entry from brainchain_custody_additions works. " +
     BY_SYMBOL +
     "`lists` has an entry for Trust Wallet, MetaMask, LI.FI and CoinGecko, each with its `source` and `listed`. " +
-    "Trust Wallet and MetaMask keep one file for each token in their public code. When the token is listed, their entries add `link`, a link to that file, and `since`, the date of the file's first commit. `since` is left out when that date could not be read. " +
+    "Trust Wallet and MetaMask keep one file for each token in their public code. When the token is listed, their entries add `link`, a link to that file, and `since`, when the list's master branch took the file: the time the pull request that added it was merged, which can be days after its commit was made. " +
+    "`since` is left out when that time cannot be shown: the file reached master without a pull request, it has more commits than GitHub's feed of them shows, or GitHub could not be read just now. " +
+    "Each `since` takes one of the 60 requests an hour GitHub allows one IP address without a key, or of the allowance of the GITHUB_TOKEN the operator set, and is kept while the server runs. " +
     "Trust Wallet also keeps a file for a token it warns about or has dropped: its entry then has `listed` false and a `status` of `spam` or `abandoned`. " +
     "`exchanges` has an entry for KuCoin and Gate, each with its `source`, `listed` and, when listed, whether `deposits` and `withdrawals` are open. " +
-    "All six are matched by the token's contract address. The tool does not read the chain, so an address that is not a token is listed nowhere. " +
+    "All six are matched by the token's contract address. The tool reads the chain only for the time of `atBlock`, so an address that is not a token is listed nowhere. " +
     "Robinhood and Bitstamp, which Robinhood owns, publish no contract addresses, so they are matched by symbol: `robinhood` has an entry for each `symbol` of letters and digits that the six sources give the token. " +
     "`page` says whether Robinhood's public site has a page for that symbol, `pair` whether Robinhood's public list of crypto pairs has it, and `bitstamp` whether Bitstamp lists it on Robinhood Chain. " +
     "For a symbol with a pair, `name` is Robinhood's own name for the asset and `tradable` says whether customers can trade it or only see its price. " +
@@ -42,12 +45,19 @@ export const SIGHTINGS_TOOL: Tool = {
     "`unread` names any source that could not be read just now: Trust Wallet, MetaMask, LI.FI, CoinGecko, KuCoin, Gate, Robinhood's site, Robinhood's pairs or Bitstamp. " +
     "A list or exchange that could not be read has no entry, and a `robinhood` entry leaves out `page`, `pair` or `bitstamp` when its source could not be read. Neither is reported as unlisted. " +
     "`token` holds the `contract` and the `symbol` and `name` the six sources give the token. `readAt` is when the answer was made. A list that was read is kept for ten minutes while the server runs, so what an entry says can be that old. " +
+    "To see only what was public at a point in the past, pass `atBlock`, a block number, or `at`, a time in ISO 8601 such as 2026-08-06T00:00:00Z; `until` then gives the time used (`at`), and the `block` for `atBlock`. " +
+    "A Trust Wallet or MetaMask entry stays when its `since` is at or before that time. The other sources publish no date for a listing, and a list's file can lack one, so a token listed there now may or may not have been listed then: " +
+    "`withheld` names each such source, with the `symbol` for Robinhood's site, Robinhood's pairs and Bitstamp, and the `link` or `status` of a list's file, and `lists`, `exchanges` and `robinhood` leave them out. A source that does not list the token now says nothing about then, so it has no entry. " +
     "The first answer takes a few seconds, and later ones within those ten minutes come at once. " +
     "Free, no key and no payment. Not advice.",
   annotations: { readOnlyHint: true, openWorldHint: true },
   inputSchema: {
     type: "object",
-    properties: { token: TOKEN_INPUT },
+    properties: {
+      token: TOKEN_INPUT,
+      atBlock: { type: "integer", minimum: 0, description: "Optional: a block number. Only the sightings public by the end of that block are listed." },
+      at: { type: "string", description: "Optional, in place of atBlock: a time in ISO 8601, such as 2026-08-06T00:00:00Z. Only the sightings public by then are listed." },
+    },
     required: ["token"],
     additionalProperties: false,
   },
@@ -56,7 +66,7 @@ export const SIGHTINGS_TOOL: Tool = {
 export interface ListSighting {
   source: "Trust Wallet" | "MetaMask" | "LI.FI" | "CoinGecko";
   listed: boolean;
-  /** When the first commit of the token's file was made; only for a list kept as a file per token. */
+  /** When the list's master branch took the token's file: the merge of the pull request that added it. */
   since?: string;
   link?: string;
   /** How Trust Wallet marks a token it keeps a file for and does not list. */
@@ -81,13 +91,25 @@ export interface RobinhoodSighting {
   bitstamp?: boolean;
 }
 
+/** A sighting public now whose first public time cannot be shown, so a cut-off can place it on neither side. */
+export interface WithheldSighting {
+  source: string;
+  symbol?: string;
+  name?: string;
+  link?: string;
+  status?: "spam" | "abandoned";
+}
+
 export interface SightingsBoard {
   chain: "Robinhood Chain";
   token: { contract: Address; symbol?: string; name?: string };
   readAt: string;
+  /** With a cut-off: the time the sightings were cut at, and the block it was given as. */
+  until?: { block?: number; at: string };
   lists: ListSighting[];
   exchanges: ExchangeSighting[];
   robinhood: RobinhoodSighting[];
+  withheld?: WithheldSighting[];
   unread: string[];
 }
 
@@ -100,14 +122,15 @@ export interface Page {
   body: string;
 }
 
-/** A document and the one function that reads it. */
+/** A document and the one function that reads it, and how long what it makes is kept when not `KEEP_MS`. */
 export interface Source<T> {
   url: string;
   parse(page: Page): T;
+  keep?: number;
 }
 
 export interface SightingsReader {
-  /** What a source's `parse` makes of its document, kept for `KEEP_MS`. A read or a parse that failed is not kept. */
+  /** What a source's `parse` makes of its document, kept for its `keep` or `KEEP_MS`. A read or a parse that failed is not kept. */
   get<T>(source: Source<T>): Promise<T>;
 }
 
@@ -223,10 +246,32 @@ function robinhoodPairs(body: string): Map<string, { name?: string; tradable: bo
   );
 }
 
-/** The oldest commit date in a file's commit feed; nothing when the feed is empty, or full and so may not reach the first commit. */
+/**
+ * The oldest commit in a file's commit feed; nothing when the feed is empty, or full and so may not reach the first commit,
+ * or when that entry names no commit.
+ */
 function firstCommit(feed: string): string | undefined {
-  const dates = [...feed.matchAll(/<entry>[\s\S]*?<updated>([^<]+)<\/updated>/g)].map((entry) => Date.parse(entry[1]!)).filter((at) => !Number.isNaN(at));
-  return dates.length > 0 && dates.length < FEED_ENTRIES ? new Date(Math.min(...dates)).toISOString() : undefined;
+  const entries = [...feed.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map(([, entry]) => ({
+    commit: /<id>[^<]*Commit\/([0-9a-f]{40})<\/id>/.exec(entry!)?.[1],
+    at: Date.parse(/<updated>([^<]+)<\/updated>/.exec(entry!)?.[1] ?? ""),
+  }));
+  if (entries.length === 0 || entries.length >= FEED_ENTRIES || entries.some(({ at }) => Number.isNaN(at))) return undefined;
+  return entries.reduce((oldest, entry) => (entry.at < oldest.at ? entry : oldest)).commit;
+}
+
+/**
+ * When a pull request that brought a commit was merged into master, which is when master took the commit: the earliest
+ * such merge, or nothing for a commit pushed without one. A commit's own date is when it was made, which can be days
+ * before it was merged. GitHub's merge time is the time it recorded for the push, or a second after it.
+ */
+function mergedAt({ status, body }: Page): string | undefined {
+  if (status === 404) return undefined;
+  const merges = listIn(JSON.parse(body))
+    .map(record)
+    .filter(({ base, merged_at }) => record(base).ref === "master" && typeof merged_at === "string")
+    .map(({ merged_at }) => Date.parse(merged_at as string))
+    .filter((at) => !Number.isNaN(at));
+  return merges.length > 0 ? new Date(Math.min(...merges)).toISOString() : undefined;
 }
 
 /**
@@ -248,21 +293,27 @@ const GATE = { url: "https://api.gateio.ws/api/v4/spot/currencies", parse: requi
 const ROBINHOOD_PAGES = { url: "https://robinhood.com/us/en/sitemap-crypto.xml", parse: required(robinhoodPages) };
 const ROBINHOOD_PAIRS = { url: "https://nummus.robinhood.com/currency_pairs/", parse: required(robinhoodPairs) };
 const BITSTAMP = { url: "https://www.bitstamp.net/api/v2/currencies/", parse: required(bitstampSymbols) };
-const feedDate = required(firstCommit);
+const feedCommit = required(firstCommit);
 
 /** A source's answer, or that it could not be read. */
 type Read<T> = { value: T } | { failed: true };
 const attempt = <T>(reading: Promise<T>): Promise<Read<T>> => reading.then((value) => ({ value }), () => ({ failed: true as const }));
 
+/** When master took a file: the merge of the pull request behind its first commit. A merge never moves, so it is kept for good. */
+async function filedAt(reader: SightingsReader, repo: string, path: string): Promise<string | undefined> {
+  const commit = await reader.get({ url: `https://github.com/${repo}/commits/master/${path}.atom`, parse: feedCommit });
+  return commit && reader.get({ url: `https://api.github.com/repos/${repo}/commits/${commit}/pulls`, parse: mergedAt, keep: Infinity });
+}
+
 /**
- * A token's entry in a list kept as one file per token in a GitHub repository, with the date of the file's first commit;
- * nothing when the file is not there, and the file's status alone when `listed` says the file does not list the token.
+ * A token's entry in a list kept as one file per token in a GitHub repository, with when master took the file; nothing
+ * when the file is not there, and the file's status alone when `listed` says the file does not list the token.
  */
 async function fileList(reader: SightingsReader, repo: string, path: string, listed: (status: unknown) => boolean): Promise<Filed | Marked | undefined> {
   const entry = await reader.get({ url: `https://raw.githubusercontent.com/${repo}/master/${path}`, parse: tokenFile });
   if (!entry) return undefined;
   if (!listed(entry.status)) return { status: text(entry.status) };
-  const dated = await attempt(reader.get({ url: `https://github.com/${repo}/commits/master/${path}.atom`, parse: feedDate }));
+  const dated = await attempt(filedAt(reader, repo, path));
   return { symbol: text(entry.symbol), name: text(entry.name), ...("value" in dated && dated.value ? { since: dated.value } : {}), link: `https://github.com/${repo}/blob/master/${path}` };
 }
 
@@ -271,7 +322,7 @@ async function fileList(reader: SightingsReader, repo: string, path: string, lis
  * it. Robinhood and Bitstamp know a token by its symbol only, so they are looked up under every symbol the other sources
  * give it, and Robinhood's name for each goes out with it: nothing else says whether it is the same token.
  */
-export async function tokenSightings(reader: SightingsReader, token: Address, now = new Date()): Promise<SightingsBoard> {
+export async function tokenSightings(reader: SightingsReader, token: Address, now = new Date(), until?: { at: number; block?: bigint }): Promise<SightingsBoard> {
   const contract = token.toLowerCase();
   const listing = <T>(source: Source<Map<string, T>>) => attempt(reader.get(source).then((byContract) => byContract.get(contract)));
   const [trust, metamask, lifi, coingecko, kucoin, gate, pages, pairs, bitstamp] = await Promise.all([
@@ -320,7 +371,7 @@ export async function tokenSightings(reader: SightingsReader, token: Address, no
   const name = named.map((source) => label(source.name, 60)).find(Boolean);
   // Robinhood's symbols are letters and digits, so no other is looked up. The check comes before the capitals, which turn a few other letters into these.
   const symbols = [...new Set(given.filter((symbol) => /^[A-Za-z0-9]{1,15}$/.test(symbol)).map((symbol) => symbol.toUpperCase()))];
-  return {
+  const board: SightingsBoard = {
     chain: "Robinhood Chain",
     token: { contract: token, ...(given[0] ? { symbol: given[0] } : {}), ...(name ? { name } : {}) },
     readAt: now.toISOString(),
@@ -334,13 +385,38 @@ export async function tokenSightings(reader: SightingsReader, token: Address, no
     })),
     unread,
   };
+  return until ? cut(board, until) : board;
+}
+
+/**
+ * The board as it stood at `until`, as far as it can be shown. A dated listing stays when master took its file by then and
+ * goes when master took it later. Anything else the token has now, a listing without a date or a mark, an exchange or a
+ * Robinhood symbol, was public by `readAt` and maybe long before: it stays when the cut-off is not before `readAt`, and
+ * otherwise goes to `withheld`. A source that does not list the token now says nothing of then, so it has no entry.
+ */
+function cut(board: SightingsBoard, until: { at: number; block?: bigint }): SightingsBoard {
+  const range = { until: { ...(until.block !== undefined ? { block: Number(until.block) } : {}), at: new Date(until.at).toISOString() } };
+  if (Date.parse(board.readAt) <= until.at) return { ...board, ...range, withheld: [] };
+  const withheld: WithheldSighting[] = [];
+  const lists = board.lists.filter(({ source, listed, since, link, status }) => {
+    if (listed && since) return Date.parse(since) <= until.at;
+    if (listed || status) withheld.push({ source, ...(link ? { link } : {}), ...(status ? { status } : {}) });
+    return false;
+  });
+  for (const { source, listed } of board.exchanges) if (listed) withheld.push({ source });
+  for (const { symbol, page, pair, name, bitstamp } of board.robinhood) {
+    if (page) withheld.push({ source: "Robinhood's site", symbol });
+    if (pair) withheld.push({ source: "Robinhood's pairs", symbol, ...(name ? { name } : {}) });
+    if (bitstamp) withheld.push({ source: "Bitstamp", symbol });
+  }
+  return { ...board, ...range, lists, exchanges: [], robinhood: [], withheld };
 }
 
 /** Reads the sources over HTTPS with no key. Of the documents it keeps, the one read longest ago goes first, so the lists every answer reads stay. */
 export function sightingsReader(fetchImpl: typeof fetch = fetch, clock: () => number = Date.now): SightingsReader {
   const kept = new Map<string, { until: number; parse: unknown; value: Promise<unknown> }>();
   return {
-    get<T>({ url, parse }: Source<T>): Promise<T> {
+    get<T>({ url, parse, keep }: Source<T>): Promise<T> {
       const earlier = kept.get(url);
       kept.delete(url);
       if (earlier && earlier.parse === parse && clock() < earlier.until) {
@@ -350,7 +426,7 @@ export function sightingsReader(fetchImpl: typeof fetch = fetch, clock: () => nu
       }
       if (kept.size >= MAX_KEPT) kept.delete(kept.keys().next().value!);
       const value = (async () => {
-        const response = await fetchImpl(url, { headers: { Accept: "*/*", "User-Agent": "brainchain-mcp" }, signal: AbortSignal.timeout(REQUEST_MS) });
+        const response = await fetchImpl(url, { headers: { Accept: "*/*", "User-Agent": "brainchain-mcp", ...gitHubAuth(url) }, signal: AbortSignal.timeout(REQUEST_MS) });
         if (response.status !== 200 && response.status !== 404) {
           await response.body?.cancel().catch(() => {});
           throw new Error(`${new URL(url).host} answered ${response.status}.`);
@@ -360,7 +436,7 @@ export function sightingsReader(fetchImpl: typeof fetch = fetch, clock: () => nu
       const entry = { until: Infinity, parse, value };
       kept.set(url, entry);
       value.then(
-        () => (entry.until = clock() + KEEP_MS),
+        () => (entry.until = clock() + (keep ?? KEEP_MS)),
         () => {
           if (kept.get(url) === entry) kept.delete(url);
         },
@@ -371,8 +447,11 @@ export function sightingsReader(fetchImpl: typeof fetch = fetch, clock: () => nu
 }
 
 let reader: SightingsReader | undefined;
+const times = new Map<string, Promise<bigint>>();
 
-export function readTokenSightings(token: Address): Promise<SightingsBoard> {
+/** A block is read from the chain for its time, in turn with the other tools that read it; a time needs no chain. */
+export async function readTokenSightings(token: Address, moment?: Moment): Promise<SightingsBoard> {
   reader ??= sightingsReader();
-  return within(ANSWER_MS, tokenSightings(reader, token), new SightingsError("The lists are taking too long to read. Try again in a minute."));
+  const until = moment && ("time" in moment ? { at: moment.time } : await inTurn(async (chain) => blockOf(chain, moment, await chain.getBlockNumber(), times)).then(({ block, at }) => ({ block, at: Date.parse(at) })));
+  return within(ANSWER_MS, tokenSightings(reader, token, new Date(), until), new SightingsError("The lists are taking too long to read. Try again in a minute."));
 }
