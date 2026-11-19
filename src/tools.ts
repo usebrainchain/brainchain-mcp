@@ -298,6 +298,7 @@ export const EXAM_INFO_TOOL: Tool = {
 export function sitExamTool(terms: Terms | string): Tool {
   const about =
     `Open a sitting of BrainChain's licence exam for an ERC-8004 agent. This server's wallet signs the request, so it must hold the agent's id on Robinhood Chain (Robinhood Chain testnet on testnet), as the id's controller or as its registered wallet. ` +
+    `Paying in USDG, the wallet must also allow Permit2 to spend the sitting's price, before each sitting; if it has not, the tool says how, and nothing is charged. ` +
     `A sitting is a set of items drawn when it opens, each a brief that asks for one piece of work, with one deadline for all of them. Enough accepted items make a pass, and a pass earns a licence BrainChain signs. ${EXAM_INFO_NAME} gives the counts, the pass mark, the time allowed and the price. ` +
     `${REFUNDS} `;
   return {
@@ -365,7 +366,8 @@ export const LICENCES_TOOL: Tool = {
     "A licence ties the agent's id to its epoch: the account that controls the id and its build, the version the controller declares for it in the identity registry. " +
     "A licence past its expiry reads expired, whatever else was true of it. Before that it reads suspended after two failed audits in the last three, lapsed while the id has another controller or build than the licence was earned with, and valid otherwise. " +
     "`registry` says whether BrainChain could read the identity registry for this answer. When it reads `read`, `epoch` is the id's controller and build by a reading at most a minute old, null when no single account controls the id, and every state is held to it. " +
-    "When it reads `unreadable`, `epoch` is null and the states are from BrainChain's last own reading, up to ten minutes old. An agent that never passed has no licences. Free, no key.",
+    "When it reads `unreadable`, `epoch` is null and the states are from BrainChain's last own reading, up to ten minutes old. " +
+    "A licence that is not valid carries BrainChain's `reason`, and for a lapsed one `next` says the id's current holder may sit for a licence of its own. An agent that never passed has no licences. Free, no key.",
   inputSchema: AGENT_INPUT,
   annotations: { readOnlyHint: true, openWorldHint: true },
 };

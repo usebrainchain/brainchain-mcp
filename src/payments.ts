@@ -249,10 +249,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const needed = quoted ?? price;
     const what = kind === "exam" ? "sitting" : kind;
     const again = kind === "task" ? "post again" : kind === "grade" ? "send it again" : "sit again";
-    // `approve` with no amount lets Permit2 spend 100 USDG, more than a task or a grade costs. A sitting can cost more, so its command names its price.
-    const command = kind === "exam" ? `${approveCommand} ${formatUnits(needed)}` : approveCommand;
-    const sitting = kind === "exam" ? ` for the ${formatUnits(needed)} ${config.token} this sitting costs` : "";
-    const unapproved = `Permit2 is not yet approved to spend this wallet's ${config.token}${sitting}. Ask your operator to run \`${command}\` once with the key this server uses; it needs a little ETH on ${config.chain}. Nothing was charged.`;
+    // `approve` with no amount lets Permit2 spend 100 USDG, more than a task or a grade costs. A sitting's approval is
+    // its exact price, the smallest that works, so it is used up by that sitting and asked for again before the next.
+    const unapproved =
+      kind === "exam"
+        ? `Permit2 is not yet approved to spend this wallet's ${config.token} for the ${formatUnits(needed)} ${config.token} this sitting costs, and needs to be before each sitting. ` +
+          `Ask your operator to run \`${approveCommand} ${formatUnits(needed)}\`; it allows exactly this sitting's price, and needs a little ETH on ${config.chain}. Nothing was charged.`
+        : `Permit2 is not yet approved to spend this wallet's ${config.token}. Ask your operator to run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on ${config.chain}. Nothing was charged.`;
     if (funds && funds.balance < needed) {
       return `The paying wallet holds ${formatUnits(funds.balance)} ${config.token} on ${config.chain}; a ${what} costs ${formatUnits(needed)}. Nothing was charged. Send at least ${formatUnits(needed - funds.balance)} ${config.token} to ${account().address} on ${config.chain}, then ${again}.`;
     }
@@ -589,7 +592,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const amount = (units: bigint) => `${formatUnits(units)} ${config.token} (${units} base units)`;
     if (price > request.price) {
       throw new Error(
-        `A sitting now costs ${amount(price)}, more than the ${amount(request.price)} passed as price, so nothing was signed. To pay the new price, call brainchain_sit_exam again with price "${price}". Nothing was charged.`,
+        `A sitting costs ${amount(price)}, more than the ${amount(request.price)} passed as price, so nothing was signed. To pay the new price, call brainchain_sit_exam again with price "${price}". Nothing was charged.`,
       );
     }
     const over = (what: string, setting: string) =>
@@ -751,8 +754,15 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   async function licences(agentId: string): Promise<unknown> {
     const view = await read(`${config.desk}/licences/${config.identityChainId}/${agentId}`, true);
     if (!view) throw new Error(`BrainChain at ${config.desk} serves no licences.`);
-    const none = Array.isArray(view.licences) && view.licences.length === 0;
-    return none ? { ...view, next: `Agent ${agentId} holds no licence. brainchain_exam_info says what a sitting takes, and brainchain_sit_exam opens one.` } : view;
+    const held = Array.isArray(view.licences) ? (view.licences as { class?: unknown; state?: unknown }[]) : [];
+    if (held.length === 0) return { ...view, next: `Agent ${agentId} holds no licence. brainchain_exam_info says what a sitting takes, and brainchain_sit_exam opens one.` };
+    // Each licence keeps BrainChain's `reason` as given. A lapsed one is no use to whoever holds the id now, who may earn its own.
+    const lapsed = held.flatMap((licence) => (licence.state === "lapsed" && typeof licence.class === "string" ? [licence.class] : []));
+    if (lapsed.length === 0) return view;
+    return {
+      ...view,
+      next: `Agent ${agentId}'s ${lapsed.join(" and ")} licence has lapsed: the id now has another controller or build than the licence was earned under. The id's current holder may sit for a licence of its own with brainchain_sit_exam.`,
+    };
   }
 
   /**
