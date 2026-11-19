@@ -119,13 +119,33 @@ describe("posting", () => {
     }
   });
 
-  it("treats any reply to a signed payment other than 400 or 402 as possibly charged", async () => {
-    for (const status of [408, 429, 403]) {
-      const { fetchImpl, seen } = fakeDesk(() => new Response("{}", { status }));
-      const d = desk(fetchImpl);
-      const reply = (await d.post(task)) as { order: string; possiblyCharged: boolean };
-      expect(reply).toMatchObject({ possiblyCharged: true, order: orderIdOf(seen[0]!) });
-      expect(d.spent()).toBe(1_000_000n);
+  it("treats a 408 to a signed payment as possibly charged, and any other 4xx but a 409 as refused before settling", async () => {
+    const { fetchImpl, seen } = fakeDesk(() => new Response("{}", { status: 408 }));
+    const timedOut = desk(fetchImpl);
+    expect(await timedOut.post(task)).toMatchObject({ possiblyCharged: true, order: orderIdOf(seen[0]!) });
+    expect(timedOut.spent()).toBe(1_000_000n);
+    for (const status of [403, 413, 429]) {
+      const refused = fakeDesk(() => new Response(JSON.stringify({ error: "Not this one." }), { status }));
+      const d = desk(refused.fetchImpl);
+      await expect(d.post(task)).rejects.toThrow(/^Not this one\. Nothing was charged\.$/);
+      expect(d.spent()).toBe(0n);
+      // Nothing is kept of it, so the same task posted again signs anew.
+      await d.post(task).catch(() => undefined);
+      expect(refused.seen).toHaveLength(2);
+    }
+  });
+
+  it("says how to let Permit2 spend the wallet's USDG when the desk answers 412, with nothing charged or held", async () => {
+    const unapproved = "Permit2 is not yet approved to spend this wallet's test USDG. Run `npx -y brainchain-mcp approve` once with the key this server uses; it needs a little ETH on Robinhood Chain testnet. Nothing was charged.";
+    // x402 answers 412 to a payment Permit2 may not move yet, before the desk takes anything; the code may be in the body or left out.
+    for (const body of [{ error: "permit2_allowance_required" }, {}]) {
+      const stateDir = await mkdtemp(join(tmpdir(), "brainchain-mcp-"));
+      const { fetchImpl } = fakeDesk(() => new Response(JSON.stringify(body), { status: 412 }));
+      const d = createDesk({ config: { ...config, daily: 5_000_000n, stateDir }, signer, approveCommand: "npx -y brainchain-mcp approve", fetch: fetchImpl });
+      await expect(d.post(task)).rejects.toThrow(unapproved);
+      await expect(d.grade({ brief: "Sort 3, 1 and 2.", result: "1, 2, 3" })).rejects.toThrow(unapproved);
+      expect(d.spent()).toBe(0n);
+      expect(JSON.parse(await readFile(join(stateDir, `spend-testnet-${signer.address.toLowerCase()}.json`), "utf8"))).toMatchObject({ units: "0" });
     }
   });
 

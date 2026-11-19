@@ -249,7 +249,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const needed = quoted ?? price;
     const what = kind === "exam" ? "sitting" : kind;
     const again = kind === "task" ? "post again" : kind === "grade" ? "send it again" : "sit again";
-    const unapproved = `Permit2 is not yet approved to spend this wallet's ${config.token}. Run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on ${config.chain}. Nothing was charged.`;
+    // `approve` with no amount lets Permit2 spend 100, more than a task or a grade costs. A sitting can cost more, so its command names its price.
+    const command = kind === "exam" ? `${approveCommand} ${formatUnits(needed)}` : approveCommand;
+    const sitting = kind === "exam" ? ` for the ${formatUnits(needed)} ${config.token} this sitting costs` : "";
+    const unapproved = `Permit2 is not yet approved to spend this wallet's ${config.token}${sitting}. Run \`${command}\` once with the key this server uses; it needs a little ETH on ${config.chain}. Nothing was charged.`;
     if (funds && funds.balance < needed) {
       return `The paying wallet holds ${formatUnits(funds.balance)} ${config.token} on ${config.chain}; a ${what} costs ${formatUnits(needed)}. Nothing was charged. Send at least ${formatUnits(needed - funds.balance)} ${config.token} to ${account().address} on ${config.chain}, then ${again}.`;
     }
@@ -258,7 +261,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     if (!funds && /insufficient_(balance|funds)$/.test(code)) {
       return `The paying wallet holds less than the ${formatUnits(needed)} ${config.token} a ${what} costs on ${config.chain}. Nothing was charged. Send ${config.token} to ${account().address} on ${config.chain}, then ${again}.`;
     }
-    if (!funds && config.permit2 && /allowance/.test(code)) return unapproved;
+    if (config.permit2 && funds?.allowance === undefined && /allowance/.test(code)) return unapproved;
     return code ? `The desk refused the payment: ${sentence(code)} Nothing was charged.` : "The desk refused the payment. Nothing was charged.";
   }
 
@@ -428,10 +431,11 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       const done = { ...reply, ...receipt(id), ...(cancelled ? { duplicate: true } : {}) };
       return kind === "task" ? done : { ...done, ...gradeGuidance(done) };
     }
-    // The desk answers 400 (a brief it refuses, including one too large to post)
-    // before settling. Any other answer to a signed payment may have charged it,
-    // a 402 included unless the desk has no order for it or gave the payment up.
-    if (signed && response.status !== 400 && response.status !== 402) {
+    // A 4xx comes before the desk settles anything: a brief it refuses, including one too large to post, or a
+    // payment it will not take, such as one Permit2 may not move yet (412). A 408 is a proxy's and a 409 can be a
+    // payment the desk is still taking, so those and any other answer to a signed payment may have charged it, a
+    // 402 included unless the desk has no order for it or gave the payment up.
+    if (signed && !refusedBeforeSettling(response.status)) {
       return possiblyCharged(kind, receipt(idOf(orderIdOf(signed))), `The desk answered ${response.status}.`);
     }
     if (signed && response.status === 402) {
@@ -442,7 +446,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
 
     await unreserve(payment);
-    if (response.status === 402) throw new Error(await explainRefusal(kind, reply.error, PRICE[kind]));
+    if (response.status === 402 || response.status === 412) throw new Error(await explainRefusal(kind, refusalCode(response.status, reply), PRICE[kind]));
     throw new Error(typeof reply.error === "string" && reply.error.trim() ? `${sentence(reply.error)} Nothing was charged.` : `The desk answered ${response.status}. Nothing was charged.`);
   }
 
@@ -489,7 +493,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const how = keeps(sitting)
       ? askAgain
       : "Through the paid route only the request that paid for the sitting reads its briefs, and this server does not hold that request. Once the sitting is open, brainchain_exam_status with briefs: true reads them for the wallet that sits it.";
-    const stands = view.state === "paying" ? "The desk is settling this sitting's payment, and opens the sitting once it has." : "The sitting is paid for, and the desk is opening it.";
+    const stands = view.state === "paying" ? "The desk is settling this sitting's payment, and BrainChain opens the sitting once it has." : "The sitting is paid for, and BrainChain is opening it.";
     return { ...named, ...(reason ? { reason } : {}), done: false, next: `${stands}${reason ? ` It is not open yet for this reason: ${sentence(reason)}` : ""} ${how}`, retryAfterSeconds: 30 };
   }
 
@@ -499,13 +503,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   /**
    * What a refusal that names a sitting comes to. One that is open and that this wallet sits is returned with its
    * briefs, which the wallet's signature reads; one that is paid for and not open yet says where it stands. A
-   * sitting this wallet cannot read leaves the desk's refusal as it was said.
+   * sitting this wallet cannot read leaves BrainChain's refusal, with the sitting's id when its words lack it.
    */
   async function agentsSitting(sitting: string, said: string): Promise<unknown> {
     const read = (await examStatus(sitting, true).catch(() => undefined)) as Record<string, unknown> | undefined;
     if (read && Array.isArray(read.briefs)) return { ...read, duplicate: true };
     if (read && beforeOpening(read) && read.state !== "unpaid") return read;
-    throw new Error(said);
+    throw new Error(said.toLowerCase().includes(sitting) ? said : `${sentence(said)} The sitting is ${sitting}, and brainchain_exam_status reads where it stands.`);
   }
 
   /**
@@ -515,8 +519,9 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
    */
   async function follow(key: string, sitting: Unopened, first: Response | Error, signal: AbortSignal): Promise<unknown> {
     unopened.set(key, sitting);
-    const receiptFor = (id: string) => ({ sitting: id, price: `${formatUnits(sitting.hold?.amount ?? 0n)} ${config.token}`, statusUrl: `${config.desk}/exams/${id}` });
-    const receipt = receiptFor(sitting.id);
+    const price = `${formatUnits(sitting.hold?.amount ?? 0n)} ${config.token}`;
+    // A sitting is named only as the desk names it: a payment it has not answered for may have bought nothing to read.
+    const named = (id: unknown) => (typeof id === "string" && /^0x[0-9a-fA-F]{64}$/.test(id) ? { sitting: id.toLowerCase(), statusUrl: `${config.desk}/exams/${id.toLowerCase()}` } : {});
     const uncharged = async (why: string): Promise<never> => {
       unopened.delete(key);
       await unreserve(sitting);
@@ -525,16 +530,16 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     let waiting: Record<string, unknown> | undefined;
     for (let answer = first; ; answer = await ask(sitting, signal)) {
       if (answer instanceof Error) {
-        return waiting ?? { ...receipt, possiblyCharged: true, done: false, error: `The desk did not confirm the sitting (${firstLine(answer)}). The payment may have gone through. ${askAgain}`, retryAfterSeconds: 30 };
+        return waiting ?? { price, possiblyCharged: true, done: false, error: `The desk did not confirm the sitting (${firstLine(answer)}). The payment may have gone through. ${askAgain}`, retryAfterSeconds: 30 };
       }
       const reply = (await until(signal, jsonObject(answer)).catch(() => undefined)) ?? {};
       if (answer.ok && Array.isArray(reply.briefs)) {
         unopened.delete(key);
         // The desk answers a payment it already holds under another id with the sitting that one bought, and cancels this one.
-        const id = typeof reply.sitting === "string" && /^0x[0-9a-fA-F]{64}$/.test(reply.sitting) ? reply.sitting.toLowerCase() : sitting.id;
-        const cancelled = id !== sitting.id;
+        const given = named(reply.sitting);
+        const cancelled = given.sitting !== undefined && given.sitting !== sitting.id;
         if (cancelled) await unreserve(sitting);
-        return { ...reply, ...receiptFor(id), ...(cancelled ? { duplicate: true } : {}), ...sittingGuidance(reply) };
+        return { ...reply, ...given, price: cancelled ? `0 ${config.token}` : price, ...(cancelled ? { duplicate: true } : {}), ...sittingGuidance(reply) };
       }
       const said = typeof reply.error === "string" ? reply.error.trim() : "";
       if (/Nothing was charged/.test(said)) {
@@ -545,9 +550,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
         await unreserve(sitting);
         return agentsSitting(earlier, said);
       }
-      // As for a task or a grade, the desk answers 400 before it settles anything.
-      if (answer.status === 400) return uncharged(said ? `${sentence(said)} Nothing was charged.` : "The desk answered 400. Nothing was charged.");
-      if (answer.status === 402) return uncharged(await explainRefusal("exam", reply.error, sitting.hold?.amount ?? 0n));
+      // As for a task or a grade, a 4xx other than a 408 or a 409 comes before the desk settles anything: a request it
+      // cannot read, or a payment it will not take, such as one Permit2 may not move yet. Nothing is kept of it.
+      if (answer.status === 402 || answer.status === 412) return uncharged(await explainRefusal("exam", refusalCode(answer.status, reply), sitting.hold?.amount ?? 0n));
+      if (refusedBeforeSettling(answer.status)) return uncharged(said ? `${sentence(said)} Nothing was charged.` : `The desk answered ${answer.status}. Nothing was charged.`);
       const reason = said ? ` (${said.replace(/[.!?]+$/, "")})` : "";
       // 409 with the sitting named is the desk still taking the payment. Without one, the desk holds no sitting for the
       // payment and takes it no more, so keeping it would only show it again for the same answer. Its amount stays counted.
@@ -556,11 +562,12 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
         throw new Error(`The desk holds no sitting for that payment and takes it no more${reason}. Call brainchain_sit_exam again to sit: it signs a new payment.`);
       }
       if (answer.status !== 202 && answer.status !== 502 && answer.status !== 409) {
-        return { ...receipt, possiblyCharged: true, done: false, error: `The desk answered ${answer.status}${reason}. The payment may have gone through. ${askAgain}`, retryAfterSeconds: 60 };
+        return { ...named(reply.sitting), price, possiblyCharged: true, done: false, error: `The desk answered ${answer.status}${reason}. The payment may have gone through. ${askAgain}`, retryAfterSeconds: 60 };
       }
-      const told = said || (typeof reply.message === "string" && reply.message.trim()) || "The desk has not opened the sitting yet.";
+      const told = said || (typeof reply.message === "string" && reply.message.trim()) || "BrainChain has not opened the sitting yet.";
       waiting = {
-        ...receipt,
+        ...named(reply.sitting),
+        price,
         ...(typeof reply.state === "string" ? { state: reply.state } : {}),
         ...(typeof reply.reason === "string" ? { reason: reply.reason } : {}),
         done: false,
@@ -583,13 +590,15 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     if (price === undefined) {
       throw new Error(`The desk at ${config.desk} named no price for a sitting on ${config.chain}, so nothing was signed. It may be out of reach, or the exam may not be open on this network: brainchain_exam_info says. Nothing was charged.`);
     }
+    // `price` is given in units, so both are said in the token and in units.
+    const amount = (units: bigint) => `${formatUnits(units)} ${config.token} (${units} units)`;
     if (price > request.price) {
       throw new Error(
-        `The desk asks ${formatUnits(price)} ${config.token} for a sitting, more than the ${formatUnits(request.price)} given as price, so nothing was signed. If that price is accepted, call again with price ${price}, as brainchain_exam_info gives it in priceUnits. Nothing was charged.`,
+        `The desk asks ${amount(price)} for a sitting, more than the ${amount(request.price)} given as price, so nothing was signed. If that price is accepted, call again with price ${price}, as brainchain_exam_info gives it in priceUnits. Nothing was charged.`,
       );
     }
     const over = (limit: bigint, what: string, setting: string) =>
-      `A sitting costs ${formatUnits(price)} ${config.token}, above ${what} of ${formatUnits(limit)} (${setting}). Raise it and restart the server to allow the sitting. Nothing was charged.`;
+      `A sitting costs ${formatUnits(price)} ${config.token}, above ${what} of ${formatUnits(limit)} ${config.token} (${setting}). Raise it and restart the server to allow the sitting. Nothing was charged.`;
     if (config.maxPriceSet && price > config.maxPrice) throw new Error(over(config.maxPrice, "the limit per payment this server was set", "BRAINCHAIN_MAX_PRICE_UNITS"));
     if (price > config.budget) throw new Error(over(config.budget, "this server's budget per run", "BRAINCHAIN_BUDGET_UNITS"));
     if (config.daily !== undefined && price > config.daily) throw new Error(over(config.daily, "this wallet's daily limit", "BRAINCHAIN_DAILY_UNITS"));
@@ -705,10 +714,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
         signal: AbortSignal.timeout(30_000),
       });
     } catch (error) {
-      return unconfirmed(`The desk did not confirm the delivery (${firstLine(error)}).`);
+      return unconfirmed(`BrainChain did not confirm the delivery (${firstLine(error)}).`);
     }
     const reply = (await jsonObject(response)) ?? {};
-    if (response.ok) return { ...reply, next: "Delivered, and the desk judges it next. Read the outcome with brainchain_exam_status." };
+    if (response.ok) return { ...reply, next: "Delivered, and BrainChain judges it next. Read the outcome with brainchain_exam_status." };
     const said = typeof reply.error === "string" ? reply.error.trim() : "";
     // A 5xx can come after the work was stored, whatever it says.
     if (response.status >= 500) return unconfirmed(said ? `The desk answered ${response.status} (${said.replace(/[.!?]+$/, "")}).` : `The desk answered ${response.status}.`);
@@ -729,11 +738,8 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       return { sitting, error: `Could not reach the desk (${firstLine(error)}).`, done: false, next: "Read the sitting again after retryAfterSeconds.", retryAfterSeconds: 30 };
     }
     const view = await jsonObject(response);
-    if (response.status === 404) {
-      // The desk answers for a sitting from the moment it holds its payment, so a payment sent from here may not have reached it.
-      if (!keeps(sitting)) throw new Error("The desk has no sitting with this id. Check the id: it must be one that brainchain_sit_exam returned.");
-      return { sitting, done: false, next: `The desk does not know this sitting, so the payment for it may not have reached the desk. ${askAgain}`, retryAfterSeconds: 30 };
-    }
+    // The desk answers for a sitting from the moment it holds its payment, and this server names only the sittings it has named.
+    if (response.status === 404) throw new Error("BrainChain has no sitting with this id. Check the id: it must be one that brainchain_sit_exam returned.");
     if (response.status >= 500 || RETRY_LATER.has(response.status)) {
       return { sitting, error: `The desk answered ${response.status}.`, done: false, next: "The desk is busy or briefly unavailable. Read the sitting again after retryAfterSeconds.", retryAfterSeconds: retryAfter(response) ?? 30 };
     }
@@ -768,7 +774,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const entries = record.status === "fulfilled" ? record.value : undefined;
     const papers = file.status === "fulfilled" ? (file.value?.brainchain as { papers?: Record<string, unknown> } | undefined)?.papers : undefined;
     if (record.status === "fulfilled" && !entries && file.status === "fulfilled" && !file.value) {
-      throw new Error(`The desk has no record and no Papers for agent ${agentId} on chain ${config.identityChainId}. Check the id.`);
+      throw new Error(`BrainChain has no record and no Papers for agent ${agentId} on chain ${config.identityChainId}. Check the id.`);
     }
     return {
       agent: { chainId: config.identityChainId, id: agentId },
@@ -777,13 +783,13 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
           ? { url: recordUrl, error: firstLine(record.reason) }
           : entries
             ? { url: recordUrl, head: entries.head, entries: entries.entries, ...(typeof entries.next === "string" ? { next: `${config.desk}${entries.next}` } : {}) }
-            : { url: recordUrl, entries: [], note: "The desk has no entry on record for this agent." },
+            : { url: recordUrl, entries: [], note: "BrainChain has no entry on record for this agent." },
       papers:
         file.status === "rejected"
           ? { url: papersUrl, error: firstLine(file.reason) }
           : papers
             ? { url: papersUrl, signedAt: papers.at, epoch: papers.epoch, licences: papers.licences, ...(papers.ceiling === undefined ? {} : { ceiling: papers.ceiling }) }
-            : { url: papersUrl, note: "The desk serves no Papers for this agent." },
+            : { url: papersUrl, note: "BrainChain serves no Papers for this agent." },
       verify: typeof papers?.verify === "string" ? papers.verify : `npx brainchain-verify ${config.name} --record ${agentId}`,
     };
   }
@@ -884,6 +890,15 @@ type Posted = Exclude<Kind, "exam">;
  * settles, `opening` once it is paid, `unpaid` when the payment did not settle.
  */
 const beforeOpening = (view: Record<string, unknown>) => view.state === "paying" || view.state === "opening" || view.state === "unpaid";
+
+/**
+ * Whether the desk turned a paid request away before settling anything. A 408 is a proxy's, which may come after
+ * the desk took the payment, and a 409 can be a payment the desk is still taking.
+ */
+const refusedBeforeSettling = (status: number) => status >= 400 && status < 500 && status !== 408 && status !== 409;
+
+/** The desk's code for a refused payment; a 412 is x402's answer to a payment Permit2 may not move yet, whatever its body says. */
+const refusalCode = (status: number, reply: Record<string, unknown>) => (typeof reply.error === "string" && reply.error.trim() ? reply.error : status === 412 ? "permit2_allowance_required" : undefined);
 
 /** Whether the desk answered a sitting's payment with the sitting as it ended, with a pass or a fail. */
 function closedSince(reply: unknown): boolean {
