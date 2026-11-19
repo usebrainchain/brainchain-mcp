@@ -29,6 +29,8 @@ Usage:
                                  what it holds and, for USDG, what Permit2 may spend. Exits 0 when the
                                  wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2
                                  when its balance could not be read.
+  brainchain-mcp watch           Watch public sources for changes about Robinhood Chain tokens, keep them in a log
+                                 and serve them to brainchain_changes. See brainchain-mcp watch --help.
 
 Environment:
   BRAINCHAIN_PAYER_KEY        Private key of the paying wallet, 64 hex characters with or without 0x.
@@ -64,18 +66,26 @@ if ((command !== undefined && HELP.includes(command)) || (["approve", "wallet"].
   console.log(USAGE);
   process.exit(0);
 }
+// The watcher is loaded only for its own command, so the server starts as it always has.
+const watch = command === "watch" ? await import("./watch/cli.js") : undefined;
+if (watch && process.argv.slice(3).some((arg) => HELP.includes(arg))) {
+  console.log(watch.WATCH_USAGE);
+  process.exit(0);
+}
 if (command === "--version" || command === "-v" || command === "version") {
   console.log(version);
   process.exit(0);
 }
-if (command !== undefined && command !== "approve" && command !== "wallet") fail(`Unknown command ${command}.\n\n${USAGE}`);
+if (command !== undefined && command !== "approve" && command !== "wallet" && command !== "watch") fail(`Unknown command ${command}.\n\n${USAGE}`);
 const extra = process.argv[command === "approve" ? 4 : 3];
-if (command !== undefined && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : "wallet takes none"}.\n\n${USAGE}`);
+if (command !== undefined && command !== "watch" && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : "wallet takes none"}.\n\n${USAGE}`);
 
 if (command === undefined) {
   const hint = terminalHint(process.stdin, version);
   if (hint) console.error(hint);
   await createServer(process.env, version).connect(new StdioServerTransport());
+} else if (watch) {
+  await watch.runWatch(process.argv.slice(3), process.env, version).catch((error: unknown) => fail(`${error instanceof Error ? error.message : String(error)}\n\n${watch.WATCH_USAGE}`));
 } else if (command === "wallet") {
   const { config, account } = settings();
   const funds = await walletFunds(config, account.address).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
