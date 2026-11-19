@@ -610,6 +610,11 @@ describe("delivering an item", () => {
       error: "The desk did not confirm the delivery (fetch failed). The work may have arrived. Read the sitting with brainchain_exam_status, and send the item again only if it still reads open.",
     });
     expect(await desk((async () => new Response("bad gateway", { status: 502 })) as typeof fetch).submitExam(SITTING, 0, work)).toMatchObject({ possiblyDelivered: true, error: expect.stringMatching(/^The desk answered 502\./) });
+    // A 5xx may come after the work was stored, so one that says why is still a delivery that may have arrived.
+    expect(await desk((async () => json({ error: "Internal error." }, 500)) as typeof fetch).submitExam(SITTING, 0, work)).toMatchObject({
+      possiblyDelivered: true,
+      error: expect.stringMatching(/^The desk answered 500 \(Internal error\)\. The work may have arrived\./),
+    });
   });
 });
 
@@ -641,6 +646,9 @@ describe("reading a sitting", () => {
     expect(urls).toEqual([`${config.desk}/exams/${SITTING}`]);
     expect(read).toMatchObject({ sitting: SITTING, state: "open", done: false });
     expect(read.next).toMatch(/^Deliver items 3 and 4 with brainchain_exam_submit before 2100-01-01T02:00:00Z\./);
+    // Read without its briefs, the sitting says where they are; read with them, it does not.
+    expect(read.next).toMatch(/ brainchain_exam_status with briefs: true reads the briefs\.$/);
+    expect(sittingGuidance({ ...view(SITTING), briefs }).next).not.toContain("briefs: true");
     await expect(unkeyed.examStatus(SITTING, true)).rejects.toThrow("no key");
   });
 
@@ -839,6 +847,9 @@ describe("the exam and the licences as the desk states them", () => {
     expect(urls).toEqual([`${config.desk}/licences/46630/20424`]);
     expect(await d.licences("7")).toMatchObject({ registry: "unreadable", epoch: null, licences: [], next: "Agent 7 holds no licence. brainchain_exam_info says what a sitting takes, and brainchain_sit_exam opens one." });
     await expect(at({}).d.licences("20424")).rejects.toThrow("The licence exam is not open");
+    // An id no single account controls, with nothing on file, is answered with the desk's own reason.
+    const uncontrolled = "Agent 99 is not registered on chain 46630, or no single account controls it.";
+    await expect(at({ "/licences/46630/99": json({ error: uncontrolled }, 404) }).d.licences("99")).rejects.toThrow(new RegExp(`^${uncontrolled.replace(/[.,]/g, "\\$&")}$`));
   });
 
   it("returns the head and first entries of an agent's record, what its Papers say, and the command that checks it", async () => {
@@ -869,10 +880,25 @@ describe("the exam and the licences as the desk states them", () => {
     const fresh = (await at({ "/papers/46630/20424": routes["/papers/46630/20424"]! }).d.agentRecord("20424")) as { record: unknown };
     expect(fresh.record).toEqual({ url: `${config.desk}/agents/46630/20424/record`, entries: [], note: "The desk has no entry on record for this agent." });
     await expect(at({}).d.agentRecord("9")).rejects.toThrow("The desk has no record and no Papers for agent 9 on chain 46630. Check the id.");
+  });
 
-    await expect(at({ "/papers/46630/9": json({ error: "The agent's identity could not be read just now. Try again shortly." }, 503) }).d.agentRecord("9")).rejects.toThrow(
-      "The desk answered 503: it is busy or briefly unavailable. Try again in a minute.",
-    );
+  it("keeps the record when the Papers cannot be read just now, and says why in their place", async () => {
+    const record = json({ agent: { chainId: 46630, id: "20424" }, head: { head: { seq: 1 }, signature: "0x02" }, entries: [] });
+    const limited = new Response(JSON.stringify({ error: "Too many requests from this address. Try again in a minute." }), { status: 429, headers: { "retry-after": "60" } });
+    const read = (papers: Response) => at({ [`/agents/46630/20424/record?from=1&limit=${RECORD_PAGE}`]: record, "/papers/46630/20424": papers }).d.agentRecord("20424") as Promise<Record<string, unknown>>;
+    for (const [papers, error] of [
+      [limited, "The desk answered 429: it is busy or briefly unavailable. Try again in a minute."],
+      [json({ error: "The agent's identity could not be read just now. Try again shortly." }, 503), "The desk answered 503: it is busy or briefly unavailable. Try again in a minute."],
+      // An id no single account controls has no Papers, and the desk says so.
+      [json({ error: "Agent 20424 is not registered on chain 46630, or no single account controls it." }, 404), "Agent 20424 is not registered on chain 46630, or no single account controls it."],
+    ] as const) {
+      const reply = await read(papers);
+      expect(reply.record).toMatchObject({ head: { head: { seq: 1 } }, entries: [] });
+      expect(reply.papers).toEqual({ url: `${config.desk}/papers/46630/20424`, error });
+      expect(reply.verify).toBe("npx brainchain-verify testnet --record 20424");
+    }
+    // With neither to show, the first reason is the answer.
+    await expect(at({ [`/agents/46630/9/record?from=1&limit=${RECORD_PAGE}`]: json({}, 503), "/papers/46630/9": json({}, 503) }).d.agentRecord("9")).rejects.toThrow("The desk answered 503");
   });
 });
 
@@ -902,6 +928,8 @@ describe("the exam tools", () => {
     expect(body(sat)).toEqual({ sitting: SITTING, deadline: DEADLINE, briefs: briefs.map(({ index, title, state }) => ({ index, title, state })) });
     expect(sat.content.slice(1)).toEqual(briefs.map(({ index, title, brief }) => ({ type: "text", text: `Item ${index}: ${title}\n\n${brief}` })));
     await callTool(fake, SIT_EXAM_NAME, { agentId: "0", class: "code", price: "5000000" });
+    // An id is any uint256, so the largest has 78 digits.
+    await callTool(fake, LICENCES_NAME, { agentId: (2n ** 256n - 1n).toString() });
     await callTool(fake, EXAM_SUBMIT_NAME, { sitting: SITTING.toUpperCase().replace("0X", "0x"), item: 4, text: "  def f(): pass\n" });
     await callTool(fake, EXAM_STATUS_NAME, { sitting: SITTING });
     await callTool(fake, EXAM_STATUS_NAME, { sitting: SITTING, briefs: true });
@@ -911,6 +939,7 @@ describe("the exam tools", () => {
     expect(calls).toEqual([
       ["sit", { agentId: "20424", class: "code", price: 5_000_000n }],
       ["sit", { agentId: "0", class: "code", price: 5_000_000n }],
+      ["licences", (2n ** 256n - 1n).toString()],
       ["submit", SITTING, 4, "  def f(): pass\n"],
       ["status", SITTING, false],
       ["status", SITTING, true],
@@ -925,8 +954,8 @@ describe("the exam tools", () => {
     for (const [name, input, error] of [
       [SIT_EXAM_NAME, {}, "agentId is required."],
       [SIT_EXAM_NAME, { agentId: 20424 }, "agentId must be a string, not a number."],
-      [SIT_EXAM_NAME, { agentId: "0x1f" }, 'agentId must be the agent\'s ERC-8004 id, a whole number written as a string, such as "20424".'],
-      [SIT_EXAM_NAME, { agentId: "007" }, 'agentId must be the agent\'s ERC-8004 id, a whole number written as a string, such as "20424".'],
+      [SIT_EXAM_NAME, { agentId: "0x1f" }, 'agentId must be the agent\'s ERC-8004 id, a whole number from 0 to 2^256 - 1 written as a string with no leading zeros, such as "20424".'],
+      [SIT_EXAM_NAME, { agentId: "007" }, 'agentId must be the agent\'s ERC-8004 id, a whole number from 0 to 2^256 - 1 written as a string with no leading zeros, such as "20424".'],
       [SIT_EXAM_NAME, { agentId: "7" }, "price is required."],
       [SIT_EXAM_NAME, { agentId: "7", price: 5000000 }, "price must be a string, not a number."],
       [SIT_EXAM_NAME, { agentId: "7", price: "5.00" }, 'price must be the price of a sitting in the token\'s base units, written as a string such as "5000000": the priceUnits brainchain_exam_info gives.'],
@@ -943,7 +972,9 @@ describe("the exam tools", () => {
       [EXAM_STATUS_NAME, { sitting: SITTING, briefs: "yes" }, "briefs must be true or false, not a string."],
       [EXAM_STATUS_NAME, {}, "sitting is required."],
       [EXAM_INFO_NAME, { class: "code" }, "Unknown field: class. This tool takes nothing."],
-      [LICENCES_NAME, { agentId: "-1" }, 'agentId must be the agent\'s ERC-8004 id, a whole number written as a string, such as "20424".'],
+      [LICENCES_NAME, { agentId: "-1" }, 'agentId must be the agent\'s ERC-8004 id, a whole number from 0 to 2^256 - 1 written as a string with no leading zeros, such as "20424".'],
+      [LICENCES_NAME, { agentId: (2n ** 256n).toString() }, 'agentId must be the agent\'s ERC-8004 id, a whole number from 0 to 2^256 - 1 written as a string with no leading zeros, such as "20424".'],
+      [AGENT_RECORD_NAME, { agentId: "1".repeat(79) }, 'agentId must be the agent\'s ERC-8004 id, a whole number from 0 to 2^256 - 1 written as a string with no leading zeros, such as "20424".'],
       [AGENT_RECORD_NAME, { agentId: "7", from: 21 }, "Unknown field: from. This tool takes only agentId."],
     ] as const) {
       const result = await callTool(fake, name, input);

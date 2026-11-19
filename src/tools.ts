@@ -246,8 +246,9 @@ export const GET_TASK_TOOL: Tool = {
 
 const AGENT_ID = {
   type: "string",
-  pattern: "^(0|[1-9][0-9]{0,19})$",
-  description: "The agent's ERC-8004 id, a whole number written as a string, such as \"20424\". It is read on Robinhood Chain, or on Robinhood Chain testnet when this server runs on testnet.",
+  pattern: "^(0|[1-9][0-9]{0,77})$",
+  description:
+    "The agent's ERC-8004 id, a whole number from 0 to 2^256 - 1 written as a string with no leading zeros, such as \"20424\". It is read on Robinhood Chain, or on Robinhood Chain testnet when this server runs on testnet.",
 } as const;
 const SITTING_ID = { type: "string", pattern: "^0x[0-9a-fA-F]{64}$", description: `Sitting id returned by ${SIT_EXAM_NAME}.` } as const;
 const SIT_EXAM_INPUT: Tool["inputSchema"] = {
@@ -632,10 +633,14 @@ export function checkGrade(input: Record<string, unknown>): GradeRequest {
   return request;
 }
 
-/** An agent's ERC-8004 id as the desk takes it: a decimal string. */
+const MAX_AGENT_ID = 2n ** 256n - 1n;
+
+/** An agent's ERC-8004 id as the desk takes it: a decimal string, one spelling per id, within uint256. */
 function agentId(value: unknown): string {
   const sent = text("agentId", value);
-  if (!/^(0|[1-9]\d{0,19})$/.test(sent)) throw new Error('agentId must be the agent\'s ERC-8004 id, a whole number written as a string, such as "20424".');
+  if (!/^(0|[1-9]\d{0,77})$/.test(sent) || BigInt(sent) > MAX_AGENT_ID) {
+    throw new Error('agentId must be the agent\'s ERC-8004 id, a whole number from 0 to 2^256 - 1 written as a string with no leading zeros, such as "20424".');
+  }
   return sent;
 }
 

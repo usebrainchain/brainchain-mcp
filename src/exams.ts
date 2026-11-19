@@ -4,6 +4,8 @@
 // personal_sign by the wallet that holds the agent's ERC-8004 id.
 import { keccak256, toBytes } from "viem";
 
+import type { Guidance } from "./payments.js";
+
 /** How many of a record's entries one read returns, counted from the first. */
 export const RECORD_PAGE = 20;
 /** The desk's cap on the work for one item of a sitting, as GET /exams states it. */
@@ -16,12 +18,6 @@ export const resultMessage = (chainId: number, sitting: string, index: number, t
   `BrainChain exam result v1\nchain ${chainId}\nsitting ${sitting.toLowerCase()}\nitem ${index}\nhash ${keccak256(toBytes(text))}`;
 
 export const briefsMessage = (chainId: number, sitting: string, at: number): string => `BrainChain exam briefs v1\nchain ${chainId}\nsitting ${sitting.toLowerCase()}\nat ${at}`;
-
-interface Guidance {
-  done: boolean;
-  next: string;
-  retryAfterSeconds?: number;
-}
 
 const utc = (seconds: number) => new Date(seconds * 1000).toISOString().replace(".000Z", "Z");
 const list = (numbers: number[]) => (numbers.length < 2 ? numbers.join("") : `${numbers.slice(0, -1).join(", ")} and ${numbers.at(-1)}`);
@@ -79,5 +75,7 @@ export function sittingGuidance(view: Record<string, unknown>, now = Date.now())
     return { done: false, next: `The sitting's time ran out at ${utc(deadline)}, so ${open.length === 1 ? `item ${list(open)} was` : `items ${list(open)} were`} missed. Read the sitting again after retryAfterSeconds for the outcome.`, retryAfterSeconds: 60 };
   }
   const by = deadline === undefined ? "" : ` before ${utc(deadline)}`;
-  return { done: false, next: `Deliver ${open.length === 1 ? "item" : "items"} ${list(open)} with brainchain_exam_submit${by}. Each item takes one delivery, so send the finished work.` };
+  // A sitting read without its briefs says where they are, for an agent that does not hold them.
+  const briefs = Array.isArray(view.briefs) ? "" : " brainchain_exam_status with briefs: true reads the briefs.";
+  return { done: false, next: `Deliver ${open.length === 1 ? "item" : "items"} ${list(open)} with brainchain_exam_submit${by}. Each item takes one delivery, so send the finished work.${briefs}` };
 }

@@ -171,7 +171,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   /** What each of those orders still holds against the budget and the daily limit. */
   const held = new Map<string, Hold>();
   // A task's order and a grade are read at different routes, so each map entry belongs to one kind.
-  const keyed = (kind: Kind, id: string) => `${kind}:${id.toLowerCase()}`;
+  const keyed = (kind: Posted, id: string) => `${kind}:${id.toLowerCase()}`;
 
   /** The desk's price, read from a fresh 402 challenge. */
   async function quotedPrice(kind: Kind, signal = AbortSignal.timeout(15_000)): Promise<bigint | undefined> {
@@ -287,7 +287,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   }
 
   /** A payment the desk gave up was never charged, so its task can be posted again at once and its amount spent on another. */
-  async function release(kind: Kind, id: string): Promise<void> {
+  async function release(kind: Posted, id: string): Promise<void> {
     const key = keyed(kind, id);
     paid.get(key)?.forget();
     const hold = held.get(key);
@@ -649,8 +649,14 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     );
   }
 
-  /** One free read of the desk as JSON; undefined for what the desk does not have. */
-  async function read(url: string): Promise<Record<string, unknown> | undefined> {
+  /** The desk's answer for an address it serves nothing at, as against a 404 a route of its own gives a reason for. */
+  const NO_ROUTE = "Not found.";
+
+  /**
+   * One free read of the desk as JSON; undefined for what the desk does not have. With `said`, a 404 a route gives
+   * its own reason for, such as an agent id no one controls, is thrown in the desk's words.
+   */
+  async function read(url: string, said = false): Promise<Record<string, unknown> | undefined> {
     let response: Response;
     try {
       response = await fetchImpl(url, { signal: AbortSignal.timeout(20_000) });
@@ -658,7 +664,11 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       throw new Error(`Could not reach the desk (${firstLine(error)}). Try again in a minute.`);
     }
     const view = await jsonObject(response);
-    if (response.status === 404) return undefined;
+    if (response.status === 404) {
+      const reason = typeof view?.error === "string" ? view.error.trim() : "";
+      if (said && reason && reason !== NO_ROUTE) throw new Error(reason);
+      return undefined;
+    }
     if (response.status >= 500 || RETRY_LATER.has(response.status)) throw new Error(`The desk answered ${response.status}: it is busy or briefly unavailable. Try again in a minute.`);
     if (!response.ok) throw new Error(typeof view?.error === "string" ? view.error : `The desk answered ${response.status}.`);
     if (!view) throw new Error("The desk's reply could not be read. Try again shortly.");
@@ -699,9 +709,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
     const reply = (await jsonObject(response)) ?? {};
     if (response.ok) return { ...reply, next: "Delivered, and the desk judges it next. Read the outcome with brainchain_exam_status." };
-    if (typeof reply.error === "string" && reply.error.trim()) throw new Error(reply.error.trim());
-    if (response.status >= 500) return unconfirmed(`The desk answered ${response.status}.`);
-    throw new Error(`The desk answered ${response.status}.`);
+    const said = typeof reply.error === "string" ? reply.error.trim() : "";
+    // A 5xx can come after the work was stored, whatever it says.
+    if (response.status >= 500) return unconfirmed(said ? `The desk answered ${response.status} (${said.replace(/[.!?]+$/, "")}).` : `The desk answered ${response.status}.`);
+    throw new Error(said || `The desk answered ${response.status}.`);
   }
 
   /** A sitting as anyone may read it, with its briefs when this wallet, the one sitting it, signs for them. */
@@ -739,27 +750,40 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   }
 
   async function licences(agentId: string): Promise<unknown> {
-    const view = await read(`${config.desk}/licences/${config.identityChainId}/${agentId}`);
+    const view = await read(`${config.desk}/licences/${config.identityChainId}/${agentId}`, true);
     if (!view) throw new Error(closed);
     const none = Array.isArray(view.licences) && view.licences.length === 0;
     return none ? { ...view, next: `Agent ${agentId} holds no licence. brainchain_exam_info says what a sitting takes, and brainchain_sit_exam opens one.` } : view;
   }
 
-  /** The head and first entries of an agent's numbered record, and what its Papers say of its epoch, licences and ceiling. */
+  /**
+   * The head and first entries of an agent's numbered record, and what its Papers say of its epoch, licences and
+   * ceiling. The two are read apart, so one the desk cannot give just now leaves the other, with the reason in place.
+   */
   async function agentRecord(agentId: string): Promise<unknown> {
     const recordUrl = `${config.desk}/agents/${config.identityChainId}/${agentId}/record`;
     const papersUrl = `${config.desk}/papers/${config.identityChainId}/${agentId}`;
-    const [record, file] = await Promise.all([read(`${recordUrl}?from=1&limit=${RECORD_PAGE}`), read(papersUrl)]);
-    if (!record && !file) throw new Error(`The desk has no record and no Papers for agent ${agentId} on chain ${config.identityChainId}. Check the id.`);
-    const papers = (file?.brainchain as { papers?: Record<string, unknown> } | undefined)?.papers;
+    const [record, file] = await Promise.allSettled([read(`${recordUrl}?from=1&limit=${RECORD_PAGE}`), read(papersUrl, true)]);
+    if (record.status === "rejected" && file.status === "rejected") throw record.reason;
+    const entries = record.status === "fulfilled" ? record.value : undefined;
+    const papers = file.status === "fulfilled" ? (file.value?.brainchain as { papers?: Record<string, unknown> } | undefined)?.papers : undefined;
+    if (record.status === "fulfilled" && !entries && file.status === "fulfilled" && !file.value) {
+      throw new Error(`The desk has no record and no Papers for agent ${agentId} on chain ${config.identityChainId}. Check the id.`);
+    }
     return {
       agent: { chainId: config.identityChainId, id: agentId },
-      record: record
-        ? { url: recordUrl, head: record.head, entries: record.entries, ...(typeof record.next === "string" ? { next: `${config.desk}${record.next}` } : {}) }
-        : { url: recordUrl, entries: [], note: "The desk has no entry on record for this agent." },
-      papers: papers
-        ? { url: papersUrl, signedAt: papers.at, epoch: papers.epoch, licences: papers.licences, ...(papers.ceiling === undefined ? {} : { ceiling: papers.ceiling }) }
-        : { url: papersUrl, note: "The desk serves no Papers for this agent." },
+      record:
+        record.status === "rejected"
+          ? { url: recordUrl, error: firstLine(record.reason) }
+          : entries
+            ? { url: recordUrl, head: entries.head, entries: entries.entries, ...(typeof entries.next === "string" ? { next: `${config.desk}${entries.next}` } : {}) }
+            : { url: recordUrl, entries: [], note: "The desk has no entry on record for this agent." },
+      papers:
+        file.status === "rejected"
+          ? { url: papersUrl, error: firstLine(file.reason) }
+          : papers
+            ? { url: papersUrl, signedAt: papers.at, epoch: papers.epoch, licences: papers.licences, ...(papers.ceiling === undefined ? {} : { ceiling: papers.ceiling }) }
+            : { url: papersUrl, note: "The desk serves no Papers for this agent." },
       verify: typeof papers?.verify === "string" ? papers.verify : `npx brainchain-verify ${config.name} --record ${agentId}`,
     };
   }
@@ -898,7 +922,7 @@ export function gradeGuidance(view: Record<string, unknown>): Guidance {
   return { done: false, next: "BrainChain is still grading the work. Read the grade with brainchain_get_grade after retryAfterSeconds; reading it is free.", retryAfterSeconds: 20 };
 }
 
-interface Guidance {
+export interface Guidance {
   done: boolean;
   next: string;
   retryAfterSeconds?: number;
