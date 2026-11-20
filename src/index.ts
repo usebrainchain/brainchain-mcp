@@ -32,6 +32,9 @@ Usage:
                                  when its balance could not be read.
   brainchain-mcp watch           Watch public sources for changes about Robinhood Chain tokens, keep them in a log
                                  and serve them to brainchain_changes. See brainchain-mcp watch --help.
+  brainchain-mcp dataset --out <dir>
+                                 Build the dataset brainchain_trace_outcomes reads: every token's dated public steps,
+                                 the venues that listed it and the base rates. See brainchain-mcp dataset --help.
 
 Environment:
   BRAINCHAIN_PAYER_KEY        Private key of the paying wallet, 64 hex characters with or without 0x.
@@ -52,6 +55,8 @@ Environment:
                               entries say source configured.
   BRAINCHAIN_WATCH_URL        The watcher brainchain_changes, brainchain_watch and brainchain_unwatch use, such as your own
                               \`brainchain-mcp watch --serve\` at http://127.0.0.1:8787 (default https://watch.usebrainchain.com).
+  BRAINCHAIN_DATASET          Where brainchain_trace_outcomes, brainchain_token_timeline and the symbol lookup read the dataset:
+                              a directory, absolute or starting with ~/, or an https address (default BrainChain's published copy).
   GITHUB_TOKEN                A GitHub token with no scopes, to read GitHub's API with its allowance in place of the 60
                               requests an hour GitHub allows one IP address. Sent to api.github.com only.
   BRAINCHAIN_DESK_URL, BRAINCHAIN_PAY_TO, BRAINCHAIN_PAYMENT_NETWORK, BRAINCHAIN_PAYMENT_ASSET, BRAINCHAIN_PAYMENT_RPC
@@ -77,13 +82,18 @@ if (watch && process.argv.slice(3).some((arg) => HELP.includes(arg))) {
   console.log(watch.WATCH_USAGE);
   process.exit(0);
 }
+const dataset = command === "dataset" ? await import("./dataset/cli.js") : undefined;
+if (dataset && process.argv.slice(3).some((arg) => HELP.includes(arg))) {
+  console.log(dataset.DATASET_USAGE);
+  process.exit(0);
+}
 if (command === "--version" || command === "-v" || command === "version") {
   console.log(version);
   process.exit(0);
 }
-if (command !== undefined && command !== "approve" && command !== "wallet" && command !== "watch") fail(`Unknown command ${command}.\n\n${USAGE}`);
+if (command !== undefined && command !== "approve" && command !== "wallet" && command !== "watch" && command !== "dataset") fail(`Unknown command ${command}.\n\n${USAGE}`);
 const extra = process.argv[command === "approve" ? 4 : 3];
-if (command !== undefined && command !== "watch" && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : "wallet takes none"}.\n\n${USAGE}`);
+if (command !== undefined && command !== "watch" && command !== "dataset" && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : "wallet takes none"}.\n\n${USAGE}`);
 
 if (command === undefined) {
   const hint = terminalHint(process.stdin, version);
@@ -91,6 +101,8 @@ if (command === undefined) {
   await createServer(process.env, version).connect(new StdioServerTransport());
 } else if (watch) {
   await watch.runWatch(process.argv.slice(3), process.env, version).catch((error: unknown) => fail(error instanceof watch.UsageError ? `${error.message}\n\n${watch.WATCH_USAGE}` : error instanceof Error ? error.message : String(error)));
+} else if (dataset) {
+  await dataset.runDataset(process.argv.slice(3), process.env).catch((error: unknown) => fail(error instanceof dataset.DatasetUsageError ? `${error.message}\n\n${dataset.DATASET_USAGE}` : error instanceof Error ? error.message : String(error)));
 } else if (command === "wallet") {
   const { config, account } = settings();
   const funds = await walletFunds(config, account.address).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));

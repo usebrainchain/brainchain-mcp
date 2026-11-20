@@ -9,6 +9,7 @@ import type { ReadinessBoard } from "../readiness.js";
 import type { SightingsBoard } from "../sightings.js";
 import { ChainError, type History as History } from "../history.js";
 import type { MarketCapBoard } from "../marketcap.js";
+import { countsLine, type EventCounts } from "../dataset/counts.js";
 import { custodyFromLog, eventContext, loadWorth, PATIENT_TRIES, patiently, saveWorth, worthOf } from "./context.js";
 import { EventLog, type Found, type WatchEvent } from "./events.js";
 import { Backoff } from "./http.js";
@@ -49,7 +50,7 @@ const CAP: MarketCapBoard = {
   pools: [],
 };
 
-function context(log: EventLog, readiness: (token: Address) => Promise<ReadinessBoard> = async (token) => board(token), ms?: number, worth?: (token: Address) => Promise<MarketCapBoard>, patience?: number) {
+function context(log: EventLog, readiness: (token: Address) => Promise<ReadinessBoard> = async (token) => board(token), ms?: number, worth?: (token: Address) => Promise<MarketCapBoard>, patience?: number, counts?: (kind: WatchEvent["kind"]) => Promise<EventCounts | undefined>) {
   const reader = { getBlockNumber: async () => 1_000n, getTransactionReceipt: async () => ({ contractAddress: null }) } as unknown as History;
   const read: Address[] = [];
   const of = eventContext({
@@ -59,6 +60,7 @@ function context(log: EventLog, readiness: (token: Address) => Promise<Readiness
     ...(ms ? { ms } : {}),
     ...(worth ? { worth } : {}),
     ...(patience ? { patience } : {}),
+    ...(counts ? { counts } : {}),
     readers: {
       chain: (work) => work(reader),
       readiness: async (_, token) => (read.push(token), readiness(token)),
@@ -102,6 +104,27 @@ describe("an event's context", () => {
     expect((two.matches as unknown[]).length).toBe(2);
     expect(two.priorTraces).toBeUndefined();
     expect(read).toHaveLength(1);
+  });
+
+  it("carries how often earlier tokens with the event's step were listed, for a kind that is a step and from the dataset as read", async () => {
+    const counts: EventCounts = {
+      step: "custody",
+      about: "BitGo's merge of it into its Robinhood Chain tokens",
+      dataset: { date: "2026-11-20", headBlock: 119_000_000, manifest: "ab".repeat(32) },
+      n: 120,
+      windows: [{ days: 30, eligible: 100, unknown: 10, followed: 9, share: 0.1, medianLeadDays: 8, venues: { robinhood_page: 2, robinhood_tradable: 1, kucoin: 5, gate: 3 } }],
+    };
+    const asked: string[] = [];
+    const { of } = context(filled(), undefined, undefined, undefined, undefined, async (kind) => (asked.push(kind), kind === "bitgo.merged" ? counts : undefined));
+    const merge = event({ kind: "bitgo.merged", token: { address: CASHCAT, symbol: null, name: "Cash Cat" }, source: "BitGo", ref: COMMIT, at: "2026-07-28T07:09:00.000Z", detail: {} });
+    expect((await of(merge).done).counts).toEqual(counts);
+    expect((await of(pool("2026-08-07T10:00:00.000Z")).done).counts).toBeUndefined();
+    const pair = event({ kind: "robinhood.page_added", token: { address: null, symbol: "NOBODY", name: null }, source: "Robinhood", ref: "x", at: null, detail: {} });
+    expect(await of(pair).done).not.toHaveProperty("counts");
+    expect(asked).toEqual(["bitgo.merged", "pool.created", "robinhood.page_added"]);
+    expect(countsLine(counts)).toBe(" Of 90 earlier tokens with this step, 9 were listed by a venue within 30 days.");
+    expect(countsLine({ ...counts, windows: [{ ...counts.windows[0]!, eligible: 4, unknown: 4 }] })).toBe("");
+    expect(countsLine(undefined)).toBe("");
   });
 
   it("goes out without the steps, saying why, when the timeline is slow or fails", async () => {

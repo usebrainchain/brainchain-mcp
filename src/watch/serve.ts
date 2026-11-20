@@ -76,6 +76,8 @@ export interface PoolLookup {
   readonly through: number;
   poolsOf(token: `0x${string}`): IndexedPool[];
   basePools(): IndexedPool[];
+  readonly bytes: number;
+  linesAfter(after: number, max: number): { pools: IndexedPool[]; next: number };
 }
 
 /** The most pools one answer of `GET /pools` holds; a token with more is answered with `complete` false. */
@@ -99,6 +101,28 @@ function poolsAnswer(index: PoolLookup, token: string, now: number) {
     complete: all.length <= MAX_POOLS,
     pools: all.slice(0, MAX_POOLS).map(({ version, pool, currency0, currency1, fee, tickSpacing, hooks, block }) => ({ version, pool, currency0, currency1, fee, tickSpacing, ...(version === 4 ? { hooks: hooks ?? "0x0000000000000000000000000000000000000000" } : {}), block })),
   };
+}
+
+/**
+ * The whole index a page at a time, in the order the file holds it, for `brainchain-mcp dataset`: from byte `after`, 0 or
+ * the `next` of the page before, up to `MAX_POOLS` pools. `bytes` is how far the index goes now, and `through` the block
+ * every pool up to is in it, so a reader that reaches `bytes` has every pool through that block.
+ */
+function poolsPage(index: PoolLookup, params: URLSearchParams, now: number) {
+  const after = params.get("after") ?? "";
+  if (!/^\d{1,15}$/.test(after)) throw new HttpError(400, "after must be 0 or the next of an earlier answer.");
+  const limit = params.get("limit");
+  if (limit !== null && (!/^\d{1,4}$/.test(limit) || Number(limit) < 1 || Number(limit) > MAX_POOLS)) throw new HttpError(400, `limit must be a whole number from 1 to ${MAX_POOLS}.`);
+  const bytes = index.bytes;
+  if (Number(after) > bytes) throw new HttpError(409, `The index holds ${bytes} bytes now, fewer than after: it was filled again from the start. Start again from 0.`);
+  let page: { pools: IndexedPool[]; next: number };
+  try {
+    page = index.linesAfter(Number(after), limit === null ? MAX_POOLS : Number(limit));
+  } catch (error) {
+    if (error instanceof RangeError) throw new HttpError(400, error.message);
+    throw error;
+  }
+  return { readAt: new Date(now).toISOString(), ready: index.ready, through: index.through, bytes, after: Number(after), next: page.next, pools: page.pools };
 }
 
 export interface ServeOptions {
@@ -239,7 +263,7 @@ export interface Served {
 
 /**
  * The watcher's HTTP surface. Reads: `GET /events`, `GET /events/stream` (server-sent events, resumed from Last-Event-ID),
- * `GET /pools?token=` (a token's pools from the index), `GET /health` (503 while a source keeps failing) and `GET /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
+ * `GET /pools?token=` (a token's pools from the index), `GET /pools?after=` (the whole index a page at a time), `GET /health` (503 while a source keeps failing) and `GET /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
  * /watches/:id` with the watch's manage token. Nothing lists watches. Every address is held to `perMinute` requests.
  */
 export function serveEvents({ log, pools, health, adminToken, deliveries, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
@@ -311,6 +335,7 @@ export function serveEvents({ log, pools, health, adminToken, deliveries, trustP
     if (url.pathname === "/events/stream" && reading) return stream(request, response, url, address);
     if (url.pathname === "/pools" && reading) {
       if (!pools) throw new HttpError(404, "This watcher keeps no pool index: it fills one only with a private RPC in BRAINCHAIN_WATCH_RPC.");
+      if (url.searchParams.has("after")) return send(response, 200, poolsPage(pools, url.searchParams, clock()), OPEN);
       return send(response, 200, poolsAnswer(pools, url.searchParams.get("token") ?? "", clock()), OPEN);
     }
     if (url.pathname === "/watches" && method === "POST") {

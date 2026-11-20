@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { countsLine, type EventCounts } from "../dataset/counts.js";
 import { BASE_NAMES } from "./chain.js";
 import { matches, type EventLog, type WatchEvent } from "./events.js";
 import { DeliveryError, webhookUrl, type Post } from "./net.js";
@@ -128,7 +129,7 @@ export function line(event: WatchEvent): string {
   const worth = event.context.worth as { marketCapUsd?: string; depth2pctUsd?: string } | null | undefined;
   const value = worth?.marketCapUsd ? ` Worth ${compact(worth.marketCapUsd)} now${worth.depth2pctUsd ? `, ${compact(worth.depth2pctUsd)} of depth within 2%` : ""}.` : "";
   const link = /^0x[0-9a-f]{64}$/i.test(event.ref) ? `${EXPLORER}${event.ref}` : event.ref.split("@")[0]!;
-  return `${change(event, named)}${value} ${link}`;
+  return `${change(event, named)}${value}${countsLine(event.context.counts as EventCounts | undefined)} ${link}`;
 }
 
 /** A chat's follow-up for an event whose worth was read after it went out: one short line. */
