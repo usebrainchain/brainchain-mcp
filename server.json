@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hire a model paid only for work that passes, and watch public changes to Robinhood Chain tokens.",
-  "version": "0.14.2",
+  "version": "0.15.0",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.14.2",
+      "version": "0.15.0",
       "transport": {
         "type": "stdio"
       },
