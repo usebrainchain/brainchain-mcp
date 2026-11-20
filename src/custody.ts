@@ -374,7 +374,7 @@ export const TOKEN_INPUT = { type: "string", description: "The token's contract 
 /** How the tools that take a token say they take a symbol too. */
 export const BY_SYMBOL =
   "`token` can also be a symbol or name, such as RLUSD or Ripple USD, looked up on BitGo's lists for Robinhood Chain; when none there goes by it, on the lists the BrainChain MCP dataset records (Trust Wallet, MetaMask, LI.FI, CoinGecko, KuCoin and Gate); and when none there does either, among every token with a Uniswap pool by the symbol its contract gives itself (`pool index`). " +
-  "When exactly one token goes by it, `lookup` in the answer names the `contract` it stands for and its `source`; when several do, the answer lists them as `candidates`, each with its `source`, and reads nothing more. A symbol is whatever the token's deployer chose, so check the contract before relying on one found in the pool index. ";
+  "When exactly one token goes by it, `lookup` in the answer names the `contract` it stands for and its `source`, and for one found in the dataset the `dataset` day, block and manifest read; when several do, the answer lists them as `candidates`, each with its `source`, and reads nothing more. A symbol is whatever the token's deployer chose, so check the contract before relying on one found in the pool index. ";
 
 const fold = (text: string) => text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
 

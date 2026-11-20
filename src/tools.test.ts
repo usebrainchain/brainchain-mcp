@@ -754,7 +754,9 @@ describe("a token by symbol", () => {
 
   const DOGE = "0xb66d83f0a5a3b5eE6f4C1C1c11F1aE10b2B71a31";
   const PEPES = ["0xa4bd8def00000000000000000000000000000001", "0x9b09c43500000000000000000000000000000002"];
-  const listed = (tokens: { token: string; symbol?: string; name?: string; sources: string[] }[]) => async () => ({ tokens, steps: [], outcomes: [], rates: {}, ref: {} }) as never;
+  const REF = { source: "local directory", date: "2026-11-20", headBlock: 119_000_000, readAt: "2026-11-20T22:00:00.000Z", manifest: "ab".repeat(32) };
+  const DATASET = { date: REF.date, headBlock: REF.headBlock, manifest: REF.manifest };
+  const listed = (tokens: { token: string; symbol?: string; name?: string; sources: string[] }[]) => async () => ({ tokens, steps: [], outcomes: [], rates: {}, ref: REF }) as never;
 
   it("looks past BitGo's lists at the lists the dataset records, then at every token with a pool, naming where each was found", async () => {
     for (const [name, reader] of tools) {
@@ -762,9 +764,9 @@ describe("a token by symbol", () => {
       const ask = (token: string, extra: object) => callTool(desk, name, { token }, undefined, undefined, undefined, { [reader]: async (address: string) => (read.push(address), boards[reader]), listed: async () => LISTED, ...extra });
       const fromList = await ask("doge", { dataset: listed([{ token: DOGE.toLowerCase(), symbol: "DOGE", name: "DoOnlyGoodEveryday", sources: ["CoinGecko"] }]), symbols: async () => [] });
       expect(fromList.isError).toBe(false);
-      expect((body(fromList) as { lookup: unknown }).lookup).toEqual({ asked: "doge", symbol: "DOGE", name: "DoOnlyGoodEveryday", contract: getAddress(DOGE), source: "CoinGecko" });
+      expect((body(fromList) as { lookup: unknown }).lookup).toEqual({ asked: "doge", symbol: "DOGE", name: "DoOnlyGoodEveryday", contract: getAddress(DOGE), source: "CoinGecko", dataset: DATASET });
       const fromPools = await ask("$frog", { dataset: listed([]), symbols: async () => [{ symbol: "FROG", token: PEPES[0]! }] });
-      expect((body(fromPools) as { lookup: unknown }).lookup).toEqual({ asked: "$frog", symbol: "FROG", contract: getAddress(PEPES[0]!), source: "pool index" });
+      expect((body(fromPools) as { lookup: unknown }).lookup).toEqual({ asked: "$frog", symbol: "FROG", contract: getAddress(PEPES[0]!), source: "pool index", dataset: DATASET });
       expect(read).toEqual([getAddress(DOGE), getAddress(PEPES[0]!)]);
 
       const many = await ask("PEPE", { dataset: listed([]), symbols: async () => PEPES.map((token) => ({ symbol: "PEPE", token })) });
@@ -772,6 +774,7 @@ describe("a token by symbol", () => {
       expect(body(many)).toEqual({
         error: '2 tokens with a Uniswap pool, by the symbol the contract gives itself, go by "PEPE", so nothing was read. Pass the contract address of the one you mean, from `candidates`.',
         candidates: PEPES.map((token) => ({ contract: getAddress(token), symbol: "PEPE", source: "pool index" })),
+        dataset: DATASET,
       });
       const crowd = Array.from({ length: 25 }, (_, i) => ({ symbol: "PEPE", token: `0x${String(i + 1).padStart(40, "0")}` }));
       const capped = body(await ask("PEPE", { dataset: listed([]), symbols: async () => crowd })) as { error: string; candidates: unknown[]; total: number };

@@ -6,7 +6,7 @@ import { CHANGES_NAME, CHANGES_TOOL, changesQuery, createWatch, HOSTED_WATCH_URL
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, within, type CustodyBoard, type CustodyToken } from "./custody.js";
 import type { SymbolRow } from "./dataset/format.js";
-import { datasetReader, DatasetError, type Dataset } from "./dataset/published.js";
+import { datasetReader, DatasetError, type Dataset, type DatasetRef } from "./dataset/published.js";
 import { blockOf, ChainError, inTurn, type Moment } from "./history.js";
 import { MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
 import { MARKET_CAP_NAME, MARKET_CAP_TOOL, readMarketCap, type MarketCapBoard } from "./marketcap.js";
@@ -306,6 +306,7 @@ class Candidates extends Error {
     message: string,
     readonly candidates: Candidate[],
     readonly total?: number,
+    readonly dataset?: DatasetRef,
   ) {
     super(message);
   }
@@ -319,6 +320,8 @@ export interface Lookup {
   name?: string;
   contract: Address;
   source: string;
+  /** For a token found in the published dataset, the day read, the block it reaches and its manifest's SHA-256. */
+  dataset?: { date: string; headBlock: number; manifest: string };
 }
 
 /** The most candidates an answer lists when the pool index has more tokens by a symbol. */
@@ -349,10 +352,11 @@ async function lookupFurther(sent: string, dataset: Readers["dataset"], symbols:
   if (found.length === 0) throw new Error(`No token on BitGo's lists for Robinhood Chain, on the lists the dataset records or with a Uniswap pool goes by ${JSON.stringify(sent)}. Pass the token's contract address instead.`);
   if (found.length > 1) {
     const shown = found.slice(0, MAX_CANDIDATES);
-    throw new Candidates(`${found.length} tokens ${where} go by ${JSON.stringify(sent)}, so nothing was read. Pass the contract address of the one you mean${shown.length < found.length ? `; \`candidates\` lists the first ${shown.length}` : ", from `candidates`"}.`, shown, shown.length < found.length ? found.length : undefined);
+    throw new Candidates(`${found.length} tokens ${where} go by ${JSON.stringify(sent)}, so nothing was read. Pass the contract address of the one you mean${shown.length < found.length ? `; \`candidates\` lists the first ${shown.length}` : ", from `candidates`"}.`, shown, shown.length < found.length ? found.length : undefined, read.ref);
   }
   const [one] = found as [Candidate & { symbol?: string; name?: string }];
-  return { token: one.contract!, lookup: { asked: sent, ...(one.symbol ? { symbol: one.symbol } : {}), ...(one.name ? { name: one.name } : {}), contract: one.contract!, source: one.source } };
+  const day = { date: read.ref.date, headBlock: read.ref.headBlock, manifest: read.ref.manifest };
+  return { token: one.contract!, lookup: { asked: sent, ...(one.symbol ? { symbol: one.symbol } : {}), ...(one.name ? { name: one.name } : {}), contract: one.contract!, source: one.source, dataset: day } };
 }
 
 /**
@@ -678,6 +682,6 @@ export async function callTool(
     }
     return reply({ error: `Unknown tool ${name}.` }, true);
   } catch (error) {
-    return reply({ error: error instanceof Error ? error.message : String(error), ...(error instanceof Candidates ? { candidates: error.candidates, ...(error.total ? { total: error.total } : {}) } : {}) }, true);
+    return reply({ error: error instanceof Error ? error.message : String(error), ...(error instanceof Candidates ? { candidates: error.candidates, ...(error.total ? { total: error.total } : {}), ...(error.dataset ? { dataset: { date: error.dataset.date, headBlock: error.dataset.headBlock, manifest: error.dataset.manifest } } : {}) } : {}) }, true);
   }
 }
