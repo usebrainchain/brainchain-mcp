@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 
+import { getAddress } from "viem";
 import { describe, expect, it } from "vitest";
 
 import { formatUnits, resolveConfig } from "./config.js";
@@ -732,7 +733,7 @@ describe("a token by symbol", () => {
         expect(read).toEqual([contract]);
         const answer = body(result) as Record<string, unknown>;
         expect(Object.keys(answer)[0]).toBe("lookup");
-        expect(answer.lookup).toEqual({ asked: asked.trim(), id, name: LISTED.find((token) => token.id === id)!.name, contract });
+        expect(answer.lookup).toEqual({ asked: asked.trim(), id, name: LISTED.find((token) => token.id === id)!.name, contract, source: "BitGo" });
         expect(answer).toMatchObject(boards[reader]);
       }
     }
@@ -745,17 +746,50 @@ describe("a token by symbol", () => {
       expect(result.isError).toBe(true);
       expect(body(result)).toEqual({
         error: '2 tokens on BitGo\'s lists for Robinhood Chain go by "cash cat", so nothing was read. Pass the contract address of the one you mean, from `candidates`.',
-        candidates: [twins[1], twins[3]],
+        candidates: [twins[1], twins[3]].map((token) => ({ ...token, source: "BitGo" })),
       });
       expect(reads).toBe(0);
+    }
+  });
+
+  const DOGE = "0xb66d83f0a5a3b5eE6f4C1C1c11F1aE10b2B71a31";
+  const PEPES = ["0xa4bd8def00000000000000000000000000000001", "0x9b09c43500000000000000000000000000000002"];
+  const listed = (tokens: { token: string; symbol?: string; name?: string; sources: string[] }[]) => async () => ({ tokens, steps: [], outcomes: [], rates: {}, ref: {} }) as never;
+
+  it("looks past BitGo's lists at the lists the dataset records, then at every token with a pool, naming where each was found", async () => {
+    for (const [name, reader] of tools) {
+      const read: string[] = [];
+      const ask = (token: string, extra: object) => callTool(desk, name, { token }, undefined, undefined, undefined, { [reader]: async (address: string) => (read.push(address), boards[reader]), listed: async () => LISTED, ...extra });
+      const fromList = await ask("doge", { dataset: listed([{ token: DOGE.toLowerCase(), symbol: "DOGE", name: "DoOnlyGoodEveryday", sources: ["CoinGecko"] }]), symbols: async () => [] });
+      expect(fromList.isError).toBe(false);
+      expect((body(fromList) as { lookup: unknown }).lookup).toEqual({ asked: "doge", symbol: "DOGE", name: "DoOnlyGoodEveryday", contract: getAddress(DOGE), source: "CoinGecko" });
+      const fromPools = await ask("$frog", { dataset: listed([]), symbols: async () => [{ symbol: "FROG", token: PEPES[0]! }] });
+      expect((body(fromPools) as { lookup: unknown }).lookup).toEqual({ asked: "$frog", symbol: "FROG", contract: getAddress(PEPES[0]!), source: "pool index" });
+      expect(read).toEqual([getAddress(DOGE), getAddress(PEPES[0]!)]);
+
+      const many = await ask("PEPE", { dataset: listed([]), symbols: async () => PEPES.map((token) => ({ symbol: "PEPE", token })) });
+      expect(many.isError).toBe(true);
+      expect(body(many)).toEqual({
+        error: '2 tokens with a Uniswap pool, by the symbol the contract gives itself, go by "PEPE", so nothing was read. Pass the contract address of the one you mean, from `candidates`.',
+        candidates: PEPES.map((token) => ({ contract: getAddress(token), symbol: "PEPE", source: "pool index" })),
+      });
+      const crowd = Array.from({ length: 25 }, (_, i) => ({ symbol: "PEPE", token: `0x${String(i + 1).padStart(40, "0")}` }));
+      const capped = body(await ask("PEPE", { dataset: listed([]), symbols: async () => crowd })) as { error: string; candidates: unknown[]; total: number };
+      expect(capped.candidates).toHaveLength(20);
+      expect(capped.total).toBe(25);
+      expect(capped.error).toContain("`candidates` lists the first 20");
     }
   });
 
   it("says so when no token goes by the symbol, or BitGo gives the one that does no contract", async () => {
     for (const [name, reader] of tools) {
       let reads = 0;
-      const ask = (token: string, listed: () => Promise<CustodyToken[]>) => callTool(desk, name, { token }, undefined, undefined, undefined, { [reader]: async () => (reads++, boards[reader]), listed });
-      expect(body(await ask("DOGE", async () => LISTED))).toEqual({ error: 'No token on BitGo\'s lists for Robinhood Chain has the id or name "DOGE". Pass the token\'s contract address instead.' });
+      const nothing = { dataset: listed([]), symbols: async () => [] };
+      const ask = (token: string, listed: () => Promise<CustodyToken[]>, extra: object = nothing) => callTool(desk, name, { token }, undefined, undefined, undefined, { [reader]: async () => (reads++, boards[reader]), listed, ...extra });
+      expect(body(await ask("DOGE", async () => LISTED))).toEqual({ error: 'No token on BitGo\'s lists for Robinhood Chain, on the lists the dataset records or with a Uniswap pool goes by "DOGE". Pass the token\'s contract address instead.' });
+      expect(body(await ask("DOGE", async () => LISTED, { dataset: async () => Promise.reject(new TypeError("fetch failed")) }))).toEqual({
+        error: 'No token on BitGo\'s lists for Robinhood Chain has the id or name "DOGE", and the dataset could not be read just now to look further. Pass the token\'s contract address instead.',
+      });
       expect(body(await ask("deed", async () => [{ id: "hoodeth:deed" }]))).toEqual({ error: "BitGo lists hoodeth:deed in a form this tool does not read, so it has no contract address for it. Pass the token's contract address instead." });
       expect(body(await ask("x".repeat(81), async () => LISTED))).toEqual({ error: "token must be a contract address on Robinhood Chain, or a symbol or name of one line and at most 80 characters." });
       expect(body(await ask("Cash\nCat", async () => LISTED))).toEqual({ error: "token must be a contract address on Robinhood Chain, or a symbol or name of one line and at most 80 characters." });

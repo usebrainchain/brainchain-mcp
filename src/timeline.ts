@@ -1,7 +1,8 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { isAddressEqual, type Address, type Hash } from "viem";
 
-import { BY_SYMBOL, readCustodyHistory, readListedTokens, TOKEN_INPUT, type CustodyBoard, type CustodyToken } from "./custody.js";
+import { BY_SYMBOL, readCustodyHistory, readListedTokens, TOKEN_INPUT, within, type CustodyBoard, type CustodyToken } from "./custody.js";
+import type { Dataset, DatasetRef } from "./dataset/published.js";
 import { blockOf, inTurn, type ChainHistory, type Moment } from "./history.js";
 import { firstApprovalsIn, MARKET_MAKERS, who, type Approval, type MakerWallet } from "./makers.js";
 import { firstQueued, otherSide, queuedKept, type QueuedPool } from "./queued.js";
@@ -35,6 +36,7 @@ export const TIMELINE_TOOL: Tool = {
     "With a cut-off, an undated step whose `by` is after it goes to `withheld`: it is public now, and nothing shows whether it was public by then, so it is named rather than left out. " +
     "Robinhood, Bitstamp, KuCoin, Gate, LI.FI and CoinGecko publish no date for a listing, so brainchain_token_sightings reads them and they are not steps here. " +
     "`deployed` says whether a contract is at the address, `token` holds its `contract` and the `name` and `symbol` it gives itself, and `unread` names a source that could not be read just now: BitGo, Trust Wallet or MetaMask. `readAt` is when the answer was made. " +
+    "When the BrainChain MCP dataset can be read, the pools and the followed wallets' approvals up to its head block come from it, so the chain is read only for the blocks after, and `dataset` names the day read, its `headBlock` and the SHA-256 of its `manifest`. " +
     "The tool answers one request at a time, in turn with the other tools that read the chain. The first answer for a token can take half a minute; an answer that is not ready after 45 seconds says so, and asking again goes on from where it stopped. " +
     "The first answer after the server starts also reads BitGo's history, with about a dozen of the 60 requests an hour GitHub allows one IP address without a key; the server keeps what it worked out, and later answers read only BitGo's changes since. If that history is not read within 45 seconds, `unread` names BitGo, and asking again goes on from where it stopped. " +
     "A server whose operator set GITHUB_TOKEN reads GitHub with that token's allowance. " +
@@ -76,6 +78,8 @@ export interface TimelineBoard {
   chain: "Robinhood Chain";
   token: { contract: Address; name?: string; symbol?: string };
   readAt: string;
+  /** The published dataset whose steps were read first, so the chain was read only for the blocks after its head. */
+  dataset?: DatasetRef;
   until?: { block: number; at: string };
   deployed: boolean;
   steps: Step[];
@@ -88,13 +92,50 @@ export interface TimelineBoard {
 export interface TimelineReaders {
   /** Runs `read` against the chain in the turn every tool that reads it waits for. */
   chain<T>(read: (reader: ChainHistory) => Promise<T>): Promise<T>;
-  readiness(reader: ChainHistory, token: Address): Promise<ReadinessBoard>;
-  approvals(reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], newest: bigint): Promise<(Approval | undefined)[]>;
+  /** With `poolsFrom`, pools are looked for only from that block on. */
+  readiness(reader: ChainHistory, token: Address, poolsFrom?: bigint): Promise<ReadinessBoard>;
+  /** With `from`, approvals are looked for only from that block on. */
+  approvals(reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], newest: bigint, from?: bigint): Promise<(Approval | undefined)[]>;
   /** For each wallet, the first of the token's pools its multisig queued on its role registry. */
   queued(reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], newest: bigint): Promise<(QueuedPool | undefined)[]>;
   custody(): Promise<CustodyBoard>;
   listed(): Promise<CustodyToken[]>;
   sightings(token: Address): Promise<SightingsBoard>;
+  /** The newest published dataset, whose steps stand in for the chain's history up to its head. */
+  dataset?(): Promise<Dataset>;
+}
+
+/** How long the timeline waits for the dataset before it reads the chain's whole history instead. */
+export const DATASET_MS = 8_000;
+
+/** What the dataset knows of one token: its first pool on each venue, and each scanned wallet's first approval, through `head`. */
+interface Known {
+  ref: DatasetRef;
+  head: bigint;
+  pools: Map<Pool["venue"], Pool>;
+  /** Every pool of a token the dataset traces is in it; another token's pools are not. */
+  traced: boolean;
+  approvals: Map<string, Approval>;
+  scanned: Set<string>;
+}
+
+function knownOf(dataset: Dataset, token: Address): Known {
+  const mine = dataset.steps.filter((row) => row.token.toLowerCase() === token.toLowerCase() && row.at !== undefined && row.block !== undefined && row.transaction !== undefined);
+  const pools = new Map<Pool["venue"], Pool>();
+  const approvals = new Map<string, Approval>();
+  for (const row of mine) {
+    if (row.step === "pool" && (row.source === "Uniswap v3" || row.source === "Uniswap v4") && row.pairedWith) {
+      const known = pools.get(row.source);
+      if (!known || row.block! < known.block) pools.set(row.source, { venue: row.source, at: row.at!, block: row.block!, transaction: row.transaction as Hash, pairedWith: row.pairedWith as Address | "ETH" });
+    }
+    if (row.step === "approval" && row.maker && row.spender) {
+      const wallet = row.maker.wallet.toLowerCase();
+      const known = approvals.get(wallet);
+      if (!known || row.block! < known.block) approvals.set(wallet, { at: row.at!, block: row.block!, transaction: row.transaction as Hash, spender: row.spender as Address, confirmed: row.confirmed === true });
+    }
+  }
+  const traced = dataset.tokens.some((row) => row.token.toLowerCase() === token.toLowerCase());
+  return { ref: dataset.ref, head: BigInt(dataset.ref.headBlock), pools, traced, approvals, scanned: new Set((dataset.rates.through?.wallets ?? []).map((wallet) => wallet.toLowerCase())) };
 }
 
 /** Steps in the same second are in the order one leads to the next, and those in the same block in the order the chain logs them. */
@@ -116,13 +157,27 @@ async function createdBy(reader: ChainHistory, token: Address, transaction: Hash
  */
 export async function tokenTimeline(readers: TimelineReaders, token: Address, wallets: readonly MakerWallet[], times: Map<string, Promise<bigint>>, until?: Moment, now = new Date()): Promise<TimelineBoard> {
   const attempt = <T>(reading: Promise<T>) => reading.then((value) => ({ value }), () => undefined);
+  const read = readers.dataset ? await within(DATASET_MS, readers.dataset(), new Error("late")).then((dataset) => knownOf(dataset, token), () => undefined) : undefined;
   const [chain, custody, listed, sightings] = await Promise.all([
     readers.chain(async (reader) => {
       const newest = await reader.getBlockNumber();
       const cutoff = until && (await blockOf(reader, until, newest, times));
-      const readiness = await readers.readiness(reader, token);
+      // The dataset holds the history up to its head, so the chain is read only after it: for a traced token's pools on the
+      // venues it has none on yet, and for the scanned wallets' approvals the dataset has not seen.
+      const after = read && read.head < newest ? read.head + 1n : undefined;
+      const readiness = await readers.readiness(reader, token, read?.traced && after !== undefined ? after : undefined);
       if (!readiness.deployed) return { cutoff, readiness, approvals: [], queued: [], deploy: false };
-      const approvals = await readers.approvals(reader, token, wallets, newest);
+      if (read?.traced) {
+        const pools = new Map(read.pools);
+        for (const pool of readiness.pools ?? []) if (!pools.has(pool.venue) || pool.block < pools.get(pool.venue)!.block) pools.set(pool.venue, pool);
+        readiness.pools = [...pools.values()].sort((a, b) => a.block - b.block);
+      }
+      const scanned = wallets.map(({ wallet }) => read !== undefined && read.scanned.has(wallet.toLowerCase()));
+      const unscanned = wallets.filter((_, i) => !scanned[i]);
+      const unseen = wallets.filter((maker, i) => scanned[i] && !read!.approvals.has(maker.wallet.toLowerCase()));
+      const whole = unscanned.length === 0 ? [] : await readers.approvals(reader, token, unscanned, newest);
+      const since = after === undefined || unseen.length === 0 ? [] : await readers.approvals(reader, token, unseen, newest, after);
+      const approvals = wallets.map((maker, i) => (scanned[i] ? (read!.approvals.get(maker.wallet.toLowerCase()) ?? since[unseen.indexOf(maker)]) : whole[unscanned.indexOf(maker)]));
       const queued = await readers.queued(reader, token, wallets, newest);
       const deploy = readiness.firstMint !== undefined && (await createdBy(reader, token, readiness.firstMint.transaction));
       return { cutoff, readiness, approvals, queued, deploy };
@@ -178,6 +233,7 @@ export async function tokenTimeline(readers: TimelineReaders, token: Address, wa
     chain: "Robinhood Chain",
     token: { contract: token, ...(readiness.token.name ? { name: readiness.token.name } : {}), ...(readiness.token.symbol ? { symbol: readiness.token.symbol } : {}) },
     readAt: now.toISOString(),
+    ...(read ? { dataset: read.ref } : {}),
     ...(cut ? { until: { block: cut.block, at: new Date(cut.time).toISOString() } } : {}),
     deployed: readiness.deployed,
     steps: steps.filter(known).sort(inOrder),
@@ -205,6 +261,6 @@ const READERS: TimelineReaders = {
 
 const times = new Map<string, Promise<bigint>>();
 
-export function readTokenTimeline(token: Address, until?: Moment, followed: readonly MakerWallet[] = MARKET_MAKERS): Promise<TimelineBoard> {
-  return tokenTimeline(READERS, token, followed, times, until);
+export function readTokenTimeline(token: Address, until?: Moment, followed: readonly MakerWallet[] = MARKET_MAKERS, dataset?: () => Promise<Dataset>): Promise<TimelineBoard> {
+  return tokenTimeline(dataset ? { ...READERS, dataset } : READERS, token, followed, times, until);
 }

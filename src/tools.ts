@@ -4,10 +4,13 @@ import { getAddress, isAddress, type Address } from "viem";
 import type { Bonds } from "./bonds.js";
 import { CHANGES_NAME, CHANGES_TOOL, changesQuery, createWatch, HOSTED_WATCH_URL, readChanges, removeWatch, UNWATCH_NAME, UNWATCH_TOOL, unwatchArgs, WATCH_NAME, WATCH_TOOL, watchArgsOf, type ChangesQuery, type WatchRequest } from "./changes.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
-import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, type CustodyBoard, type CustodyToken } from "./custody.js";
-import { ChainError, type Moment } from "./history.js";
+import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, within, type CustodyBoard, type CustodyToken } from "./custody.js";
+import type { SymbolRow } from "./dataset/format.js";
+import { datasetReader, DatasetError, type Dataset } from "./dataset/published.js";
+import { blockOf, ChainError, inTurn, type Moment } from "./history.js";
 import { MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
 import { MARKET_CAP_NAME, MARKET_CAP_TOOL, readMarketCap, type MarketCapBoard } from "./marketcap.js";
+import { TRACE_OUTCOMES_NAME, TRACE_OUTCOMES_TOOL, traceOutcomes, traceQuery } from "./outcomes.js";
 import { brief, canonicalStringify, RESULT_LIMIT } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL, readPremiums, type PremiumBoard } from "./premiums.js";
 import { READINESS_NAME, READINESS_TOOL, readTokenReadiness, type ReadinessBoard } from "./readiness.js";
@@ -294,11 +297,15 @@ function address(name: string, value: unknown): Address {
   return getAddress(plain);
 }
 
-/** A symbol several of BitGo's tokens go by: the answer names them and reads nothing more. */
+/** A token a symbol was found as, and where. */
+export type Candidate = (CustodyToken | { contract: Address; symbol?: string; name?: string }) & { source: string };
+
+/** A symbol several tokens go by: the answer names them and reads nothing more. */
 class Candidates extends Error {
   constructor(
     message: string,
-    readonly candidates: CustodyToken[],
+    readonly candidates: Candidate[],
+    readonly total?: number,
   ) {
     super(message);
   }
@@ -307,16 +314,52 @@ class Candidates extends Error {
 /** How a symbol was looked up, as the answer reports it. */
 export interface Lookup {
   asked: string;
-  id: string;
+  id?: string;
+  symbol?: string;
   name?: string;
   contract: Address;
+  source: string;
+}
+
+/** The most candidates an answer lists when the pool index has more tokens by a symbol. */
+export const MAX_CANDIDATES = 20;
+/** The source a token found by the symbol its contract gives itself is named by. */
+export const POOL_INDEX = "pool index";
+const fold = (text: string) => text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+
+/**
+ * Looks a symbol up past BitGo's lists, in the published dataset: first the tokens its lists name (Trust Wallet, MetaMask,
+ * LI.FI, CoinGecko, KuCoin and Gate, and the market makers' wallets), by symbol or name, then every token with a pool, by
+ * the symbol its contract gives itself. The first that has any is the answer.
+ */
+async function lookupFurther(sent: string, dataset: Readers["dataset"], symbols: Readers["symbols"]): Promise<{ token: Address; lookup: Lookup }> {
+  const unread = (error: unknown) => {
+    throw error instanceof DatasetError ? error : new DatasetError(brief(error));
+  };
+  const read = await dataset().catch(unread);
+  const wanted = fold(sent.replace(/^\$/, ""));
+  const listed = new Map<string, Candidate>();
+  for (const { token, symbol, name, sources } of read.tokens) {
+    if (![symbol, name].some((key) => key !== undefined && fold(key) === wanted)) continue;
+    listed.set(token.toLowerCase(), { contract: getAddress(token), ...(symbol ? { symbol } : {}), ...(name ? { name } : {}), source: sources.join(", ") });
+  }
+  const pooled = listed.size > 0 ? [] : [...new Map((await symbols(sent.replace(/^\$/, "")).catch(unread)).map(({ symbol, token }) => [token.toLowerCase(), { contract: getAddress(token), symbol, source: POOL_INDEX } as Candidate])).values()];
+  const found = listed.size > 0 ? [...listed.values()] : pooled;
+  const where = listed.size > 0 ? "on the lists the dataset records" : "with a Uniswap pool, by the symbol the contract gives itself,";
+  if (found.length === 0) throw new Error(`No token on BitGo's lists for Robinhood Chain, on the lists the dataset records or with a Uniswap pool goes by ${JSON.stringify(sent)}. Pass the token's contract address instead.`);
+  if (found.length > 1) {
+    const shown = found.slice(0, MAX_CANDIDATES);
+    throw new Candidates(`${found.length} tokens ${where} go by ${JSON.stringify(sent)}, so nothing was read. Pass the contract address of the one you mean${shown.length < found.length ? `; \`candidates\` lists the first ${shown.length}` : ", from `candidates`"}.`, shown, shown.length < found.length ? found.length : undefined);
+  }
+  const [one] = found as [Candidate & { symbol?: string; name?: string }];
+  return { token: one.contract!, lookup: { asked: sent, ...(one.symbol ? { symbol: one.symbol } : {}), ...(one.name ? { name: one.name } : {}), contract: one.contract!, source: one.source } };
 }
 
 /**
- * The token `value` names: an address, checked as one, or a symbol or name, looked up on BitGo's lists. Anything that
- * starts like an address is read as one, so a mistyped address is never taken for a symbol.
+ * The token `value` names: an address, checked as one, or a symbol or name, looked up on BitGo's lists and then in the
+ * published dataset. Anything that starts like an address is read as one, so a mistyped address is never taken for a symbol.
  */
-async function tokenOf(value: unknown, listed: Readers["listed"]): Promise<{ token: Address; lookup?: Lookup }> {
+async function tokenOf(value: unknown, listed: Readers["listed"], dataset: Readers["dataset"], symbols: Readers["symbols"]): Promise<{ token: Address; lookup?: Lookup }> {
   const sent = text("token", value);
   if (/^0x/i.test(sent) || /^[0-9a-fA-F]{40}$/.test(sent)) return { token: address("token", sent) };
   if (sent.length > 80 || /[\n\r\u2028\u2029]/.test(sent)) throw new Error("token must be a contract address on Robinhood Chain, or a symbol or name of one line and at most 80 characters.");
@@ -326,12 +369,20 @@ async function tokenOf(value: unknown, listed: Readers["listed"]): Promise<{ tok
   });
   const found = named(tokens, sent);
   const contracts = new Set(found.map(({ contract }) => contract));
-  if (found.length === 0) throw new Error(`No token on BitGo's lists for Robinhood Chain has the id or name ${JSON.stringify(sent)}. Pass the token's contract address instead.`);
-  if (contracts.size > 1) throw new Candidates(`${found.length} tokens on BitGo's lists for Robinhood Chain go by ${JSON.stringify(sent)}, so nothing was read. Pass the contract address of the one you mean, from \`candidates\`.`, found);
+  if (found.length === 0) {
+    return within(LOOKUP_MS, lookupFurther(sent, dataset, symbols), new DatasetError("late")).catch((error: unknown) => {
+      if (!(error instanceof DatasetError)) throw error;
+      throw new Error(`No token on BitGo's lists for Robinhood Chain has the id or name ${JSON.stringify(sent)}, and the dataset could not be read just now to look further. Pass the token's contract address instead.`);
+    });
+  }
+  if (contracts.size > 1) throw new Candidates(`${found.length} tokens on BitGo's lists for Robinhood Chain go by ${JSON.stringify(sent)}, so nothing was read. Pass the contract address of the one you mean, from \`candidates\`.`, found.map((token) => ({ ...token, source: "BitGo" })));
   const [{ id, name, contract }] = found as [CustodyToken];
   if (!contract) throw new Error(`BitGo lists ${id} in a form this tool does not read, so it has no contract address for it. Pass the token's contract address instead.`);
-  return { token: contract, lookup: { asked: sent, id, ...(name ? { name } : {}), contract } };
+  return { token: contract, lookup: { asked: sent, id, ...(name ? { name } : {}), contract, source: "BitGo" } };
 }
+
+/** How long a lookup past BitGo's lists may take: the dataset is read once and kept. */
+export const LOOKUP_MS = 15_000;
 
 /** A time in ISO 8601: a date, which is midnight UTC, or a date and time with its offset. Without one, a time would be read in the server's own zone. */
 const ISO_TIME = /^(\d{4})-(\d{2})-(\d{2})(?:T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/;
@@ -452,7 +503,16 @@ export interface Readers {
   changes(query: ChangesQuery): Promise<unknown>;
   watch(request: WatchRequest): Promise<unknown>;
   unwatch(id: string, manageToken: string): Promise<unknown>;
+  /** The newest published day of the BrainChain MCP dataset, checked against its manifest. */
+  dataset(): Promise<Dataset>;
+  /** The time a cut-off stands for, and its block when given one. */
+  cutOf(moment: Moment): Promise<{ at: number; block?: number }>;
+  /** The tokens with a pool that call themselves `symbol`, from the published dataset. */
+  symbols(symbol: string): Promise<SymbolRow[]>;
 }
+
+let published: ReturnType<typeof datasetReader> | undefined;
+const blockTimes = new Map<string, Promise<bigint>>();
 
 const READERS: Readers = {
   custody: readCustodyAdditions,
@@ -465,6 +525,10 @@ const READERS: Readers = {
   changes: (query) => readChanges(new URL(HOSTED_WATCH_URL), query),
   watch: (request) => createWatch(new URL(HOSTED_WATCH_URL), request),
   unwatch: (id, manageToken) => removeWatch(new URL(HOSTED_WATCH_URL), id, manageToken),
+  dataset: () => (published ??= datasetReader(undefined)).load(),
+  symbols: (symbol) => (published ??= datasetReader(undefined)).symbol(symbol),
+  cutOf: async (moment) =>
+    "time" in moment ? { at: moment.time } : inTurn(async (chain) => blockOf(chain, moment, await chain.getBlockNumber(), blockTimes)).then(({ block, at }) => ({ at: Date.parse(at), block: Number(block) })),
 };
 
 /** An answer for a token looked up by symbol leads with what it was looked up as. */
@@ -480,7 +544,7 @@ export async function callTool(
   refused: ReadonlyMap<string, string> = new Map(),
   readers: Partial<Readers> = {},
 ): Promise<CallToolResult> {
-  const { custody, makers, readiness, sightings, listed, timeline, marketCap, changes, watch, unwatch } = { ...READERS, ...readers };
+  const { custody, makers, readiness, sightings, listed, timeline, marketCap, changes, watch, unwatch, dataset, cutOf, symbols } = { ...READERS, ...readers };
   const input = (args ?? {}) as Record<string, unknown>;
   const refusal = refused.get(name);
   if (refusal !== undefined) return reply({ error: refusal }, true);
@@ -540,7 +604,7 @@ export async function callTool(
       refuseUnknownFields(input, MAKERS_TOOL.inputSchema);
       const wallet = input.wallet === undefined ? undefined : address("wallet", input.wallet);
       const when = moment(input);
-      const { token, lookup } = await tokenOf(input.token, listed);
+      const { token, lookup } = await tokenOf(input.token, listed, dataset, symbols);
       const board = await makers(token, wallet, when).catch((error: unknown) => {
         if (error instanceof ChainError) throw error;
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
@@ -549,7 +613,7 @@ export async function callTool(
     }
     if (name === READINESS_NAME) {
       refuseUnknownFields(input, READINESS_TOOL.inputSchema);
-      const { token, lookup } = await tokenOf(input.token, listed);
+      const { token, lookup } = await tokenOf(input.token, listed, dataset, symbols);
       const board = await readiness(token).catch((error: unknown) => {
         if (error instanceof ChainError) throw error;
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
@@ -559,7 +623,7 @@ export async function callTool(
     if (name === SIGHTINGS_NAME) {
       refuseUnknownFields(input, SIGHTINGS_TOOL.inputSchema);
       const when = moment(input);
-      const { token, lookup } = await tokenOf(input.token, listed);
+      const { token, lookup } = await tokenOf(input.token, listed, dataset, symbols);
       const board = await sightings(token, when).catch((error: unknown) => {
         if (error instanceof SightingsError || error instanceof ChainError) throw error;
         throw new Error(`The lists could not be read just now: ${brief(error)} Try again in a minute.`);
@@ -569,7 +633,7 @@ export async function callTool(
     if (name === TIMELINE_NAME) {
       refuseUnknownFields(input, TIMELINE_TOOL.inputSchema);
       const when = moment(input);
-      const { token, lookup } = await tokenOf(input.token, listed);
+      const { token, lookup } = await tokenOf(input.token, listed, dataset, symbols);
       const board = await timeline(token, when).catch((error: unknown) => {
         if (error instanceof ChainError) throw error;
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
@@ -579,12 +643,25 @@ export async function callTool(
     if (name === MARKET_CAP_NAME) {
       refuseUnknownFields(input, MARKET_CAP_TOOL.inputSchema);
       const when = moment(input);
-      const { token, lookup } = await tokenOf(input.token, listed);
+      const { token, lookup } = await tokenOf(input.token, listed, dataset, symbols);
       const board = await marketCap(token, when).catch((error: unknown) => {
         if (error instanceof ChainError) throw error;
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
       });
       return reply(withLookup(board, lookup));
+    }
+    if (name === TRACE_OUTCOMES_NAME) {
+      refuseUnknownFields(input, TRACE_OUTCOMES_TOOL.inputSchema);
+      const query = traceQuery(input);
+      const when = moment(input);
+      const [read, cut] = await Promise.all([
+        dataset().catch((error: unknown) => {
+          if (error instanceof DatasetError) throw error;
+          throw new Error(`The dataset could not be read just now: ${brief(error)} Try again in a minute.`);
+        }),
+        when && cutOf(when),
+      ]);
+      return reply(traceOutcomes(read, query, cut));
     }
     if (name === CHANGES_NAME) {
       refuseUnknownFields(input, CHANGES_TOOL.inputSchema);
@@ -601,6 +678,6 @@ export async function callTool(
     }
     return reply({ error: `Unknown tool ${name}.` }, true);
   } catch (error) {
-    return reply({ error: error instanceof Error ? error.message : String(error), ...(error instanceof Candidates ? { candidates: error.candidates } : {}) }, true);
+    return reply({ error: error instanceof Error ? error.message : String(error), ...(error instanceof Candidates ? { candidates: error.candidates, ...(error.total ? { total: error.total } : {}) } : {}) }, true);
   }
 }

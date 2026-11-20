@@ -283,8 +283,9 @@ async function rebuilt(reader: ChainHistory, token: Address, holder: Address, st
 }
 
 /** Each wallet's first approval of `token`, in the order the wallets were given, found in the token's logs a stretch at a time (see `firstSince`). */
-export async function firstApprovals(reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], kept: Pick<MakerKept, "approvals" | "starts">, newest: bigint): Promise<(Approval | undefined)[]> {
-  const start = await approvalsStart(reader, token, newest, kept.starts);
+export async function firstApprovals(reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], kept: Pick<MakerKept, "approvals" | "starts">, newest: bigint, from?: bigint): Promise<(Approval | undefined)[]> {
+  // Given `from`, nothing before it is looked for: what came earlier is known already.
+  const start = from ?? (await approvalsStart(reader, token, newest, kept.starts));
   const first: (Approval | undefined)[] = [];
   for (const maker of wallets) first.push(start === undefined ? undefined : await firstSince(kept.approvals, `${token}:${maker.wallet}`, newest, (from, to) => firstApproval(reader, token, maker, from, to), start));
   return first;
@@ -362,4 +363,4 @@ export function readMakerHoldings(token: Address, wallet?: Address, moment?: Mom
 }
 
 /** The first approvals `readMakerHoldings` finds, read in a turn another tool already holds, so both share what was read. */
-export const firstApprovalsIn = (reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], newest: bigint) => firstApprovals(reader, token, wallets, kept, newest);
+export const firstApprovalsIn = (reader: ChainHistory, token: Address, wallets: readonly MakerWallet[], newest: bigint, from?: bigint) => firstApprovals(reader, token, wallets, kept, newest, from);
