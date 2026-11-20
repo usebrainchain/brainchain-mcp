@@ -49,6 +49,13 @@ describe("a chat message", () => {
     );
   });
 
+  it("ends with how often earlier tokens with the event's step were listed within 30 days, when the dataset counts any", () => {
+    const counts = { step: "custody", about: "x", dataset: { date: "2026-11-21", headBlock: 1, manifest: "ab" }, n: 120, windows: [{ days: 30, eligible: 100, unknown: 10, followed: 9, share: 0.1, medianLeadDays: 8, venues: {} }] };
+    expect(line(event({ kind: "bitgo.merged", ref: "https://github.com/BitGo/BitGoJS/commit/abc", context: { counts } }))).toBe(
+      "BitGo merged Cash Cat CASHCAT (0x020b…18b4) into its Robinhood Chain tokens. Of 90 earlier tokens with this step, 9 were listed by a venue within 30 days. https://github.com/BitGo/BitGoJS/commit/abc",
+    );
+  });
+
   it("says a pair entered the list Robinhood serves to API clients, and never that Robinhood had no pair before", () => {
     const added = line(event({ kind: "robinhood.pair_added", token: { address: null, symbol: "PONS", name: "Pons" }, ref: "https://nummus.robinhood.com/currency_pairs/#PONS", detail: { tradable: false, pairsRead: 140 }, context: { worth: null } }));
     expect(added).toBe("Pons PONS entered the pair list Robinhood serves to API clients, price only (140 pairs read). https://nummus.robinhood.com/currency_pairs/#PONS");
