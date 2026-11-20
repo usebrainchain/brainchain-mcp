@@ -186,13 +186,20 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
   }
 
+  /**
+   * Whether an authorization for these terms ends within the cap. The terms are decoded without a schema, and x402 adds
+   * the lifetime to the current time: a string "600" would pass a plain comparison and then be appended as digits.
+   */
+  const brief = (r: { maxTimeoutSeconds: unknown }): boolean =>
+    Number.isSafeInteger(r.maxTimeoutSeconds) && (r.maxTimeoutSeconds as number) > 0 && (r.maxTimeoutSeconds as number) <= MAX_TIMEOUT_SECONDS;
+
   /** What the desk asked that this server will not sign, named by the condition that failed. */
   function refusedTerms(requirements: readonly { payTo: string; maxTimeoutSeconds: number }[]): string {
     const payee = requirements.some((r) => sameAddress(r.payTo, config.payTo));
-    const brief = requirements.some((r) => r.maxTimeoutSeconds <= MAX_TIMEOUT_SECONDS);
+    const short = requirements.some(brief);
     const check = "Check BRAINCHAIN_NETWORK and BRAINCHAIN_PAY_ON, or set BRAINCHAIN_PAY_TO for a custom BRAINCHAIN_DESK_URL.";
-    if (!payee && brief) return `it named ${requirements[0]!.payTo} as the payee, and this server pays only ${config.payTo}. ${check}`;
-    if (payee && !brief) return `it asked for an authorization that lasts ${Math.min(...requirements.map((r) => r.maxTimeoutSeconds))} seconds, and this server signs none for longer than ${MAX_TIMEOUT_SECONDS}.`;
+    if (!payee && short) return `it named ${requirements[0]!.payTo} as the payee, and this server pays only ${config.payTo}. ${check}`;
+    if (payee && !short) return `it asked for an authorization that lasts ${requirements.map((r) => JSON.stringify(r.maxTimeoutSeconds)).join(" or ")} seconds, and this server signs none for longer than ${MAX_TIMEOUT_SECONDS}.`;
     return `the payee must be ${config.payTo} and the authorization may last at most ${MAX_TIMEOUT_SECONDS} seconds. ${check}`;
   }
 
@@ -348,7 +355,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       policies: [
         (_version, requirements) => {
           const kept = requirements.filter(
-            (r) => r.network === config.network && sameAddress(r.asset, config.asset) && sameAddress(r.payTo, config.payTo) && r.maxTimeoutSeconds <= MAX_TIMEOUT_SECONDS,
+            (r) => r.network === config.network && sameAddress(r.asset, config.asset) && sameAddress(r.payTo, config.payTo) && brief(r),
           );
           if (kept.length === 0) refused = refusedTerms(requirements);
           return kept;

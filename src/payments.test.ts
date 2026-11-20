@@ -23,7 +23,7 @@ const task = { title: "Explain a Merkle proof", brief: "In two paragraphs.", lev
 interface ChallengeOverrides {
   amount?: string;
   payTo?: string;
-  maxTimeoutSeconds?: number;
+  maxTimeoutSeconds?: unknown;
 }
 
 function challenge(terms: ChallengeOverrides = {}): string {
@@ -385,6 +385,10 @@ describe("posting", () => {
       [{ payTo: stranger }, `The desk asked to be paid on terms this server does not accept: it named ${stranger} as the payee, and this server pays only ${config.payTo}. ${check} Nothing was charged.`],
       [{ maxTimeoutSeconds: 3_600 }, "The desk asked to be paid on terms this server does not accept: it asked for an authorization that lasts 3600 seconds, and this server signs none for longer than 600. Nothing was charged."],
       [{ payTo: stranger, maxTimeoutSeconds: 3_600 }, `The desk asked to be paid on terms this server does not accept: the payee must be ${config.payTo} and the authorization may last at most 600 seconds. ${check} Nothing was charged.`],
+      // x402 adds the lifetime to the clock: a string would be appended as digits, an authorization for millennia.
+      [{ maxTimeoutSeconds: "600" }, 'The desk asked to be paid on terms this server does not accept: it asked for an authorization that lasts "600" seconds, and this server signs none for longer than 600. Nothing was charged.'],
+      [{ maxTimeoutSeconds: 0 }, "The desk asked to be paid on terms this server does not accept: it asked for an authorization that lasts 0 seconds, and this server signs none for longer than 600. Nothing was charged."],
+      [{ maxTimeoutSeconds: 300.5 }, "The desk asked to be paid on terms this server does not accept: it asked for an authorization that lasts 300.5 seconds, and this server signs none for longer than 600. Nothing was charged."],
     ] as const) {
       const { fetchImpl, seen } = fakeDesk(accepted, terms);
       const d = desk(fetchImpl);
