@@ -39,8 +39,10 @@ export const POOLS_PER_REQUEST = 900;
 export const RECENT_BLOCKS = 300_000n;
 /** How far back the search for a trade goes when nothing traded that recently: about three and a half days. */
 export const LOOKBACK_BLOCKS = 3_000_000n;
-/** Below this many dollars of liquidity a $1,000 buy moves a pool's price about 8% or more. */
-export const THIN_USD = 50_000;
+/** Depth is counted within this many percent of a pool's price, either way. */
+export const DEPTH_PERCENT = 2;
+/** Below this many dollars of depth within 2%, a $1,000 buy moves a pool's price about 2% or more. */
+export const THIN_USD = 2_000;
 
 export const MARKET_CAP_TOOL: Tool = {
   name: MARKET_CAP_NAME,
@@ -50,9 +52,9 @@ export const MARKET_CAP_TOOL: Tool = {
     "The price is a pool's price right after the last swap at or before the block, read from that swap's log on Uniswap v3 or v4, in the deepest pool that pairs the token with USDG, which is counted as one dollar. " +
     "The pools weighed are the ones that traded in the 300,000 blocks up to the block, about eight hours at ten blocks a second. When none did, the search goes back 100,000 blocks at a time, up to 3,000,000 blocks, and weighs the pools that traded in the first stretch that has a trade. " +
     "When no pool paired with USDG traded there, the deepest pool paired with ETH or WETH is used, and its price is turned into dollars with ETH's price in ETH's deepest pool paired with USDG, read the same way at the same block and given as `ethUsd`. " +
-    "A pool's depth is `liquidityUsd`: the dollar value of its active liquidity at its price, as Uniswap's own liquidity figure gives it after the pool's last swap, with liquidity added or removed around that price since then taken into account, counted as if it were spread over every price. " +
-    "That is what decides how far a trade moves the price; a pool whose liquidity sits close to the price holds fewer tokens than that. " +
-    `A pool with a \`liquidityUsd\` under $${THIN_USD.toLocaleString("en-US")} is marked \`thin\`: at that depth a $1,000 buy moves its price about 8% or more, so its price says little. A thin pool is still used when it is the deepest. ` +
+    "A pool's depth is `depth2pctUsd`: the dollar value of what it holds between 2% under its price and 2% over it, from its active liquidity after its last swap, with liquidity added or removed around that price since then taken into account, held across that band. " +
+    "Half of it is what a buy takes to move the price up 2%, and the other half what a sale takes to move it down 2%. " +
+    `A pool with a \`depth2pctUsd\` under $${THIN_USD.toLocaleString("en-US")} is marked \`thin\`: a $1,000 buy moves its price about 2% or more, so its price says little. A thin pool is still used when it is the deepest. ` +
     "The supply is what the token's Transfer logs say was minted less what was burned up to the block, since Robinhood Chain's public endpoint keeps no state that old. " +
     "The tool checks the method at the newest block, where the same sum must equal the token's own totalSupply, and `supplyCheck` gives the `block` checked and whether the check `passed`. " +
     "If it did not, the token's supply does not follow its Transfer logs, and no past `supply` or `marketCapUsd` is given: `supplyCheck` then gives what the `transfers` add up to and the `totalSupply`. Without a cut-off, `supply` is the token's totalSupply at the newest block. " +
@@ -61,8 +63,8 @@ export const MARKET_CAP_TOOL: Tool = {
     BY_SYMBOL +
     "To read a past block, pass `atBlock`, a block number, or `at`, a time in ISO 8601 such as 2026-11-01T00:00:00Z, for the last block made at or before it. Without either, the tool reads the newest block. " +
     "In the answer, `asOf` gives the `block` the figures are for and when it was made (`at`), and `readAt` when the chain was read. `priceUsd`, `supply` and `marketCapUsd` are at that block, the price as the pool stood after `swap`, the swap it comes from, with its `block`, `at` and `transaction`. " +
-    "`pool` is the pool used: its `version`, its `address` on Uniswap v3 or its `id` on Uniswap v4 with its `hooks`, the `pair`, `pairedWith`, the other token's contract address or ETH, its `fee`, its `liquidityUsd` at the block and `thin`. " +
-    "`chosen` says why that pool, and `pools` lists the pools it was weighed against, deepest first, each with its last swap's `block` and its `priceUsd` and `liquidityUsd`. `token` holds the `contract` and the `name`, `symbol` and `decimals` the contract gives itself. " +
+    "`pool` is the pool used: its `version`, its `address` on Uniswap v3 or its `id` on Uniswap v4 with its `hooks`, the `pair`, `pairedWith`, the other token's contract address or ETH, its `fee`, its `depth2pctUsd` at the block and `thin`. " +
+    "`chosen` says why that pool, and `pools` lists the pools it was weighed against, deepest first, each with its last swap's `block` and its `priceUsd` and `depth2pctUsd`. `token` holds the `contract` and the `name`, `symbol` and `decimals` the contract gives itself. " +
     "Anyone can create a pool for any token and trade in it, and whoever deployed a token chose its name, symbol and supply, so a price from a thin pool, or for a token whose origin you do not know, proves little. " +
     "The tool answers one request at a time, in turn with the other tools that read the chain. The first answer for a token can take half a minute, because the tool reads every pool created for it and its whole supply history; later ones are faster for as long as the server keeps running. " +
     "An answer that is not ready after 45 seconds says so, and asking again goes on from where it stopped. " +
@@ -102,12 +104,12 @@ export interface Traded {
   tick: number;
 }
 
-/** A pool that traded, priced: one asset in the quote and in dollars, and its liquidity at the block, all scaled by `SCALE`. */
+/** A pool that traded, priced: one asset in the quote and in dollars, and its depth within 2% at the block, all scaled by `SCALE`. */
 interface Priced extends Traded {
   quote: "USDG" | "ETH";
   inQuote: bigint;
   usd: bigint;
-  liquidityUsd: bigint;
+  depthUsd: bigint;
 }
 
 export interface PoolEntry {
@@ -118,7 +120,7 @@ export interface PoolEntry {
   pair: string;
   pairedWith: Address | "ETH";
   fee: number;
-  liquidityUsd: string;
+  depth2pctUsd: string;
   thin: boolean;
 }
 
@@ -343,10 +345,28 @@ export function priceFrom(sqrtPriceX96: bigint, assetIsCurrency0: boolean, asset
   return assetIsCurrency0 ? (squared * ten(assetDecimals) * SCALE) / (Q192 * ten(quoteDecimals)) : (Q192 * ten(assetDecimals) * SCALE) / (squared * ten(quoteDecimals));
 }
 
-/** The quote side of a pool's active liquidity, in the quote's smallest unit, as if spread over every price: Uniswap's virtual reserve. */
-export function quoteReserve(liquidity: bigint, sqrtPriceX96: bigint, assetIsCurrency0: boolean): bigint {
-  if (sqrtPriceX96 === 0n) return 0n;
-  return assetIsCurrency0 ? (liquidity * sqrtPriceX96) / Q96 : (liquidity * Q96) / sqrtPriceX96;
+const sqrt = (value: bigint): bigint => {
+  if (value < 2n) return value;
+  let root = value;
+  for (let next = (root + 1n) >> 1n; next < root; next = (next + value / next) >> 1n) root = next;
+  return root;
+};
+
+/**
+ * What a pool holds between `DEPTH_PERCENT` under its price and as much over it, in the quote's smallest unit, by Uniswap's
+ * range formulas for `liquidity` across that band: the currency0 between the price and the top of the band, valued at the
+ * price, and the currency1 between the bottom of the band and the price. The pool's active liquidity is taken to run across
+ * the whole band, as it does to the next initialized tick.
+ */
+export function depthWithin(liquidity: bigint, sqrtPriceX96: bigint, assetIsCurrency0: boolean): bigint {
+  if (sqrtPriceX96 === 0n || liquidity === 0n) return 0n;
+  const squared = sqrtPriceX96 * sqrtPriceX96;
+  const top = sqrt((squared * BigInt(100 + DEPTH_PERCENT)) / 100n);
+  const bottom = sqrt((squared * BigInt(100 - DEPTH_PERCENT)) / 100n);
+  const above0 = (liquidity * Q96 * (top - sqrtPriceX96)) / (top * sqrtPriceX96);
+  const below1 = (liquidity * (sqrtPriceX96 - bottom)) / Q96;
+  // The quote is currency1 when the asset is currency0.
+  return assetIsCurrency0 ? below1 + (above0 * squared) / Q192 : above0 + (below1 * Q192) / squared;
 }
 
 /** A `SCALE`d dollar amount in dollars and cents, rounded half up. */
@@ -386,7 +406,7 @@ interface Pricing {
 
 /**
  * `asset`'s deepest pool at `block`: among the pools paired with USDG that traded, by `lastSwaps`'s window, the one with the
- * most liquidity in dollars at the block, and only when none did, the same among those paired with ETH or WETH, priced
+ * most depth within 2% in dollars at the block, and only when none did, the same among those paired with ETH or WETH, priced
  * through ETH's own deepest pool paired with USDG.
  */
 async function deepest(reader: ChainHistory, name: string, asset: Asset, quotes: readonly Address[], start: bigint, block: bigint, newest: bigint, kept: CapKept): Promise<Pricing | undefined> {
@@ -405,10 +425,10 @@ async function deepest(reader: ChainHistory, name: string, asset: Asset, quotes:
   const candidates = set.map((swap, i): Priced => {
     const assetIsCurrency0 = asset.addresses.some((address) => same(address, swap.pool.currency0));
     const inQuote = priceFrom(swap.sqrtPriceX96, assetIsCurrency0, asset.decimals, quoteDecimals);
-    const liquidityUsd = (2n * quoteReserve(liquidity[i]!, swap.sqrtPriceX96, assetIsCurrency0) * quoteUsd) / ten(quoteDecimals);
-    return { ...swap, quote, inQuote, usd: (inQuote * quoteUsd) / SCALE, liquidityUsd };
+    const depthUsd = (depthWithin(liquidity[i]!, swap.sqrtPriceX96, assetIsCurrency0) * quoteUsd) / ten(quoteDecimals);
+    return { ...swap, quote, inQuote, usd: (inQuote * quoteUsd) / SCALE, depthUsd };
   });
-  candidates.sort((a, b) => (b.liquidityUsd > a.liquidityUsd ? 1 : b.liquidityUsd < a.liquidityUsd ? -1 : later(a, b) === a ? -1 : 1));
+  candidates.sort((a, b) => (b.depthUsd > a.depthUsd ? 1 : b.depthUsd < a.depthUsd ? -1 : later(a, b) === a ? -1 : 1));
   return { chosen: candidates[0]!, candidates, quote, others: swaps.length - set.length, from, recent, ...(eth ? { eth } : {}) };
 }
 
@@ -419,7 +439,7 @@ function ethPrice(reader: ChainHistory, block: bigint, newest: bigint, kept: Cap
   return deepest(reader, "eth", ETH, [USDG], 0n, block, newest, kept);
 }
 
-const thin = (liquidityUsd: bigint) => liquidityUsd < BigInt(THIN_USD) * SCALE;
+const thin = (depthUsd: bigint) => depthUsd < BigInt(THIN_USD) * SCALE;
 
 function entry(priced: Priced, symbol: string): PoolEntry {
   const { pool } = priced;
@@ -430,8 +450,8 @@ function entry(priced: Priced, symbol: string): PoolEntry {
     pair: `${nameOf(own, symbol)}/${nameOf(other, symbol)}`,
     pairedWith: same(other, zeroAddress) ? "ETH" : other,
     fee: pool.fee,
-    liquidityUsd: dollars(priced.liquidityUsd),
-    thin: thin(priced.liquidityUsd),
+    depth2pctUsd: dollars(priced.depthUsd),
+    thin: thin(priced.depthUsd),
   };
 }
 

@@ -13,7 +13,7 @@ import {
   marketCap,
   POOLS_PER_REQUEST,
   priceFrom,
-  quoteReserve,
+  depthWithin,
   RECENT_BLOCKS,
   SCALE,
   significant,
@@ -204,19 +204,19 @@ describe("the market cap tool's words", () => {
       expect(text).toContain("the deepest pool that pairs the token with USDG");
       expect(text).toContain("300,000 blocks up to the block");
       expect(text).toContain("3,000,000 blocks");
-      expect(text).toContain("a $1,000 buy moves its price about 8% or more");
-      expect(text).toContain("counted as if it were spread over every price");
+      expect(text).toContain("a $1,000 buy moves its price about 2% or more");
+      expect(text).toContain("between 2% under its price and 2% over it");
       expect(text).toContain("minted less what was burned");
       expect(text).not.toMatch(/guarantee|will be listed|will list|insider|alpha|front-?run|likely|probab|forecast|—/i);
     }
     expect(description).toContain(`under $${THIN_USD.toLocaleString("en-US")} is marked \`thin\``);
-    expect(section).toContain("less than $50,000 is marked `thin`");
+    expect(section).toContain("less than $2,000 is marked `thin`");
     expect(description).toMatch(/Free, no key and no payment\. Not advice\.$/);
     expect(section.startsWith("## Market cap at a time\n")).toBe(true);
   });
 
   it("name the answer's fields as the answer does", () => {
-    const fields = ["`priceUsd`", "`supply`", "`marketCapUsd`", "`asOf`", "`block`", "`at`", "`swap`", "`transaction`", "`pool`", "`version`", "`address`", "`id`", "`hooks`", "`pair`", "`pairedWith`", "`fee`", "`liquidityUsd`", "`thin`", "`chosen`", "`pools`", "`ethUsd`", "`supplyCheck`", "`passed`", "`token`", "`decimals`", "`readAt`", "`atBlock`"];
+    const fields = ["`priceUsd`", "`supply`", "`marketCapUsd`", "`asOf`", "`block`", "`at`", "`swap`", "`transaction`", "`pool`", "`version`", "`address`", "`id`", "`hooks`", "`pair`", "`pairedWith`", "`fee`", "`depth2pctUsd`", "`thin`", "`chosen`", "`pools`", "`ethUsd`", "`supplyCheck`", "`passed`", "`token`", "`decimals`", "`readAt`", "`atBlock`"];
     for (const text of [MARKET_CAP_TOOL.description!, row]) for (const field of fields) expect(text, field).toContain(field);
   });
 
@@ -238,10 +238,17 @@ describe("prices and dollars from a pool", () => {
     expect(priceFrom(0n, true, 18, 6)).toBe(0n);
   });
 
-  it("counts a pool's active liquidity as the quote it would hold over every price", () => {
-    const reserve = quoteReserve(1_200_031_423_038_842_730n, 15_495_418_308_450_789_825_008n, true);
-    expect(dollars((2n * reserve * SCALE) / 10n ** 6n)).toBe("469403.51");
-    expect(quoteReserve(10n ** 18n, 0n, false)).toBe(0n);
+  it("counts what a pool holds within 2% of its price either way, by the range formulas, in the quote", () => {
+    // At a price of one, the band holds L(1 - sqrt(0.98)) of currency1 below the price and L(1 - 1/sqrt(1.02)) of currency0 above it.
+    const band = 1 - Math.sqrt(0.98) + (1 - 1 / Math.sqrt(1.02));
+    const atOne = depthWithin(10n ** 18n, 1n << 96n, true);
+    expect(Math.abs(Number(atOne) / 1e18 - band)).toBeLessThan(1e-12);
+    // Either side as the quote gives the same at a price of one.
+    expect(Number(depthWithin(10n ** 18n, 1n << 96n, false)) / 1e18).toBeCloseTo(band, 12);
+    // Cash Cat's deepest pool on 2026-07-28: about one hundredth of the old figure, which counted its liquidity over every price.
+    const depth = depthWithin(1_200_031_423_038_842_730n, 15_495_418_308_450_789_825_008n, true);
+    expect(dollars((depth * SCALE) / 10n ** 6n)).toBe("4671.26");
+    expect(depthWithin(10n ** 18n, 0n, false)).toBe(0n);
   });
 
   it("writes dollars to the cent and prices to eight significant digits, rounded half up", () => {
@@ -267,13 +274,13 @@ describe("marketCap", () => {
       supply: "1000000000",
       marketCapUsd: "38251409.44",
       swap: { block: 21_400_710, at: at(21_400_710n), transaction: hash("03") },
-      pool: { ...deepPool, liquidityUsd: "469403.51", thin: false },
+      pool: { ...deepPool, depth2pctUsd: "4671.26", thin: false },
       chosen: "The deepest of the 4 pools paired with USDG that traded in the 301,124 blocks up to block 21401123; 1 pool paired with ETH or WETH also traded there.",
       pools: [
-        { ...deepPool, liquidityUsd: "469403.51", thin: false, block: 21_400_710, priceUsd: "0.038251409" },
-        { version: "Uniswap v4", id: SECOND, hooks: zeroAddress, pair: "CASHCAT/USDG", pairedWith: USDG, fee: 5000, liquidityUsd: "170551.98", thin: false, block: 21_397_459, priceUsd: "0.038283831" },
-        { version: "Uniswap v3", address: V3_CASHCAT_USDG, pair: "CASHCAT/USDG", pairedWith: USDG, fee: 10_000, liquidityUsd: "122583.88", thin: false, block: 21_397_457, priceUsd: "0.038455904" },
-        { version: "Uniswap v4", id: EMPTY, hooks: zeroAddress, pair: "CASHCAT/USDG", pairedWith: USDG, fee: 2786, liquidityUsd: "18.17", thin: true, block: 21_389_814, priceUsd: "0.038714619" },
+        { ...deepPool, depth2pctUsd: "4671.26", thin: false, block: 21_400_710, priceUsd: "0.038251409" },
+        { version: "Uniswap v4", id: SECOND, hooks: zeroAddress, pair: "CASHCAT/USDG", pairedWith: USDG, fee: 5000, depth2pctUsd: "1697.24", thin: true, block: 21_397_459, priceUsd: "0.038283831" },
+        { version: "Uniswap v3", address: V3_CASHCAT_USDG, pair: "CASHCAT/USDG", pairedWith: USDG, fee: 10_000, depth2pctUsd: "1219.89", thin: true, block: 21_397_457, priceUsd: "0.038455904" },
+        { version: "Uniswap v4", id: EMPTY, hooks: zeroAddress, pair: "CASHCAT/USDG", pairedWith: USDG, fee: 2786, depth2pctUsd: "0.18", thin: true, block: 21_389_814, priceUsd: "0.038714619" },
       ],
       supplyCheck: { block: Number(NEWEST), passed: true },
     });
@@ -292,9 +299,9 @@ describe("marketCap", () => {
       { key: V3_CASHCAT_USDG, block: 21_400_000n, index: 0, tickLower: -309_000, tickUpper: -308_800, delta: 312_551_692_710_869_291n },
     ];
     const board = await marketCap(chain({ changes }).reader, CASHCAT, fresh(), NOW, { block: CUTOFF });
-    expect(board.pool).toMatchObject({ version: "Uniswap v3", address: V3_CASHCAT_USDG, liquidityUsd: "245167.76" });
+    expect(board.pool).toMatchObject({ version: "Uniswap v3", address: V3_CASHCAT_USDG, depth2pctUsd: "2439.78" });
     expect(board.priceUsd).toBe("0.038455904");
-    expect(board.pools.map(({ liquidityUsd }) => liquidityUsd)).toEqual(["245167.76", "170551.98", "78244.16", "18.17"]);
+    expect(board.pools.map(({ depth2pctUsd }) => depth2pctUsd)).toEqual(["2439.78", "1697.24", "778.65", "0.18"]);
   });
 
   it("reads the liquidity changes of several v4 pools in one request, and of a single pool on its own", async () => {
@@ -314,7 +321,7 @@ describe("marketCap", () => {
       priceUsd: "0.04",
       marketCapUsd: "40000000.00",
       swap: { block: 21_400_000, transaction: hash("02") },
-      pool: { version: "Uniswap v4", id: ETH_POOL, pair: "CASHCAT/ETH", pairedWith: "ETH", liquidityUsd: "536656.31", thin: false },
+      pool: { version: "Uniswap v4", id: ETH_POOL, pair: "CASHCAT/ETH", pairedWith: "ETH", depth2pctUsd: "5340.53", thin: false },
       ethUsd: { priceUsd: "2000", swap: { block: 21_401_000, transaction: hash("00") }, pool: { version: "Uniswap v3", address: V3_ETH_USDG, pair: "WETH/USDG", pairedWith: USDG, fee: 500, thin: false } },
     });
     expect(board.chosen).toBe(
