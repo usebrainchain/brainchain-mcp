@@ -31,7 +31,7 @@ Every setup below points the server at that file with `BRAINCHAIN_PAYER_KEY_FILE
 Add the server for every project:
 
 ```bash
-claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.15.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.15.1
 ```
 
 Or add it to a project's `.mcp.json`. The file holds no secret, so you can commit it:
@@ -41,7 +41,7 @@ Or add it to a project's `.mcp.json`. The file holds no secret, so you can commi
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.15.0"],
+      "args": ["-y", "brainchain-mcp@0.15.1"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -50,7 +50,7 @@ Or add it to a project's `.mcp.json`. The file holds no secret, so you can commi
 
 ### Cursor
 
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMTUuMCJdLCJlbnYiOnsiQlJBSU5DSEFJTl9QQVlFUl9LRVlfRklMRSI6In4vLmJyYWluY2hhaW4vcGF5ZXIua2V5In19)
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMTUuMSJdLCJlbnYiOnsiQlJBSU5DSEFJTl9QQVlFUl9LRVlfRklMRSI6In4vLmJyYWluY2hhaW4vcGF5ZXIua2V5In19)
 
 Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for every project):
 
@@ -59,7 +59,7 @@ Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for ev
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.15.0"],
+      "args": ["-y", "brainchain-mcp@0.15.1"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -75,7 +75,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.15.0"],
+      "args": ["-y", "brainchain-mcp@0.15.1"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -92,7 +92,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
     "brainchain": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.15.0"],
+      "args": ["-y", "brainchain-mcp@0.15.1"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${input:brainchain-key}" }
     }
   },
@@ -107,14 +107,14 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
 Point the server at the key file:
 
 ```bash
-openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.15.0"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
+openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.15.1"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
 ```
 
 The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
 
 Each setup above pays in USDG on Robinhood Chain. To pay in USDC on Base instead, add `BRAINCHAIN_PAY_ON=base` to the server's environment (`-e BRAINCHAIN_PAY_ON=base` in Claude Code).
 
-`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.15.0 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
+`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.15.1 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
 
 ### MCP Registry
 
@@ -129,13 +129,13 @@ Each brief is posted on BrainChain and each result is served at a public link. K
 **USDG on Robinhood Chain.** The wallet needs 1 USDG per task, plus a little ETH on Robinhood Chain for a one-time approval that lets Permit2 (Uniswap's token-approval contract) move its USDG:
 
 ```bash
-BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.15.0 approve
+BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.15.1 approve
 ```
 
 In PowerShell on Windows:
 
 ```powershell
-$env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.15.0 approve
+$env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.15.1 approve
 ```
 
 This approves 100 USDG. Pass another amount or `max` as the last argument, or `0` to revoke. After that, each payment is a signature, and BrainChain's payment desk (the service that takes payment and posts your task) pays the gas.
@@ -350,7 +350,7 @@ If a setting is invalid, the server says so once on stderr when it starts, and e
 Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have no value. In Claude Code, with the key saved as in [Install](#install):
 
 ```bash
-claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.15.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.15.1
 ```
 
 **With USDC on Base Sepolia** (`BRAINCHAIN_PAY_ON=base`), get test USDC from [Circle's faucet](https://faucet.circle.com). That is all a payment needs.
@@ -367,7 +367,7 @@ claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHA
 3. Approve Permit2:
 
    ```bash
-   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.15.0 approve
+   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.15.1 approve
    ```
 
 ## Examples
