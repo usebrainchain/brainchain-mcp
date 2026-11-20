@@ -79,7 +79,11 @@ describe("the sightings tool's words", () => {
       expect(text).toContain("Robinhood and Bitstamp, which Robinhood owns, publish no contract addresses, so they are matched by symbol: `robinhood` has an entry for each");
       expect(text).toContain("of letters and digits that the six sources give the token.");
       expect(text).toContain("Two tokens can share a symbol, so compare that `name` with the token's own before reading an entry as this token: a token on Robinhood Chain that calls itself DOGE is not Dogecoin.");
-      expect(text).toContain("An entry with a `page` and no `pair` has no name to compare, so it says only that Robinhood has a page under that symbol.");
+      expect(text).toContain("An entry with a `page` and `pair` false has no name to compare, so it says only that Robinhood has a page under that symbol.");
+      expect(text).toContain("the pair list Robinhood serves to API clients");
+      expect(text).toContain("on November 20, 2026 it held 140 pairs, while the sitemap had a page for each of the 353 pairs Robinhood's site shows");
+      expect(text).toContain("So `pair` false says only that");
+      expect(text).not.toMatch(/no pair|public list of crypto pairs/i);
       expect(text).toContain("The tool reads the chain only for the time of `atBlock`, so an address that is not a token is listed nowhere.");
       expect(text).toContain("the time the pull request that added it was merged, which can be days after its commit was made.");
       expect(text).toContain("A Trust Wallet or MetaMask entry stays when its `since` is at or before that time.");
@@ -93,7 +97,7 @@ describe("the sightings tool's words", () => {
   });
 
   it("name the answer's fields as the answer does, and are counted with the tools that only read", () => {
-    const fields = ["`token`", "`lists`", "`source`", "`listed`", "`status`", "`since`", "`link`", "`exchanges`", "`deposits`", "`withdrawals`", "`robinhood`", "`symbol`", "`page`", "`pair`", "`name`", "`tradable`", "`bitstamp`", "`unread`", "`readAt`", "`atBlock`", "`at`", "`until`", "`withheld`"];
+    const fields = ["`token`", "`lists`", "`source`", "`listed`", "`status`", "`since`", "`link`", "`exchanges`", "`deposits`", "`withdrawals`", "`robinhood`", "`symbol`", "`page`", "`pair`", "`pairsRead`", "`name`", "`tradable`", "`bitstamp`", "`unread`", "`readAt`", "`atBlock`", "`at`", "`until`", "`withheld`"];
     for (const text of [SIGHTINGS_TOOL.description!, row]) for (const field of fields) expect(text).toContain(field);
     expect(SIGHTINGS_TOOL.annotations).toEqual({ readOnlyHint: true, openWorldHint: true });
     expect(SIGHTINGS_TOOL.inputSchema).toMatchObject({ required: ["token"], additionalProperties: false });
@@ -118,7 +122,7 @@ describe("tokenSightings", () => {
         { source: "KuCoin", listed: true, deposits: true, withdrawals: false },
         { source: "Gate", listed: true, deposits: false, withdrawals: true },
       ],
-      robinhood: [{ symbol: "CASHCAT", page: true, pair: true, name: "Cash Cat", tradable: true, bitstamp: true }],
+      robinhood: [{ symbol: "CASHCAT", page: true, pair: true, pairsRead: 3, name: "Cash Cat", tradable: true, bitstamp: true }],
       unread: [],
     });
   });
@@ -230,15 +234,20 @@ describe("tokenSightings", () => {
     expect((await sightings(pages)).lists[0]).toEqual({ source: "Trust Wallet", listed: false });
   });
 
-  it("tells a symbol Robinhood trades from one it only shows and from one it has no pair for", async () => {
+  it("tells a symbol Robinhood trades from one it only shows, and from one the pair list it serves to API clients lacks", async () => {
     const shown = everywhere();
     shown[PAIRS] = json({ results: [pair("CASHCAT", "Cash Cat", "untradable")] });
-    expect((await sightings(shown)).robinhood).toEqual([{ symbol: "CASHCAT", page: true, pair: true, name: "Cash Cat", tradable: false, bitstamp: true }]);
+    expect((await sightings(shown)).robinhood).toEqual([{ symbol: "CASHCAT", page: true, pair: true, pairsRead: 1, name: "Cash Cat", tradable: false, bitstamp: true }]);
 
     const unknown = everywhere();
     unknown[PAIRS] = json({ results: [] });
     unknown[SITEMAP] = sitemap("BTC");
-    expect((await sightings(unknown)).robinhood).toEqual([{ symbol: "CASHCAT", page: false, pair: false, bitstamp: true }]);
+    expect((await sightings(unknown)).robinhood).toEqual([{ symbol: "CASHCAT", page: false, pair: false, pairsRead: 0, bitstamp: true }]);
+
+    // A price-only pair the list leaves out still has its page in the sitemap, and the entry says how many pairs were read.
+    const priceOnly = everywhere();
+    priceOnly[PAIRS] = json({ results: [pair("BTC", "Bitcoin", "tradable"), pair("ETH", "Ethereum", "tradable")] });
+    expect((await sightings(priceOnly)).robinhood).toEqual([{ symbol: "CASHCAT", page: true, pair: false, pairsRead: 2, bitstamp: true }]);
   });
 
   it("gives Robinhood's own name for a symbol, which is how another token with that symbol shows", async () => {
@@ -254,7 +263,7 @@ describe("tokenSightings", () => {
     };
     const board = await sightings(pages);
     expect(board.token).toEqual({ contract: CASHCAT, symbol: "DOGE", name: "DoOnlyGoodEveryday" });
-    expect(board.robinhood).toEqual([{ symbol: "DOGE", page: true, pair: true, name: "Dogecoin", tradable: true, bitstamp: false }]);
+    expect(board.robinhood).toEqual([{ symbol: "DOGE", page: true, pair: true, pairsRead: 3, name: "Dogecoin", tradable: true, bitstamp: false }]);
   });
 
   it("matches a symbol whatever case a source writes it in", async () => {
@@ -262,7 +271,7 @@ describe("tokenSightings", () => {
     pages[SITEMAP] = sitemap("cashcat");
     pages[PAIRS] = json({ next: null, results: [pair("CashCat", "Cash Cat", "tradable")] });
     pages[BITSTAMP] = json([{ currency: "cashcat", networks: [{ network: "hoodeth" }] }]);
-    expect((await sightings(pages)).robinhood).toEqual([{ symbol: "CASHCAT", page: true, pair: true, name: "Cash Cat", tradable: true, bitstamp: true }]);
+    expect((await sightings(pages)).robinhood).toEqual([{ symbol: "CASHCAT", page: true, pair: true, pairsRead: 1, name: "Cash Cat", tradable: true, bitstamp: true }]);
   });
 
   it("looks up every symbol the sources give a token, in the order of the answer", async () => {
@@ -274,9 +283,9 @@ describe("tokenSightings", () => {
     const board = await sightings(pages);
     expect(board.token.symbol).toBe("cashcat");
     expect(board.robinhood).toEqual([
-      { symbol: "CASHCAT", page: true, pair: true, name: "Cash Cat", tradable: true, bitstamp: true },
-      { symbol: "CAT", page: false, pair: false, bitstamp: false },
-      { symbol: "CATHOOD", page: false, pair: false, bitstamp: false },
+      { symbol: "CASHCAT", page: true, pair: true, pairsRead: 3, name: "Cash Cat", tradable: true, bitstamp: true },
+      { symbol: "CAT", page: false, pair: false, pairsRead: 3, bitstamp: false },
+      { symbol: "CATHOOD", page: false, pair: false, pairsRead: 3, bitstamp: false },
     ]);
   });
 

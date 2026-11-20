@@ -45,8 +45,8 @@ describe("Robinhood's pair list", () => {
     await run();
     await run();
     expect(log.query().events.map(({ kind, token, detail }) => [kind, token, detail])).toEqual([
-      ["robinhood.tradability_changed", { address: null, symbol: "PONS", name: "Pons" }, { tradable: true, was: false }],
-      ["robinhood.pair_added", { address: null, symbol: "CASHCAT", name: "Cash Cat" }, { tradable: false }],
+      ["robinhood.tradability_changed", { address: null, symbol: "PONS", name: "Pons" }, { tradable: true, was: false, pairsRead: 3 }],
+      ["robinhood.pair_added", { address: null, symbol: "CASHCAT", name: "Cash Cat" }, { tradable: false, pairsRead: 3 }],
     ]);
   });
 

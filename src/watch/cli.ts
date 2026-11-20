@@ -30,8 +30,9 @@ export const WATCH_USAGE = `Usage: brainchain-mcp watch [--state <dir>] [--serve
 
 Watches public sources for changes about Robinhood Chain tokens and keeps each one as an event in an append-only log:
 new Uniswap pools for tokens with a public trace, a followed market maker wallet's first approval or first receipt of a
-token, pull requests and merges that add a Robinhood Chain token in BitGo's, Trust Wallet's and MetaMask's public code,
-releases of @bitgo/statics that include one, Robinhood's pair list and crypto pages, and KuCoin's, Gate's, LI.FI's and
+token, a market maker's multisig queuing a token's pool for its trading contracts for the first time, pull requests and
+merges that add a Robinhood Chain token in BitGo's, Trust Wallet's and MetaMask's public code, releases of @bitgo/statics
+that include one, the pair list Robinhood serves to API clients and its crypto sitemap, and KuCoin's, Gate's, LI.FI's and
 CoinGecko's lists. Each event carries the token's earlier public steps and what it is worth now. The first run records
 what is already public as a baseline and reports none of it as new.
 

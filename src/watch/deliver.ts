@@ -97,9 +97,9 @@ function change(event: WatchEvent, name: string): string {
     case "metamask.merged":
       return `MetaMask added ${name} to its token list.`;
     case "robinhood.pair_added":
-      return `Robinhood added a ${name} pair, ${detail.tradable ? "tradable" : "price only"}.`;
+      return `${name} entered the pair list Robinhood serves to API clients, ${detail.tradable ? "tradable" : "price only"}${typeof detail.pairsRead === "number" ? ` (${detail.pairsRead} pairs read)` : ""}.`;
     case "robinhood.tradability_changed":
-      return `Robinhood's ${name} pair is ${detail.tradable ? "tradable now" : "price only now"}.`;
+      return `${name} is ${detail.tradable ? "tradable" : "price only"} now in the pair list Robinhood serves to API clients.`;
     case "robinhood.page_added":
       return `Robinhood has a page for ${name} now.`;
     case "kucoin.listed":

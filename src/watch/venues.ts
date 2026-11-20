@@ -61,9 +61,10 @@ interface PairsState {
 }
 
 /**
- * Robinhood's public list of crypto pairs: a pair that appears, and a pair whose tradability changes, which is when
- * customers go from seeing a price to being able to trade, or back. Robinhood gives no contract address, so the token is
- * named by symbol and Robinhood's own name for it.
+ * The pair list Robinhood serves to API clients: a pair that enters it, and a pair whose tradability changes, which is
+ * when customers go from seeing a price to being able to trade, or back. The list leaves out most price-only pairs, which
+ * only the sitemap shows, so a pair that enters it may have had a price on Robinhood's site before. Robinhood gives no
+ * contract address, so the token is named by symbol and Robinhood's own name for it.
  */
 export function robinhoodPairs(requests: Requests): Poller {
   const name = "robinhood-pairs";
@@ -80,9 +81,9 @@ export function robinhoodPairs(requests: Requests): Poller {
       for (const [symbol, { name: assetName, tradable }] of got.value) {
         const token = { address: null, symbol, name: assetName ?? null };
         const ref = `${ROBINHOOD_PAIRS.url}#${symbol}`;
-        found.push({ kind: "robinhood.pair_added", token, source: "Robinhood", ref, at: null, detail: { tradable } });
+        found.push({ kind: "robinhood.pair_added", token, source: "Robinhood", ref, at: null, detail: { tradable, pairsRead: got.value.size } });
         if (symbol in before && before[symbol] !== tradable) {
-          found.push({ kind: "robinhood.tradability_changed", token, source: "Robinhood", ref: `${ref}@${observed}`, at: null, detail: { tradable, was: before[symbol] } });
+          found.push({ kind: "robinhood.tradability_changed", token, source: "Robinhood", ref: `${ref}@${observed}`, at: null, detail: { tradable, was: before[symbol], pairsRead: got.value.size } });
         }
       }
       await context.record(found);
