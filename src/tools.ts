@@ -6,6 +6,7 @@ import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, type CustodyBoard, type CustodyToken } from "./custody.js";
 import { ChainError, type Moment } from "./history.js";
 import { MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
+import { MARKET_CAP_NAME, MARKET_CAP_TOOL, readMarketCap, type MarketCapBoard } from "./marketcap.js";
 import { brief, canonicalStringify, RESULT_LIMIT } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL, readPremiums, type PremiumBoard } from "./premiums.js";
 import { READINESS_NAME, READINESS_TOOL, readTokenReadiness, type ReadinessBoard } from "./readiness.js";
@@ -445,9 +446,10 @@ export interface Readers {
   /** BitGo's tokens on Robinhood Chain, which a symbol is looked up in. */
   listed(): Promise<CustodyToken[]>;
   timeline(token: Address, until?: Moment): Promise<TimelineBoard>;
+  marketCap(token: Address, moment?: Moment): Promise<MarketCapBoard>;
 }
 
-const READERS: Readers = { custody: readCustodyAdditions, makers: readMakerHoldings, readiness: readTokenReadiness, sightings: readTokenSightings, listed: readListedTokens, timeline: readTokenTimeline };
+const READERS: Readers = { custody: readCustodyAdditions, makers: readMakerHoldings, readiness: readTokenReadiness, sightings: readTokenSightings, listed: readListedTokens, timeline: readTokenTimeline, marketCap: readMarketCap };
 
 /** An answer for a token looked up by symbol leads with what it was looked up as. */
 const withLookup = (board: object, lookup: Lookup | undefined) => (lookup ? { lookup, ...board } : board);
@@ -462,7 +464,7 @@ export async function callTool(
   refused: ReadonlyMap<string, string> = new Map(),
   readers: Partial<Readers> = {},
 ): Promise<CallToolResult> {
-  const { custody, makers, readiness, sightings, listed, timeline } = { ...READERS, ...readers };
+  const { custody, makers, readiness, sightings, listed, timeline, marketCap } = { ...READERS, ...readers };
   const input = (args ?? {}) as Record<string, unknown>;
   const refusal = refused.get(name);
   if (refusal !== undefined) return reply({ error: refusal }, true);
@@ -553,6 +555,16 @@ export async function callTool(
       const when = moment(input);
       const { token, lookup } = await tokenOf(input.token, listed);
       const board = await timeline(token, when).catch((error: unknown) => {
+        if (error instanceof ChainError) throw error;
+        throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
+      });
+      return reply(withLookup(board, lookup));
+    }
+    if (name === MARKET_CAP_NAME) {
+      refuseUnknownFields(input, MARKET_CAP_TOOL.inputSchema);
+      const when = moment(input);
+      const { token, lookup } = await tokenOf(input.token, listed);
+      const board = await marketCap(token, when).catch((error: unknown) => {
         if (error instanceof ChainError) throw error;
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
       });
