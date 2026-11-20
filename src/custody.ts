@@ -226,7 +226,7 @@ async function changesSince(reader: BitGoReader, since: number, pages = MAX_PAGE
  * only as a mention would drop its token and report nothing added. Before `LISTS_MOVED_AT` the tokens BitGo's engineers
  * edit are read from `EARLY_LIST`.
  */
-async function tokensAt(reader: BitGoReader, commit: string, at: number): Promise<Map<string, ListedToken>> {
+export async function tokensAt(reader: BitGoReader, commit: string, at: number): Promise<Map<string, ListedToken>> {
   const early = at < LISTS_MOVED_AT;
   const [edited, generated, earlier] = await Promise.all([...TOKEN_LISTS, ...(early ? [EARLY_LIST] : [])].map((file) => reader.list(file, commit)));
   const lists = [edited ?? (early ? earlier : undefined), generated];
@@ -398,10 +398,10 @@ export function listChanges(body: unknown): BranchChange[] {
   });
 }
 
-const FIRST_PAGE = `https://api.github.com/repos/${REPO}/activity?ref=master&per_page=${PAGE}`;
+export const FIRST_PAGE = `https://api.github.com/repos/${REPO}/activity?ref=master&per_page=${PAGE}`;
 
 /** The next page's address from GitHub's link header, accepted only on api.github.com, since the reader follows it. */
-function nextPage(response: Response): string | undefined {
+export function nextPage(response: Response): string | undefined {
   const next = /<([^<>]+)>;\s*rel="next"/.exec(response.headers.get("link") ?? "")?.[1];
   return next?.startsWith("https://api.github.com/") ? next : undefined;
 }

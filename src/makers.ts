@@ -211,7 +211,7 @@ export interface MakerKept {
   times: Map<string, Promise<bigint>>;
 }
 
-const approvalEvent = parseAbiItem("event Approval(address indexed owner, address indexed spender, uint256 value)");
+export const approvalEvent = parseAbiItem("event Approval(address indexed owner, address indexed spender, uint256 value)");
 
 /**
  * The first time `maker.wallet` approved `token` between two blocks. Some tokens log an approval at every transfer a

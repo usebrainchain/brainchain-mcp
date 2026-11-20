@@ -18,7 +18,8 @@ It also reads what stock tokens cost on Robinhood Chain, lists the Robinhood Cha
 exchanges and funds, has recently started to support, reads how much of a token on that chain a market maker's
 trading wallets hold, now or at a past block, reads how far along a token is (deployed, first minted, first pool
 created), reads which lists and exchanges already carry it, puts every dated public step of a token in one timeline,
-and reads a token's price, supply and market cap at a past block or now.
+reads a token's price, supply and market cap at a past block or now, and watches public sources for new changes about
+Robinhood Chain tokens.
 
 Usage:
   brainchain-mcp                 Start the server on stdio (what MCP clients run).
@@ -29,6 +30,8 @@ Usage:
                                  what it holds and, for USDG, what Permit2 may spend. Exits 0 when the
                                  wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2
                                  when its balance could not be read.
+  brainchain-mcp watch           Watch public sources for changes about Robinhood Chain tokens, keep them in a log
+                                 and serve them to brainchain_changes. See brainchain-mcp watch --help.
 
 Environment:
   BRAINCHAIN_PAYER_KEY        Private key of the paying wallet, 64 hex characters with or without 0x.
@@ -47,6 +50,10 @@ Environment:
   BRAINCHAIN_MAKER_WALLETS    More wallets for brainchain_market_maker_holdings and brainchain_token_timeline to follow, as
                               Name=0xAddress separated by commas (at most 20). Nobody checks whose wallets they are; their
                               entries say source configured.
+  BRAINCHAIN_WATCH_URL        The watcher brainchain_changes, brainchain_watch and brainchain_unwatch use, such as your own
+                              \`brainchain-mcp watch --serve\` at http://127.0.0.1:8787 (default https://watch.usebrainchain.com).
+  GITHUB_TOKEN                A GitHub token with no scopes, to read GitHub's API with its allowance in place of the 60
+                              requests an hour GitHub allows one IP address. Sent to api.github.com only.
   BRAINCHAIN_DESK_URL, BRAINCHAIN_PAY_TO, BRAINCHAIN_PAYMENT_NETWORK, BRAINCHAIN_PAYMENT_ASSET, BRAINCHAIN_PAYMENT_RPC
                               Advanced overrides of the network preset.
 `;
@@ -64,18 +71,26 @@ if ((command !== undefined && HELP.includes(command)) || (["approve", "wallet"].
   console.log(USAGE);
   process.exit(0);
 }
+// The watcher is loaded only for its own command, so the server starts as it always has.
+const watch = command === "watch" ? await import("./watch/cli.js") : undefined;
+if (watch && process.argv.slice(3).some((arg) => HELP.includes(arg))) {
+  console.log(watch.WATCH_USAGE);
+  process.exit(0);
+}
 if (command === "--version" || command === "-v" || command === "version") {
   console.log(version);
   process.exit(0);
 }
-if (command !== undefined && command !== "approve" && command !== "wallet") fail(`Unknown command ${command}.\n\n${USAGE}`);
+if (command !== undefined && command !== "approve" && command !== "wallet" && command !== "watch") fail(`Unknown command ${command}.\n\n${USAGE}`);
 const extra = process.argv[command === "approve" ? 4 : 3];
-if (command !== undefined && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : "wallet takes none"}.\n\n${USAGE}`);
+if (command !== undefined && command !== "watch" && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : "wallet takes none"}.\n\n${USAGE}`);
 
 if (command === undefined) {
   const hint = terminalHint(process.stdin, version);
   if (hint) console.error(hint);
   await createServer(process.env, version).connect(new StdioServerTransport());
+} else if (watch) {
+  await watch.runWatch(process.argv.slice(3), process.env, version).catch((error: unknown) => fail(error instanceof watch.UsageError ? `${error.message}\n\n${watch.WATCH_USAGE}` : error instanceof Error ? error.message : String(error)));
 } else if (command === "wallet") {
   const { config, account } = settings();
   const funds = await walletFunds(config, account.address).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
