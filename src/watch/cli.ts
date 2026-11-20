@@ -7,6 +7,7 @@ import { ChainError } from "../history.js";
 import { configuredMakers, firstApprovals, MARKET_MAKERS } from "../makers.js";
 import { marketCap, type CapKept } from "../marketcap.js";
 import { ROBINHOOD_RPC } from "../premiums.js";
+import { firstQueued } from "../queued.js";
 import { readinessIn } from "../readiness.js";
 import { sightingsReader, tokenSightings } from "../sightings.js";
 import { bitGoLists, bitGoMerges, bitGoPullRequests, bitGoReleases } from "./bitgo.js";
@@ -173,7 +174,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
 
   const pollers: Poller[] = [
     // With a private endpoint the chain is read every 10 s, so an event is out within about 20 s of its block.
-    chainPoller({ reader, wallets, watched: tracked, firsts: chainFirsts(reader, kept), ...(rpc ? { interval: 10_000 } : {}), onPools: (from, to, pools) => poolIndex.addLive(from, to, pools) }),
+    chainPoller({ reader, wallets, watched: tracked, firsts: chainFirsts(reader, kept), kept: kept.queued, ...(rpc ? { interval: 10_000 } : {}), onPools: (from, to, pools) => poolIndex.addLive(from, to, pools) }),
     bitGoPullRequests(requests, lists, github),
     bitGoMerges(requests, lists, github),
     bitGoReleases(requests, lists),
@@ -201,6 +202,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       chain: chainTurn(reader),
       readiness: readinessIn,
       approvals: (chain, address, followed, newest) => firstApprovals(chain, address, followed, kept, newest),
+      queued: (chain, address, followed, newest) => Promise.all(followed.map((maker) => firstQueued(chain, maker, address, newest, kept.queued))),
       sightings: (address) => tokenSightings(sightings, address),
     },
     // Off the delivery path, the slow parts get longer: what is not ready by the first deadline follows as an update.

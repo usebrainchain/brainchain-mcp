@@ -190,7 +190,7 @@ describe("the market maker tool's words", () => {
 
   it("name the wallets the code follows, the firms behind them, and who says so", () => {
     expect(MARKET_MAKERS).toEqual([
-      { name: "Wintermute", tag: "Market Maker: 0x51c7...2a7f", wallet: "0x51C72848c68a965f66FA7a88855F9f7784502a7F", safe: "0x7d330DD7AF628c24E9FC75eb2986b130b2125ad0" },
+      { name: "Wintermute", tag: "Market Maker: 0x51c7...2a7f", wallet: "0x51C72848c68a965f66FA7a88855F9f7784502a7F", safe: "0x7d330DD7AF628c24E9FC75eb2986b130b2125ad0", registry: "0x7Ff4Ed8ab94c849B812622EB462682208BE06B93" },
       { name: "Wintermute", tag: "Wintermute 4", wallet: "0xf8191D98ae98d2f7aBDFB63A9b0b812b93C873AA" },
       { name: "Wintermute", tag: "Wintermute 5", wallet: "0xCe84449A8Ebec019AC110a4b6662E55d0fD9f228" },
       { name: "B2C2", tag: "B2C2 Group 1", wallet: "0xC333E80eF2deC2805F239E3f1e810612D294F771" },
@@ -1083,10 +1083,17 @@ describe("readMakerHoldings", () => {
       requests.length = 0;
       const board = await settled(timeline.readTokenTimeline(CASHCAT));
       expect(board.steps).toEqual([expect.objectContaining({ step: "approval", block: 9, maker: expect.objectContaining({ name: "Wintermute" }), confirmed: true })]);
-      // Only the newest stretch, which has not settled, is read again.
-      const logs = requests.filter(({ method }) => method === "eth_getLogs").map(({ about }) => about.split(" ").at(-1));
+      // Only the newest stretch of the token's logs, which has not settled, is read again. The registry, which no other tool
+      // reads, is read a stretch at a time, and the next answer reads only its newest stretch.
+      const registry = (about: string) => about.toLowerCase().includes(makers.MARKET_MAKERS[0]!.registry!.toLowerCase());
+      const logs = requests.filter(({ method, about }) => method === "eth_getLogs" && !registry(about)).map(({ about }) => about.split(" ").at(-1));
       expect(logs.length).toBeGreaterThan(0);
       expect(new Set(logs)).toEqual(new Set([`20000000-${newest}`]));
+      const stretches = () => requests.filter(({ method, about }) => method === "eth_getLogs" && registry(about)).map(({ about }) => about.split(" ").at(-1));
+      expect(stretches()).toEqual(["0-9999999", "10000000-19999999", `20000000-${newest}`]);
+      requests.length = 0;
+      await settled(timeline.readTokenTimeline(CASHCAT));
+      expect(stretches()).toEqual([`20000000-${newest}`]);
       // This endpoint answers nothing but JSON-RPC, so GitHub and the lists cannot be read, and the answer says so.
       expect(board.unread).toEqual(["BitGo", "Trust Wallet", "MetaMask"]);
     } finally {

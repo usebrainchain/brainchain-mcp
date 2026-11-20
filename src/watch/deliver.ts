@@ -80,6 +80,8 @@ function change(event: WatchEvent, name: string): string {
       return `${maker}'s wallet approved ${name} for the first time${detail.confirmed ? "" : ", by the token's log only"}.`;
     case "maker.receipt":
       return `${maker}'s wallet received ${name} for the first time.`;
+    case "maker.pool_queued":
+      return `${maker}'s multisig queued a ${String(detail.venue)} pool of ${name} for its trading contracts to trade, the first for this token${detail.confirmed ? "" : ", by the registry's log only"}.`;
     case "bitgo.pr_opened":
       return `A pull request in BitGo's code adds ${name} to its Robinhood Chain tokens.`;
     case "bitgo.merged":

@@ -2,11 +2,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { decodeFunctionData, encodeFunctionResult, getAddress, InvalidInputRpcError, parseAbi, RpcRequestError, zeroAddress, type Address, type Hash, type Hex } from "viem";
+import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult, getAddress, InvalidInputRpcError, keccak256, parseAbi, parseAbiParameters, RpcRequestError, zeroAddress, type Address, type Hash, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
 
 import type { ChainHistory } from "../history.js";
 import { MARKET_MAKERS, type Approval } from "../makers.js";
+import { QUEUED_TOPIC, type QueuedPool } from "../queued.js";
 import { chainFirsts, chainKept, chainPoller, SPAN, type Firsts, type Receipt } from "./chain.js";
 import { EventLog } from "./events.js";
 import type { IndexedPool } from "./pools.js";
@@ -35,7 +36,7 @@ const tokenAbi = parseAbi(["function decimals() view returns (uint8)", "function
 const NAMES: Record<string, [string, string]> = { [CASHCAT.toLowerCase()]: ["Cash Cat", "CASHCAT"], [PONS.toLowerCase()]: ["Pons", "PONS"] };
 
 /** Robinhood Chain as the endpoint answers it, holding `logs`, refusing any search of more than `most` blocks as too full. */
-function endpoint(logs: Log[], { newest = 1_000n, most = Number.MAX_SAFE_INTEGER, from = {} as Record<Hash, Address> } = {}) {
+function endpoint(logs: Log[], { newest = 1_000n, most = Number.MAX_SAFE_INTEGER, from = {} as Record<Hash, Address>, registry = [] as Raw[] } = {}) {
   const searched: { from: bigint; to: bigint; what: string }[] = [];
   const reader = {
     getBlockNumber: async () => newest,
@@ -50,7 +51,11 @@ function endpoint(logs: Log[], { newest = 1_000n, most = Number.MAX_SAFE_INTEGER
         return { success: true, returnData: encodeFunctionResult({ abi: tokenAbi, functionName, result: result as never }) };
       }),
     getLogs: async (params: { address?: Address | Address[]; event?: { name: string }; events?: unknown[]; args?: Record<string, Address | Address[]>; fromBlock: bigint; toBlock: bigint }) => {
-      const what = params.events ? "pools" : params.event!.name;
+      const what = params.events ? "pools" : params.event ? params.event.name : "registry";
+      if (what === "registry") {
+        searched.push({ from: params.fromBlock, to: params.toBlock, what });
+        return registry.filter(({ blockNumber }) => blockNumber >= params.fromBlock && blockNumber <= params.toBlock);
+      }
       searched.push({ from: params.fromBlock, to: params.toBlock, what });
       if (params.toBlock - params.fromBlock + 1n > BigInt(most)) throw new InvalidInputRpcError(new RpcRequestError({ body: {}, error: { code: -32000, message: "logs matched by query exceeds limit of 10000" }, url: "https://rpc.example" }));
       const wanted = (log: Log) => {
@@ -85,12 +90,22 @@ const v3 = (block: bigint, token0: Address, token1: Address): Log => ({
 const approval = (block: bigint, token: Address, owner: Address, value = 1n): Log => ({ address: token, blockNumber: block, logIndex: 2, transactionHash: hash(50_000 + Number(block)), eventName: "Approval", args: { owner, spender: RANDOM, value } });
 const transfer = (block: bigint, token: Address, to: Address, value = 10n ** 18n, sender: Address = RANDOM): Log => ({ address: token, blockNumber: block, logIndex: 3, transactionHash: hash(70_000 + Number(block)), eventName: "Transfer", args: { from: sender, to, value } });
 
+/** A log of Wintermute's role registry, as the endpoint returns it with no event to decode it by. */
+interface Raw {
+  topics: Hex[];
+  data: Hex;
+  blockNumber: bigint;
+  logIndex: number;
+  transactionHash: Hash;
+}
+
 /** Firsts that answer from a table, and count how often they were asked. */
-function table(approvals: Record<string, Approval> = {}, receipts: Record<string, Receipt | "earlier"> = {}) {
+function table(approvals: Record<string, Approval> = {}, receipts: Record<string, Receipt | "earlier"> = {}, queued: Record<string, QueuedPool> = {}) {
   const asked: string[] = [];
   const firsts: Firsts = {
     approval: async (token, maker) => (asked.push(`approval:${token}:${maker.wallet}`), approvals[`${token}:${maker.wallet}`]),
     receipt: async (token, maker) => (asked.push(`receipt:${token}:${maker.wallet}`), receipts[`${token}:${maker.wallet}`]),
+    queued: async (token, maker) => (asked.push(`queued:${token}:${maker.wallet}`), queued[`${token}:${maker.wallet}`]),
   };
   return { firsts, asked };
 }
@@ -192,6 +207,65 @@ describe("the chain poller", () => {
   });
 });
 
+const V4_ROLE = "0x5263548a00b59cb6c934d41cb5675ea69ca2942902d0bf0404b56ad33038016d" as Hash;
+const poolKey = (currency0: Address, currency1: Address) => encodeAbiParameters(parseAbiParameters("address, address, uint24, int24, address"), [currency0, currency1, 3000, 60, zeroAddress]);
+/** Wintermute's multisig queuing a v4 pool on its registry, as the registry logs it: the account is the start of the pool's id. */
+const queuedLog = (block: bigint, currency0: Address, currency1: Address): Raw => ({
+  topics: [QUEUED_TOPIC, hash(90_000 + Number(block))],
+  data: encodeAbiParameters(parseAbiParameters("bytes32, address, bytes"), [V4_ROLE, getAddress(keccak256(poolKey(currency0, currency1)).slice(0, 42)), poolKey(currency0, currency1)]),
+  blockNumber: block,
+  logIndex: 0,
+  transactionHash: hash(80_000 + Number(block)),
+});
+const first = (block: number, currency0: Address, currency1: Address): QueuedPool => ({
+  at: new Date((1_790_000_000 + block) * 1000).toISOString(),
+  block,
+  transaction: hash(80_000 + block),
+  venue: "Uniswap v4",
+  pool: keccak256(poolKey(currency0, currency1)),
+  currency0,
+  currency1,
+  fee: 3000,
+  role: V4_ROLE,
+  confirmed: true,
+});
+
+describe("a market maker's queued pool", () => {
+  it("is reported the first time a token's pool is queued, recorded as baseline when that was before the blocks read, and settled once", async () => {
+    const registry = [queuedLog(105n, CASHCAT, USDG), queuedLog(106n, zeroAddress, PONS), queuedLog(107n, CASHCAT, WETH)];
+    const { reader, searched } = endpoint([], { newest: 100n, registry });
+    const { firsts, asked } = table({}, {}, { [`${CASHCAT}:${WINTERMUTE.wallet}`]: first(105, CASHCAT, USDG), [`${PONS}:${WINTERMUTE.wallet}`]: first(50, zeroAddress, PONS) });
+    const { log, run } = harness(reader, firsts);
+    await run();
+    (reader as { getBlockNumber: () => Promise<bigint> }).getBlockNumber = async () => 200n;
+    await run();
+    expect(log.all().map(({ kind, token, ref, at, detail, baseline }) => ({ kind, symbol: token.symbol, ref, at, detail, baseline }))).toEqual([
+      {
+        kind: "maker.pool_queued",
+        symbol: "CASHCAT",
+        ref: hash(80_105),
+        at: new Date((1_790_000_000 + 105) * 1000).toISOString(),
+        detail: { maker: { name: "Wintermute", tag: "Market Maker: 0x51c7...2a7f", wallet: WINTERMUTE.wallet }, venue: "Uniswap v4", pool: keccak256(poolKey(CASHCAT, USDG)), pairedWith: USDG, fee: 3000, confirmed: true, block: 105, transaction: hash(80_105) },
+        baseline: undefined,
+      },
+      {
+        kind: "maker.pool_queued",
+        symbol: "PONS",
+        ref: hash(80_050),
+        at: new Date((1_790_000_000 + 50) * 1000).toISOString(),
+        detail: { maker: { name: "Wintermute", tag: "Market Maker: 0x51c7...2a7f", wallet: WINTERMUTE.wallet }, venue: "Uniswap v4", pool: keccak256(poolKey(zeroAddress, PONS)), pairedWith: "ETH", fee: 3000, confirmed: true, block: 50, transaction: hash(80_050) },
+        baseline: true,
+      },
+    ]);
+    // USDG, WETH and ETH are never news, and the second Cash Cat pool is settled by the first.
+    expect(asked.filter((entry) => entry.startsWith("queued"))).toEqual([`queued:${CASHCAT}:${WINTERMUTE.wallet}`, `queued:${PONS}:${WINTERMUTE.wallet}`]);
+    // One search of the one registry the followed wallets have, over the blocks read.
+    expect(searched.filter(({ what }) => what === "registry").map(({ from, to }) => [from, to])).toEqual([[101n, 200n]]);
+    await run();
+    expect(log.size).toBe(2);
+  });
+});
+
 describe("a wallet's first receipt", () => {
   it("is its first transfer in of the token within the blocks read, confirmed when the wallet sent the transaction", async () => {
     const own = hash(70_000 + 40);
@@ -237,6 +311,7 @@ describe("a chain read cut short", () => {
         if (fail) throw new Error("429");
         return undefined;
       },
+      queued: async () => undefined,
     };
     const { reader } = endpoint([approval(105n, CASHCAT, WINTERMUTE.wallet), transfer(106n, PONS, WINTERMUTE.wallet)], { newest: 100n });
     const { log, state, run } = harness(reader, firsts);

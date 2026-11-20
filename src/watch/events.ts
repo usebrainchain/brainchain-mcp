@@ -6,6 +6,7 @@ export const KINDS = [
   "pool.created",
   "maker.approval",
   "maker.receipt",
+  "maker.pool_queued",
   "bitgo.pr_opened",
   "bitgo.merged",
   "bitgo.released",
