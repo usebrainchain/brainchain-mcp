@@ -24,7 +24,7 @@ export interface Count {
   /** Eligible tokens with the outcome on record but not its date, so they cannot be placed inside or outside the window. */
   unknown: number;
   followed: number;
-  /** `followed` over `eligible` less `unknown`, to four places; null when that is zero. */
+  /** `followed` over `eligible` less `unknown`, to four significant figures, so a share of a million pools is not 0; null when that is zero. */
   share: number | null;
   medianLeadDays: number | null;
   tokens: { followed: string[]; unknown: string[]; before: string[] };
@@ -155,7 +155,7 @@ export function baseRates({ steps, outcomes, pools, cut, windows = WINDOWS, venu
         // The pools counted by stretch include tokens no row names; only those with a row can have had an outcome first.
         count.eligible = stepped - count.before;
         const known = count.eligible - count.unknown;
-        count.share = known > 0 ? Math.round((count.followed / known) * 10_000) / 10_000 : null;
+        count.share = known > 0 ? Number((count.followed / known).toPrecision(4)) : null;
         count.medianLeadDays = median(leads);
         for (const list of Object.values(count.tokens)) list.sort();
         return count;

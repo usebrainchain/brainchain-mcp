@@ -73,6 +73,12 @@ describe("the base rates", () => {
     expect(pool!.windows[0]!.outcomes.any).toMatchObject({ eligible: 4, before: 1, followed: 1, share: 0.25, medianLeadDays: 19.5 });
   });
 
+  it("keeps a share of a million pools in four significant figures, not rounded away", () => {
+    const pools = { piece: 10, counts: [1_065_196], ends: [(T0 + DAY) / 1000] };
+    const [pool] = baseRates({ steps: [step(1, 0.5, { step: "pool", source: "Uniswap v4", block: 5 })], outcomes: [listed(1, "kucoin", { at: 10 })], pools, cut, kinds: ["pool"], windows: [30] });
+    expect(pool!.windows[0]!.outcomes.any).toMatchObject({ followed: 1, share: 9.388e-7 });
+  });
+
   it("names the tokens behind n only up to a limit", () => {
     const many = Array.from({ length: MAX_LISTED + 1 }, (_, i) => step(i + 1, 0));
     const [custody] = baseRates({ steps: many, outcomes: [], cut, kinds: ["custody"], windows: [7] });
