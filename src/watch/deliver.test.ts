@@ -230,6 +230,25 @@ describe("a finished context", () => {
     expect(sent).toEqual([{ id: 1, update: false }, { id: 1, update: true }, { id: 2, update: false }]);
   });
 
+  it("tells a chat nothing more when its first line already gave the worth, and still sends a plain webhook the finished context", async () => {
+    const sent: string[] = [];
+    const { log, deliveries } = harness(async (url, body) => {
+      const parsed = JSON.parse(body) as { id?: number; type?: string; content?: string };
+      sent.push(String(url).includes("discord") ? `chat: ${parsed.content}` : `${parsed.type ?? "event"} ${parsed.id}`);
+      return { status: 200, body: "" };
+    });
+    await deliveries.create({ url: "https://discord.com/api/webhooks/1/abc" }, "1.2.3.4");
+    await deliveries.create({ url: "https://hooks.example.com/x" }, "1.2.3.5");
+    const { written } = log.append([{ ...found("bitgo.merged", "m"), observedAt: "2026-11-19T12:00:00Z" }]);
+    const first = { ...worth, pending: ["priorTraces"] };
+    log.settle(written[0]!.id, first);
+    await deliveries.tick();
+    deliveries.update(log.update(1, { ...worth, priorTraces: [] })!, first);
+    await deliveries.tick();
+    expect(sent.filter((line) => line.startsWith("update"))).toEqual(["update 1"]);
+    expect(sent.filter((line) => line.startsWith("chat: Worth now"))).toEqual([]);
+  });
+
   it("follows an event that was finished while it was on its way", async () => {
     const sent: string[] = [];
     let finishNow = () => {};

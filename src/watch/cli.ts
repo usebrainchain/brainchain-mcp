@@ -250,10 +250,10 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       served?.publish([event]);
       deliver();
     },
-    onUpdate: (event: WatchEvent) => {
+    onUpdate: (event: WatchEvent, first: Record<string, unknown>) => {
       if (args.print) process.stdout.write(`${JSON.stringify({ type: "update", id: event.id, context: event.context })}\n`);
       served?.update(event);
-      deliveries.update(event);
+      deliveries.update(event, first);
       deliver();
     },
   });

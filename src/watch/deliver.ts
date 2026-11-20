@@ -316,10 +316,12 @@ export class Deliveries {
    * Queues an event's finished context for each watch that was sent the event before it was finished: a plain webhook
    * gets the whole context, a chat the worth, when there is one. A watch not sent the event yet gets it finished.
    */
-  update(event: WatchEvent): void {
+  update(event: WatchEvent, first?: Record<string, unknown>): void {
+    // A chat whose first line already gave the worth has nothing more to be told.
+    const told = Boolean((first?.worth as { marketCapUsd?: string } | null | undefined)?.marketCapUsd);
     for (const watch of this.watches.values()) {
       if (watch.off || event.baseline || watch.cursor < event.id || !matches(event, watch)) continue;
-      if (watch.format !== "webhook" && !followUp(event)) continue;
+      if (watch.format !== "webhook" && (told || !followUp(event))) continue;
       watch.updates = [...new Set([...(watch.updates ?? []), event.id])].slice(-200);
       this.dirty = true;
     }
@@ -346,7 +348,8 @@ export class Deliveries {
         this.dirty = true;
       }
       if (!due || watch.off) return;
-      const unfinished = Array.isArray(due.context.pending);
+      const sent = due.context;
+      const unfinished = Array.isArray(sent.pending);
       const failure = await this.send(watch, due);
       if (failure) return this.failed(watch, due, failure);
       Object.assign(watch, { cursor: due.id, delivered: watch.delivered + 1, failures: 0 });
@@ -354,7 +357,7 @@ export class Deliveries {
       delete watch.lastError;
       this.dirty = true;
       // Finished while it was on its way: the finished context follows.
-      if (unfinished && !Array.isArray(due.context.pending)) this.update(due);
+      if (unfinished && !Array.isArray(due.context.pending)) this.update(due, sent);
     }
   }
 

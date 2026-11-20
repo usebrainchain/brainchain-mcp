@@ -68,7 +68,7 @@ export interface WatcherOptions {
   /** Called with each new event once it is published, in id order, never with a baseline row. */
   onEvent?: (event: WatchEvent) => void;
   /** Called with an event whose context was finished after it went out. */
-  onUpdate?: (event: WatchEvent) => void;
+  onUpdate?: (event: WatchEvent, first: Record<string, unknown>) => void;
   say?: (message: string) => void;
   /** Takes anything secret out of a message before it is logged or shown, such as a node's address. */
   redact?: (text: string) => string;
@@ -112,7 +112,7 @@ export class Watcher {
   start(): void {
     // Events written before a restart whose context was never read are read now, and those that went out unfinished are finished.
     for (const event of this.options.log.pending()) this.enqueue(event);
-    for (const event of this.options.log.unfinished()) this.finish(event, this.reading_(event).done);
+    for (const event of this.options.log.unfinished()) this.finish(event, this.reading_(event).done, event.context);
     this.loops = this.options.pollers.map((poller) => this.loop(poller));
   }
 
@@ -132,11 +132,14 @@ export class Watcher {
     return { now: () => reading.now(), done: reading.done.catch(() => failed) };
   }
 
-  /** Writes the rest of an event's context once it is read, as an update, and tells whoever follows the events. */
-  private finish(event: WatchEvent, done: Promise<Record<string, unknown>>): void {
+  /**
+   * Writes the rest of an event's context once it is read, as an update, and tells whoever follows the events, with the
+   * context the event first went out with.
+   */
+  private finish(event: WatchEvent, done: Promise<Record<string, unknown>>, first: Record<string, unknown>): void {
     const finishing = done.then((context) => {
       const updated = this.options.log.update(event.id, context);
-      if (updated) this.options.onUpdate?.(updated);
+      if (updated) this.options.onUpdate?.(updated, first);
     });
     this.finishing.add(finishing);
     void finishing.finally(() => this.finishing.delete(finishing));
@@ -175,8 +178,9 @@ export class Watcher {
     });
     const whole = await Promise.race([reading.done, wait]);
     clearTimeout(timer);
-    for (const published of log.settle(event.id, whole ?? reading.now())) if (!published.baseline) onEvent?.(published);
-    if (!whole) this.finish(event, reading.done);
+    const first = whole ?? reading.now();
+    for (const published of log.settle(event.id, first)) if (!published.baseline) onEvent?.(published);
+    if (!whole) this.finish(event, reading.done, first);
   }
 
   async stop(): Promise<void> {
