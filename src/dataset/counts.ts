@@ -8,6 +8,8 @@ export interface EventCounts {
   about: string;
   dataset: { date: string; headBlock: number; manifest: string };
   n: number;
+  /** Listings of these tokens left out because they rest on a symbol alone. */
+  unconfirmed: number;
   windows: {
     days: number;
     eligible: number;
@@ -30,6 +32,7 @@ export function countsFor(dataset: Dataset, kind: Kind): EventCounts | undefined
     about: STEP_WORDS[step],
     dataset: { date: dataset.ref.date, headBlock: dataset.ref.headBlock, manifest: dataset.ref.manifest },
     n: counts.n,
+    unconfirmed: counts.unconfirmed?.rows ?? 0,
     windows: counts.windows.map(({ days, outcomes }) => {
       const any = outcomes.any!;
       return {

@@ -33,6 +33,8 @@ export interface RatesFile {
   cut: string;
   /** How far each scan reached, and the wallets whose approvals of every token the build read. */
   through?: { head: number; pools: number; approvals: number; wallets?: string[] };
+  /** Outcome rows that rest on a symbol alone, kept and counted in no rate. */
+  unconfirmed?: number;
   kinds: KindCounts[];
   pools: PoolPieces;
 }

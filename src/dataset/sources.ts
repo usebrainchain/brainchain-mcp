@@ -121,3 +121,35 @@ export async function gateStarts(fetchImpl: typeof fetch = fetch): Promise<Map<s
   }
   return starts;
 }
+
+const ENTITIES: Record<string, string> = { "&amp;": "&", "&#x27;": "'", "&#39;": "'", "&quot;": '"', "&lt;": "<", "&gt;": ">" };
+
+/**
+ * The name Robinhood gives the asset on its page for `symbol`, the page its crypto sitemap lists, as the page's og:title
+ * says it: "Cash Cat (CASHCAT)". Robinhood sends a reader outside the US to its regional page, which has no page for an
+ * asset it lists only in the US: then, and for any page without the name, this is "". Only the page's head is read.
+ */
+export async function robinhoodPageName(symbol: string, fetchImpl: typeof fetch = fetch): Promise<string> {
+  const response = await fetchImpl(`https://robinhood.com/us/en/crypto/${encodeURIComponent(symbol)}/`, { headers: { Accept: "text/html", "User-Agent": "brainchain-mcp" }, signal: AbortSignal.timeout(REQUEST_MS) });
+  if (response.status === 404) {
+    await response.body?.cancel().catch(() => {});
+    return "";
+  }
+  if (response.status !== 200 || !response.body) throw new Error(`robinhood.com answered ${response.status}.`);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let head = "";
+  try {
+    while (head.length < 1 << 20 && !head.includes("</head>")) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      head += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  const tag = /<meta\b[^>]*\bproperty="og:title"[^>]*>/i.exec(head)?.[0] ?? "";
+  const title = (/\bcontent="([^"]*)"/i.exec(tag)?.[1] ?? "").replace(/&(?:amp|#x27|#39|quot|lt|gt);/g, (entity) => ENTITIES[entity]!);
+  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^(.+?) \\(${escaped}\\)`, "i").exec(title)?.[1]?.trim() ?? "";
+}

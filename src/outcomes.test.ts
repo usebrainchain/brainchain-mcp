@@ -13,13 +13,13 @@ const at = (days: number) => new Date(T0 + days * DAY).toISOString();
 const token = (n: number) => `0x${n.toString(16).padStart(40, "0")}`;
 const merged = (n: number, days: number): StepRow => ({ token: token(n), step: "custody", source: "BitGo", at: at(days), atFrom: "push", observedAt: at(110) });
 const kucoin = (n: number, days: number): OutcomeRow => ({ token: token(n), outcome: "kucoin", venue: "KuCoin", at: at(days), atFrom: "source", match: "contract", ref: "x", observedAt: at(110) });
-const page = (n: number, days: number): OutcomeRow => ({ token: token(n), outcome: "robinhood_page", venue: "Robinhood", at: at(days), atFrom: "observed", match: "symbol", ref: "x", observedAt: at(days) });
+const page = (n: number, days: number, match: OutcomeRow["match"] = "name"): OutcomeRow => ({ token: token(n), outcome: "robinhood_page", venue: "Robinhood", at: at(days), atFrom: "observed", match, ...(match === "symbol" ? { unconfirmed: true as const } : {}), ref: "x", observedAt: at(days) });
 
 const DATASET: Dataset = {
   ref: { source: "local directory", date: "2026-11-20", headBlock: 119_000_000, readAt: at(111), manifest: "ab".repeat(32) },
   tokens: [],
   steps: [merged(1, 0), merged(2, 10), merged(3, 50)],
-  outcomes: [kucoin(1, 9), page(2, 15), kucoin(3, 60)],
+  outcomes: [kucoin(1, 9), page(2, 15), kucoin(3, 60), page(3, 55, "symbol"), page(9, 5, "symbol")],
   rates: { readAt: at(111), headBlock: 119_000_000, cut: at(110), kinds: [], pools: { piece: 10_000, counts: [], ends: [] } },
 };
 
@@ -36,6 +36,9 @@ describe("trace outcomes", () => {
     expect(board.windows.map(({ days }) => days)).toEqual([7, 30, 90]);
     expect(board.windows[1]!.outcomes.any).toMatchObject({ eligible: 3, followed: 3, tokens: { followed: [token(1), token(2), token(3)] } });
     expect(board.windows[0]!.outcomes.kucoin).toMatchObject({ followed: 0 });
+    // Token 3's page rests on its symbol alone: left out of the counts, and named; token 9 took no step.
+    expect(board.unconfirmed).toEqual({ rows: 1, tokens: [token(3)] });
+    expect(board.windows[2]!.outcomes.robinhood_page).toMatchObject({ followed: 1, tokens: { followed: [token(2)] } });
     expect(JSON.stringify(board)).not.toMatch(/score|will list|likely|predict/i);
     expect(TRACE_OUTCOMES_TOOL.description).not.toMatch(/will list|likely to|predict|—/i);
   });

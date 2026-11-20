@@ -72,6 +72,22 @@ describe("the outcomes", () => {
     expect(folded("Cash-Cat ")).toBe(folded("CASH CAT"));
   });
 
+  it("confirms a Robinhood page by the name on the page, drops one that names another asset, and marks the rest unconfirmed", () => {
+    const pages = [event("robinhood.page_added", { symbol: "PONS" }), event("robinhood.page_added", { symbol: "CASHCAT" }), event("robinhood.page_added", { symbol: "DOGE" })];
+    const none = { kucoin: new Map(), gate: new Map() };
+    const named = outcomesFromEvents(pages, traced, none, new Map([["PONS", "Pons"], ["CASHCAT", "Cash Cat"], ["DOGE", "Dogecoin"]]));
+    expect(named.map(({ token, match, name, unconfirmed }) => ({ token, match, name, unconfirmed }))).toEqual([
+      { token: PONS, match: "name", name: "Pons", unconfirmed: undefined },
+      { token: CASHCAT, match: "name", name: "Cash Cat", unconfirmed: undefined },
+    ]);
+    const unread = outcomesFromEvents(pages, traced, none);
+    expect(unread.map(({ token, match, unconfirmed }) => ({ token, match, unconfirmed }))).toEqual([
+      { token: PONS, match: "symbol", unconfirmed: true },
+      { token: CASHCAT, match: "symbol", unconfirmed: true },
+      { token: DOGEISH, match: "symbol", unconfirmed: true },
+    ]);
+  });
+
   it("dates KuCoin and Gate by the trading start they publish, and Robinhood by when the watcher first saw it", () => {
     const events = [
       event("kucoin.listed", { address: CASHCAT, symbol: "CASHCAT", name: "Cash Cat" }, { ref: "https://api.kucoin.com/api/v3/currencies" }),
@@ -93,6 +109,8 @@ describe("the outcomes", () => {
       { token: CASHCAT, outcome: "robinhood_tradable", at: "2026-11-20T14:00:00.000Z", by: undefined, atFrom: "observed", match: "name" },
     ]);
     expect(rows[1]).toMatchObject({ tradingStart: "2026-12-01T00:00:00.000Z" });
+    expect(rows[3]).toMatchObject({ outcome: "robinhood_page", match: "symbol", unconfirmed: true });
+    expect(rows.filter((row) => row.unconfirmed)).toHaveLength(1);
     expect(rows[4]!.ref).toBe("https://nummus.robinhood.com/currency_pairs/#CASHCAT");
   });
 });

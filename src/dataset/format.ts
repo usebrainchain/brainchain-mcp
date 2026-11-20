@@ -67,6 +67,11 @@ export interface OutcomeRow {
   atFrom?: AtFrom;
   /** How the venue's entry was tied to the token: its contract on Robinhood Chain, Robinhood's name for it, or the symbol alone. */
   match: "contract" | "name" | "symbol";
+  /**
+   * Set on a row tied by the symbol alone, with no name or contract from the venue to confirm it: such a row is kept and
+   * counted in no base rate, since a token on Robinhood Chain can call itself by another asset's symbol.
+   */
+  unconfirmed?: true;
   symbol?: string;
   /** The venue's own name for the asset. */
   name?: string;
@@ -187,7 +192,7 @@ const cell = (value: unknown) => {
 };
 
 export const EVENT_COLUMNS = ["token", "step", "source", "at", "by", "atFrom", "block", "transaction", "ref", "observedAt", "backfill"] as const;
-export const OUTCOME_COLUMNS = ["token", "outcome", "venue", "at", "by", "atFrom", "match", "symbol", "name", "tradingStart", "ref", "observedAt", "backfill"] as const;
+export const OUTCOME_COLUMNS = ["token", "outcome", "venue", "at", "by", "atFrom", "match", "unconfirmed", "symbol", "name", "tradingStart", "ref", "observedAt", "backfill"] as const;
 
 export function csv(columns: readonly string[], rows: readonly object[]): string {
   const lines = rows.map((row) => columns.map((column) => cell((row as Record<string, unknown>)[column])).join(","));
@@ -202,4 +207,8 @@ export function stepKey(row: StepRow): string {
   return `${row.token.toLowerCase()}|${row.step}|${who}${which}|${row.at ? "at" : "by"}`;
 }
 
-export const outcomeKey = (row: OutcomeRow) => `${row.token.toLowerCase()}|${row.outcome}|${row.at ? "at" : "by"}`;
+/** A confirmed row is a fact of its own beside an unconfirmed one, so a match confirmed later is written too. */
+export const outcomeKey = (row: OutcomeRow) => `${row.token.toLowerCase()}|${row.outcome}|${row.at ? "at" : "by"}${confirmed(row) ? "" : "|unconfirmed"}`;
+
+/** Whether a row counts as an outcome: one tied by the symbol alone does not. */
+export const confirmed = (row: Pick<OutcomeRow, "match" | "unconfirmed">) => row.unconfirmed !== true && row.match !== "symbol";

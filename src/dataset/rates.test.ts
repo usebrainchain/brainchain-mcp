@@ -79,6 +79,15 @@ describe("the base rates", () => {
     expect(pool!.windows[0]!.outcomes.any).toMatchObject({ followed: 1, share: 9.388e-7 });
   });
 
+  it("leaves a listing tied by the symbol alone out of every count, and says how many were left out", () => {
+    const shaky: OutcomeRow = { ...listed(5, "robinhood_page", { at: 6 }), match: "symbol", unconfirmed: true };
+    const [custody] = baseRates({ steps, outcomes: [...outcomes, shaky], cut, kinds: ["custody"], windows: [30] });
+    expect(custody!.unconfirmed).toEqual({ rows: 1, tokens: [token(5)] });
+    expect(custody!.windows[0]!.outcomes.robinhood_page).toMatchObject({ followed: 0, unknown: 1 });
+    const [same] = baseRates({ steps, outcomes, cut, kinds: ["custody"], windows: [30] });
+    expect({ ...custody!, unconfirmed: same!.unconfirmed }).toEqual(same);
+  });
+
   it("names the tokens behind n only up to a limit", () => {
     const many = Array.from({ length: MAX_LISTED + 1 }, (_, i) => step(i + 1, 0));
     const [custody] = baseRates({ steps: many, outcomes: [], cut, kinds: ["custody"], windows: [7] });

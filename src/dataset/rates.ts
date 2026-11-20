@@ -1,4 +1,4 @@
-import { OUTCOMES, STEPS, WINDOWS, type Outcome, type OutcomeRow, type Step, type StepRow } from "./format.js";
+import { confirmed, OUTCOMES, STEPS, WINDOWS, type Outcome, type OutcomeRow, type Step, type StepRow } from "./format.js";
 
 const DAY_MS = 86_400_000;
 /** A kind with more tokens than this names them by the file that holds them, not one by one. */
@@ -45,6 +45,11 @@ export interface KindCounts {
   undated: number;
   /** The tokens behind `n`, when there are at most `MAX_LISTED`; for pools, every token's is in `pools/`. */
   tokens?: string[];
+  /**
+   * Listings of these tokens that rest on a symbol alone, with nothing from the venue to confirm the token: left out of
+   * every count here, and kept in the files marked `unconfirmed`.
+   */
+  unconfirmed: { rows: number; tokens: string[] };
   windows: WindowCounts[];
 }
 
@@ -120,7 +125,9 @@ function anyOf(places: Place[]): Place {
  * and an outcome on record without a date is counted as unknown, never as followed or not.
  */
 export function baseRates({ steps, outcomes, pools, cut, windows = WINDOWS, venues = OUTCOMES, kinds = STEPS }: RatesInput): KindCounts[] {
-  const byOutcome = new Map(venues.map((venue) => [venue, earliest(outcomes.filter((row) => row.outcome === venue), cut)] as const));
+  const counted = outcomes.filter(confirmed);
+  const left = outcomes.filter((row) => !confirmed(row) && venues.includes(row.outcome) && Date.parse(row.at ?? row.by ?? "") <= cut);
+  const byOutcome = new Map(venues.map((venue) => [venue, earliest(counted.filter((row) => row.outcome === venue), cut)] as const));
   const results: KindCounts[] = [];
   for (const step of kinds) {
     const { dated, undated } = earliest(steps.filter((row) => row.step === step), cut);
@@ -130,7 +137,9 @@ export function baseRates({ steps, outcomes, pools, cut, windows = WINDOWS, venu
     // A pool counts once the stretch its block is in had ended; every other step once its own time had passed.
     const ready = (start: Dated, by: number) => (step === "pool" && pools && start.block !== undefined ? endOf(pieceOf(start.block)) <= by : start.at <= by);
     const n = step === "pool" && pools ? pools.counts.reduce((sum, count, k) => (endOf(k) <= cut ? sum + count : sum), 0) : dated.size;
-    const kind: KindCounts = { step, n, undated: undated.size, windows: [] };
+    const unconfirmedRows = left.filter((row) => dated.has(row.token.toLowerCase()) || undated.has(row.token.toLowerCase()));
+    const unconfirmed = { rows: unconfirmedRows.length, tokens: [...new Set(unconfirmedRows.map((row) => row.token.toLowerCase()))].sort() };
+    const kind: KindCounts = { step, n, undated: undated.size, unconfirmed, windows: [] };
     if (step !== "pool" && dated.size <= MAX_LISTED) kind.tokens = [...dated.keys()].sort();
     for (const days of windows) {
       const by = cut - days * DAY_MS;

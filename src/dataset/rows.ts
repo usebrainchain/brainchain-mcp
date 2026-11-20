@@ -145,10 +145,11 @@ export interface TradingStarts {
 /**
  * The outcomes: KuCoin and Gate by the contract they list on Robinhood Chain, dated by the trading start the venue
  * publishes when it had opened by the time the watcher saw the listing; Robinhood's sitemap and tradable pairs by symbol
- * (see `attribute`), dated when the watcher first saw them. One already there when the watcher first read the venue is
- * "listed by" that time.
+ * (see `attribute`), confirmed by Robinhood's own name for the asset, from its pair list or from `pageNames`, the name
+ * on its page, and dated when the watcher first saw them. A page with no such name to compare is kept as `unconfirmed`.
+ * One already there when the watcher first read the venue is "listed by" that time.
  */
-export function outcomesFromEvents(events: readonly WatchEvent[], traced: ReadonlyMap<string, Traced>, starts: TradingStarts): OutcomeRow[] {
+export function outcomesFromEvents(events: readonly WatchEvent[], traced: ReadonlyMap<string, Traced>, starts: TradingStarts, pageNames: ReadonlyMap<string, string> = new Map()): OutcomeRow[] {
   const rows: OutcomeRow[] = [];
   const pairNames = new Map<string, string>();
   for (const event of events) if (event.kind === "robinhood.pair_added" && event.token.symbol && event.token.name) pairNames.set(event.token.symbol.toUpperCase(), event.token.name);
@@ -179,16 +180,21 @@ export function outcomesFromEvents(events: readonly WatchEvent[], traced: Readon
     const pair = event.kind === "robinhood.pair_added" || event.kind === "robinhood.tradability_changed";
     if (event.kind !== "robinhood.page_added" && !(pair && event.detail.tradable === true)) continue;
     if (event.kind === "robinhood.tradability_changed" && event.baseline) continue;
-    const found = attribute(symbol, pair ? (event.token.name ?? undefined) : undefined, traced, pairNames);
+    // The sitemap names no asset, so a page is compared by the name the pair list gives the symbol, or else the name on
+    // the page itself, where it could be read.
+    const venueName = pair ? (event.token.name ?? undefined) : (pairNames.get(symbol.toUpperCase()) ?? pageNames.get(symbol.toUpperCase()));
+    const found = attribute(symbol, venueName, traced, pairNames);
     if (!found) continue;
+    const name = found.match === "name" ? venueName : undefined;
     rows.push({
       token: found.token,
       outcome: pair ? "robinhood_tradable" : "robinhood_page",
       venue: "Robinhood",
       ...undated(event),
       match: found.match,
+      ...(found.match === "symbol" ? { unconfirmed: true as const } : {}),
       symbol: symbol.toUpperCase(),
-      ...(pair && event.token.name ? { name: event.token.name } : {}),
+      ...(name ? { name } : {}),
       ref: event.ref.split("@")[0]!,
       observedAt: event.observedAt,
       ...flags,
