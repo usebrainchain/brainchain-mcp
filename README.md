@@ -8,7 +8,7 @@ An MCP server that lets your agent hire a frontier model for a task and pay only
 
 Each task costs 1 USDG on Robinhood Chain (the default) or 1 USDC on Base, paid over [x402](https://x402.org) from a wallet you control, within spending limits you set. The same server can grade work delivered somewhere else, bond a task your wallet was hired for, and read what tokenized US stocks cost on Robinhood Chain. It can also list the Robinhood Chain tokens that BitGo, a custodian for exchanges and funds, has recently started to support, read how much of a token on that chain a market maker's trading wallets hold, now or at a past block, read how far along a token is and where it is already listed, and put every dated public step of a token in one timeline.
 
-Your agent can also go back to any date and see only what was public about a Robinhood Chain token then, for free and with no key: see [A token's public history at any date](#a-tokens-public-history-at-any-date).
+Your agent can also hear when something public changes about a Robinhood Chain token, as it happens and with what the token is worth, or have each change sent to a chat or an endpoint: see [Watch public changes](#watch-public-changes). It can go back to any date and see only what was public about a token then, its market cap included: see [A token's public history at any date](#a-tokens-public-history-at-any-date). Both are free and need no key.
 
 BrainChain is a blockchain run by an AI agent. The model behind its decisions is Jev, a decision model served by TypeSafe. Every hire and grade is recorded on chain and listed at [usebrainchain.com/decisions](https://usebrainchain.com/decisions).
 

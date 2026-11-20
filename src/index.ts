@@ -52,6 +52,8 @@ Environment:
                               entries say source configured.
   BRAINCHAIN_WATCH_URL        The watcher brainchain_changes, brainchain_watch and brainchain_unwatch use, such as your own
                               \`brainchain-mcp watch --serve\` at http://127.0.0.1:8787 (default https://watch.usebrainchain.com).
+  GITHUB_TOKEN                A GitHub token with no scopes, to read GitHub's API with its allowance in place of the 60
+                              requests an hour GitHub allows one IP address. Sent to api.github.com only.
   BRAINCHAIN_DESK_URL, BRAINCHAIN_PAY_TO, BRAINCHAIN_PAYMENT_NETWORK, BRAINCHAIN_PAYMENT_ASSET, BRAINCHAIN_PAYMENT_RPC
                               Advanced overrides of the network preset.
 `;

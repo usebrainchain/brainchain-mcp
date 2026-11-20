@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
-  "description": "Hire a frontier model for a task and pay in USDG or USDC only for work that meets the bar you set.",
+  "description": "Hire a model paid only for work that passes, and watch public changes to Robinhood Chain tokens.",
   "version": "0.14.2",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
@@ -106,6 +106,13 @@
           "name": "BRAINCHAIN_WATCH_URL",
           "description": "The watcher brainchain_changes, brainchain_watch and brainchain_unwatch use, such as your own brainchain-mcp watch --serve at http://127.0.0.1:8787. BrainChain's own, https://watch.usebrainchain.com, by default.",
           "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "GITHUB_TOKEN",
+          "description": "A GitHub token with no scopes. BitGo's history and the dates of Trust Wallet's and MetaMask's listings are then read with its allowance in place of the 60 requests an hour GitHub allows one IP address. Sent to api.github.com only and never logged.",
+          "isRequired": false,
+          "isSecret": true,
           "format": "string"
         },
         {
