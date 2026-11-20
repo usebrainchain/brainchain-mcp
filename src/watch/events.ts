@@ -6,6 +6,7 @@ export const KINDS = [
   "pool.created",
   "maker.approval",
   "maker.receipt",
+  "maker.pool_queued",
   "bitgo.pr_opened",
   "bitgo.merged",
   "bitgo.released",
@@ -91,6 +92,8 @@ export interface Page {
 
 export const DEFAULT_LIMIT = 100;
 export const MAX_LIMIT = 1000;
+/** The most tokens or kinds one request can filter by. */
+export const MAX_FILTERS = 50;
 
 /** Whether `wanted`, a kind or the part of one before the dot, covers `kind`. */
 export const kindMatches = (kind: Kind, wanted: string) => kind === wanted || kind.startsWith(`${wanted.replace(/\.\*?$/, "")}.`);

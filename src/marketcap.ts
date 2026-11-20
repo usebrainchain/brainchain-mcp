@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { decodeFunctionResult, encodeAbiParameters, encodeFunctionData, formatUnits, getAddress, isAddressEqual, keccak256, multicall3Abi, parseAbi, parseAbiItem, parseAbiParameters, zeroAddress, type Address, type Hash } from "viem";
+import { decodeFunctionResult, encodeAbiParameters, encodeFunctionData, formatUnits, getAddress, getContractAddress, isAddress, isAddressEqual, keccak256, multicall3Abi, parseAbi, parseAbiItem, parseAbiParameters, zeroAddress, type Address, type Hash } from "viem";
 
 import { BY_SYMBOL, TOKEN_INPUT } from "./custody.js";
 import {
@@ -21,6 +21,7 @@ import {
   type Moment,
 } from "./history.js";
 import { MULTICALL3 } from "./premiums.js";
+import { V3_POOL_CODE_HASH } from "./queued.js";
 import { UNISWAP_V3, UNISWAP_V4 } from "./readiness.js";
 
 export const MARKET_CAP_NAME = "brainchain_token_market_cap";
@@ -67,7 +68,9 @@ export const MARKET_CAP_TOOL: Tool = {
     "`pool` is the pool used: its `version`, its `address` on Uniswap v3 or its `id` on Uniswap v4 with its `hooks`, the `pair`, `pairedWith`, the other token's contract address or ETH, its `fee`, its `depth2pctUsd` at the block and `thin`. " +
     "`chosen` says why that pool, and `pools` lists the pools it was weighed against, deepest first, each with its last swap's `block` and its `priceUsd` and `depth2pctUsd`. `token` holds the `contract` and the `name`, `symbol` and `decimals` the contract gives itself. " +
     "Anyone can create a pool for any token and trade in it, and whoever deployed a token chose its name, symbol and supply, so a price from a thin pool, or for a token whose origin you do not know, proves little. " +
-    "The tool answers one request at a time, in turn with the other tools that read the chain. The first answer for a token can take half a minute, because the tool reads every pool created for it and its whole supply history; later ones are faster for as long as the server keeps running. " +
+    "The token's pools, and ETH's, come from the pool index of the watcher BRAINCHAIN_WATCH_URL names, BrainChain's own by default, when it answers within 3 seconds; the blocks after the index are searched on chain, and `poolIndex` then gives the `watcher` and the block the index ran `through`. " +
+    "A pool from the index counts only when its address or id follows from its own currencies and fee, and the prices, liquidity and supply are always read from the chain. When the watcher does not answer, the tool searches the chain for every pool created for the token, and `poolIndex` is left out. " +
+    "The tool answers one request at a time, in turn with the other tools that read the chain. The first answer for a token can take half a minute when it searches for the pools itself, or about ten seconds with the index; later ones are faster for as long as the server keeps running. " +
     "An answer that is not ready after 45 seconds says so, and asking again goes on from where it stopped. " +
     "Free, no key and no payment. Not advice.",
   annotations: { readOnlyHint: true, openWorldHint: true },
@@ -141,6 +144,8 @@ export interface MarketCapBoard {
   /** For a price read in ETH: ETH's own price in dollars, the swap it comes from and its pool. */
   ethUsd?: { priceUsd: string; swap: { block: number; at: string; transaction: Hash }; pool: PoolEntry };
   supplyCheck?: { block: number; passed: boolean; transfers?: string; totalSupply?: string };
+  /** When the token's pools came from a watcher's pool index: the watcher, and the block through which the index had them. */
+  poolIndex?: { watcher: string; through: number };
 }
 
 /** What was read already: where tokens' transfers begin, pools created in each stretch, swaps in each chunk, liquidity changes, mints and burns, block times. */
@@ -152,7 +157,7 @@ export interface CapKept {
   supply: Map<string, Promise<bigint>>;
   times: Map<string, Promise<bigint>>;
   /** Each set of pairs' pools found so far, from one block through another: a later read scans only the blocks after. */
-  index: Map<string, { from: bigint; through: bigint; pools: Pool[] }>;
+  index: Map<string, { from: bigint; through: bigint; pools: Pool[]; watcher?: { origin: string; through: bigint } }>;
   /**
    * When a search for pools over a long range is turned away, use the pools that state alone shows instead, and search
    * again next time. Set by a caller that must answer without the public endpoint; the tool leaves it unset.
@@ -278,20 +283,25 @@ export async function poolsByState(reader: ChainHistory, pairs: readonly [Addres
   return found;
 }
 
+/** The pairs of `assets` with `quotes`, each sorted as a pool sorts its currencies, and the key their pools are kept under. */
+function pairsOf(assets: readonly Address[], quotes: readonly Address[]): { pairs: [Address, Address][]; key: string } {
+  const pairs = assets.flatMap((asset) => quotes.filter((quote) => !same(asset, quote)).map((quote) => sorted(asset, quote)));
+  return { pairs, key: pairs.map((pair) => pair.join(":")).join(",").toLowerCase() };
+}
+
 /**
  * The pools on Uniswap v3 and v4 created by `upTo` that pair one of `assets` with one of `quotes`, from block `from` on.
  * What was found is kept as an index through the newest block, so the next read for the same pairs scans only the blocks
  * after it: a token's pools are searched once from its start, and then a few blocks at a time.
  */
 async function poolsFor(reader: ChainHistory, assets: readonly Address[], quotes: readonly Address[], from: bigint, upTo: bigint, newest: bigint, kept: CapKept): Promise<Pool[]> {
-  const pairs = assets.flatMap((asset) => quotes.filter((quote) => !same(asset, quote)).map((quote) => sorted(asset, quote)));
-  const key = pairs.map((pair) => pair.join(":")).join(",").toLowerCase();
+  const { pairs, key } = pairsOf(assets, quotes);
   const known = kept.index.get(key);
   const covered = known !== undefined && known.from <= from;
   if (!covered || known.through < upTo) {
     const start = covered ? known.through + 1n : from;
     const search = scanPools(reader, pairs, start, newest, newest, kept).then((scanned) => {
-      kept.index.set(key, { from: covered ? known.from : from, through: newest, pools: [...(covered ? known.pools : []), ...scanned] });
+      kept.index.set(key, { from: covered ? known.from : from, through: newest, pools: [...(covered ? known.pools : []), ...scanned], ...(covered && known.watcher ? { watcher: known.watcher } : {}) });
     });
     if (!kept.byState || newest - start < ONE_RANGE) await search;
     else {
@@ -548,6 +558,9 @@ async function deepest(reader: ChainHistory, name: string, asset: Asset, quotes:
 
 const ETH: Asset = { addresses: [WETH, zeroAddress], decimals: ETH_DECIMALS, symbol: "ETH" };
 
+/** The pairs a token is priced by: with USDG, WETH and ETH, or WETH and ETH with USDG for WETH itself. */
+const pricedBy = (token: Address): [readonly Address[], readonly Address[]] => (same(token, WETH) ? [ETH.addresses, [USDG]] : [[token], [USDG, WETH, zeroAddress]]);
+
 /** ETH's price in dollars at `block`, from its deepest pool paired with USDG. */
 function ethPrice(reader: ChainHistory, block: bigint, newest: bigint, kept: CapKept): Promise<Pricing | undefined> {
   return deepest(reader, "eth", ETH, [USDG], 0n, block, newest, kept);
@@ -619,13 +632,14 @@ export async function marketCap(reader: ChainHistory, token: Address, kept: CapK
   if (start === undefined || start > asOf.block) throw new ChainError(`The contract at ${token} had logged no transfers by block ${asOf.block}, so nobody had traded it.`);
   const label = symbol || "token";
   const asset: Asset = same(token, WETH) ? ETH : { addresses: [token], decimals, symbol: label };
-  const pricing = await deepest(reader, token.toLowerCase(), asset, same(token, WETH) ? [USDG] : [USDG, WETH, zeroAddress], start, asOf.block, newest, kept);
+  const pricing = await deepest(reader, token.toLowerCase(), asset, pricedBy(token)[1], start, asOf.block, newest, kept);
   if (!pricing) {
     throw new ChainError(
       `No pool on Uniswap v3 or v4 that pairs ${token} with USDG, ETH or WETH traded in the ${LOOKBACK_BLOCKS.toLocaleString("en-US")} blocks up to block ${asOf.block}, so there is no price for it there.`,
     );
   }
   const { chosen, candidates, eth } = pricing;
+  const indexed = kept.index.get(pairsOf(...pricedBy(token)).key)?.watcher;
   const readAt = now.toISOString();
   const swapOf = async (swap: Traded) => ({ block: Number(swap.block), at: await blockTime(reader, swap.block), transaction: swap.transaction });
 
@@ -652,11 +666,74 @@ export async function marketCap(reader: ChainHistory, token: Address, kept: CapK
     pools: candidates.map((candidate) => ({ ...entry(candidate, label), block: Number(candidate.block), priceUsd: significant(candidate.usd) })),
     ...(eth ? { ethUsd: { priceUsd: significant(eth.chosen.usd), swap: await swapOf(eth.chosen), pool: entry(eth.chosen, "ETH") } } : {}),
     ...(supplyCheck ? { supplyCheck } : {}),
+    ...(indexed ? { poolIndex: { watcher: indexed.origin, through: Number(indexed.through) } } : {}),
   };
+}
+
+/** How long the watcher's pool index is waited for before the tool searches the chain for the pools itself. */
+export const WATCHER_MS = 3_000;
+
+/** A pool as a watcher's `GET /pools` gives it, checked: nothing for one whose address or id does not follow from its own key. */
+function indexedPool(entry: unknown): Pool | undefined {
+  if (!entry || typeof entry !== "object") return undefined;
+  const { version, pool, currency0, currency1, fee, tickSpacing, hooks, block } = entry as Record<string, unknown>;
+  const address = (value: unknown): value is Address => typeof value === "string" && isAddress(value, { strict: false });
+  if (!address(currency0) || !address(currency1) || !Number.isInteger(fee) || !Number.isInteger(tickSpacing) || !Number.isSafeInteger(block) || (block as number) < 0) return undefined;
+  const [c0, c1] = [getAddress(currency0), getAddress(currency1)];
+  if (version === 3 && address(pool)) {
+    const salt = keccak256(encodeAbiParameters(parseAbiParameters("address, address, uint24"), [c0, c1, fee as number]));
+    const made = getContractAddress({ opcode: "CREATE2", from: UNISWAP_V3, salt, bytecodeHash: V3_POOL_CODE_HASH });
+    return same(made, getAddress(pool)) ? { version: "Uniswap v3", key: made, currency0: c0, currency1: c1, fee: fee as number, created: BigInt(block as number) } : undefined;
+  }
+  if (version === 4 && typeof pool === "string" && address(hooks)) {
+    const id = v4PoolId(c0, c1, fee as number, tickSpacing as number, getAddress(hooks));
+    return id === pool.toLowerCase() ? { version: "Uniswap v4", key: id, currency0: c0, currency1: c1, fee: fee as number, hooks: getAddress(hooks), created: BigInt(block as number) } : undefined;
+  }
+  return undefined;
+}
+
+/** A token's pools from a watcher's index, and the block through which it has them; nothing when the watcher cannot give all of them. */
+async function askWatcher(watcher: URL, token: Address, fetchImpl: typeof fetch): Promise<{ through: bigint; pools: Pool[] } | undefined> {
+  const url = new URL(`pools?token=${token}`, watcher.href.endsWith("/") ? watcher : `${watcher.href}/`);
+  const response = await fetchImpl(url, { redirect: "error", headers: { Accept: "application/json", "User-Agent": "brainchain-mcp" }, signal: AbortSignal.timeout(WATCHER_MS) });
+  if (response.status !== 200) {
+    await response.body?.cancel().catch(() => {});
+    return undefined;
+  }
+  const body = (await response.json()) as { through?: unknown; complete?: unknown; pools?: unknown };
+  if (body.complete !== true || !Number.isSafeInteger(body.through) || !Array.isArray(body.pools)) return undefined;
+  const pools = body.pools.map(indexedPool);
+  // One pool that does not check out and the index is not taken at all: the tool searches for itself.
+  if (pools.some((pool) => !pool || !(same(pool.currency0, token) || same(pool.currency1, token)))) return undefined;
+  return { through: BigInt(body.through as number), pools: pools as Pool[] };
+}
+
+/**
+ * Takes the pools `token` is priced by, and those ETH is priced by, from the watcher's pool index into `kept`, so the
+ * search for them reads only the blocks after the index: the token's from the watcher's answer for the token, and ETH's
+ * from its answer for USDG, which holds USDG's pools with ETH and WETH whole. What is not answered within `WATCHER_MS` is
+ * searched for on chain. A pool from the index counts only when its address or id follows from its currencies and fee,
+ * so a watcher cannot make up a pool, and the prices, liquidity and supply are all read from the chain.
+ */
+export async function poolsFromWatcher(watcher: URL, token: Address, kept: CapKept, fetchImpl: typeof fetch = fetch): Promise<void> {
+  if (same(token, USDG)) return;
+  const asks = [...(same(token, WETH) ? [] : [{ asked: token, ...pairsOf([token], [USDG, WETH, zeroAddress]) }]), { asked: USDG, ...pairsOf(ETH.addresses, [USDG]) }];
+  await Promise.all(
+    asks
+      .filter(({ key }) => !kept.index.has(key))
+      .map(async ({ asked, pairs, key }) => {
+        const answer = await askWatcher(watcher, asked, fetchImpl).catch(() => undefined);
+        if (!answer || kept.index.has(key)) return;
+        const pools = answer.pools.filter((pool) => pairs.some(([a, b]) => same(pool.currency0, a) && same(pool.currency1, b)));
+        kept.index.set(key, { from: 0n, through: answer.through, pools, watcher: { origin: watcher.origin, through: answer.through } });
+      }),
+  );
 }
 
 const kept: CapKept = { starts: new Map(), pools: new Map(), swaps: new Map(), changes: new Map(), supply: new Map(), times: new Map(), index: new Map() };
 
-export function readMarketCap(token: Address, moment?: Moment): Promise<MarketCapBoard> {
+/** With `watcher`, the token's pools are taken from that watcher's pool index first; see `poolsFromWatcher`. */
+export async function readMarketCap(token: Address, moment?: Moment, watcher?: URL, fetchImpl: typeof fetch = fetch): Promise<MarketCapBoard> {
+  if (watcher) await poolsFromWatcher(watcher, token, kept, fetchImpl);
   return inTurn((reader) => marketCap(reader, token, kept, new Date(), moment));
 }

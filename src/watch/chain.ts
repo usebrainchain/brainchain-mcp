@@ -2,6 +2,7 @@ import { formatUnits, getAddress, isAddressEqual, zeroAddress, type Address, typ
 
 import { blockTime, ChainError, earliestLog, STRETCH_BLOCKS, tokenFacts, tooMany, tooSlow, transferEvent, type ChainHistory, type Dated, type Kept } from "../history.js";
 import { approvalEvent, firstApprovals, who, type Approval, type MakerWallet } from "../makers.js";
+import { firstQueued, otherSide, queuedKept, queuedPools, registryLogs, type QueuedKept, type QueuedPool } from "../queued.js";
 import { initializeEvent, poolCreatedEvent, UNISWAP_V3, UNISWAP_V4 } from "../readiness.js";
 import type { EventToken, Found } from "./events.js";
 import { poolOf, type IndexedPool, type PoolLog } from "./pools.js";
@@ -32,14 +33,17 @@ export interface Firsts {
   approval(token: Address, maker: MakerWallet, newest: bigint): Promise<Approval | undefined>;
   /** The wallet's first receipt of the token between two blocks, or "earlier" when it had received some before `from`. */
   receipt(token: Address, maker: MakerWallet, from: bigint, to: bigint): Promise<Receipt | "earlier" | undefined>;
+  /** The first of the token's pools the wallet's multisig queued on its registry, whenever it was queued. */
+  queued(token: Address, maker: MakerWallet, newest: bigint): Promise<QueuedPool | undefined>;
 }
 
 export interface ChainKept {
   approvals: Kept<Approval>;
   starts: Kept<bigint>;
+  queued: QueuedKept;
 }
 
-export const chainKept = (): ChainKept => ({ approvals: new Map(), starts: new Map() });
+export const chainKept = (): ChainKept => ({ approvals: new Map(), starts: new Map(), queued: queuedKept() });
 
 /** Whether `maker` sent the transaction, or it was sent to the wallet or its Safe: the token's log alone can be written by anyone who deployed it. */
 async function own(reader: ChainHistory, maker: MakerWallet, transaction: Hash): Promise<boolean> {
@@ -79,6 +83,7 @@ async function receivedBy(reader: ChainHistory, token: Address, maker: MakerWall
 export function chainFirsts(reader: ChainHistory, kept: ChainKept): Firsts {
   return {
     approval: async (token, maker, newest) => (await firstApprovals(reader, token, [maker], kept, newest))[0],
+    queued: (token, maker, newest) => firstQueued(reader, maker, token, newest, kept.queued),
     async receipt(token, maker, from, to) {
       if (from > 0n && (await receivedBy(reader, token, maker, from - 1n))) return "earlier";
       const log = await earliestLog(
@@ -108,6 +113,8 @@ async function allLogs<L>(read: (from: bigint, to: bigint) => Promise<L[]>, from
 export interface ChainOptions {
   reader: ChainHistory;
   wallets: readonly MakerWallet[];
+  /** Where the pools of the queued roles read are kept: their currencies never change. */
+  kept?: QueuedKept;
   /** The lowercased addresses of the tokens the log has a public trace for. A pool is reported only for one of these. */
   watched: () => ReadonlySet<string>;
   firsts: Firsts;
@@ -125,13 +132,14 @@ interface ChainState {
 }
 
 /**
- * Reads only new blocks, at most `SPAN` at a time, for three things: a pool created on Uniswap v3 or v4 for a token with a
- * public trace, paired with ETH, WETH, USDG or another such token; and a followed wallet's first approval, or first
- * receipt, of any token but ETH, WETH and USDG. The first read only notes the newest block: what came before is the baseline. A first approval
- * older than the blocks being read is recorded as baseline, and a wallet that had received a token before them is noted as
- * settled, so neither is reported as new.
+ * Reads only new blocks, at most `SPAN` at a time, for four things: a pool created on Uniswap v3 or v4 for a token with a
+ * public trace, paired with ETH, WETH, USDG or another such token; a followed wallet's first approval, or first receipt, of
+ * any token but ETH, WETH and USDG; and the first of a token's pools a followed wallet's multisig queues on its role
+ * registry. The first read only notes the newest block: what came before is the baseline. A first approval or queued pool
+ * older than the blocks being read is recorded as baseline, and a wallet that had received a token before them is noted
+ * as settled, so neither is reported as new.
  */
-export function chainPoller({ reader, wallets, watched, firsts, interval = CHAIN_INTERVAL, onPools }: ChainOptions): Poller {
+export function chainPoller({ reader, wallets, watched, firsts, interval = CHAIN_INTERVAL, onPools, kept = queuedKept() }: ChainOptions): Poller {
   const facts = new Map<string, Promise<{ token: EventToken; decimals?: number }>>();
   const describe = (address: Address) => {
     const key = address.toLowerCase();
@@ -223,6 +231,23 @@ export function chainPoller({ reader, wallets, watched, firsts, interval = CHAIN
         const what = "spender" in first ? { spender: first.spender } : { from: first.from, amount: decimals === undefined ? first.value.toString() : formatUnits(first.value, decimals) };
         const detail = { maker: who(maker), ...what, confirmed: first.confirmed, block: first.block, transaction: first.transaction };
         await record({ kind, token, source: "Robinhood Chain", ref: first.transaction, at: first.at, detail, ...(BigInt(first.block) < from ? { baseline: true as const } : {}) }, key);
+      }
+
+      // A registry logs a few roles a week, so one search per registry per range costs little.
+      for (const maker of wallets) {
+        if (!maker.registry) continue;
+        const queued = await queuedPools(reader, await allLogs((low, high) => registryLogs(reader, maker.registry!, low, high), from, to), kept);
+        for (const op of queued) {
+          for (const side of [op.currency0, op.currency1]) {
+            const key = `queued:${side.toLowerCase()}:${maker.wallet.toLowerCase()}`;
+            if (BASES.has(side.toLowerCase()) || settled.has(key)) continue;
+            const first = await firsts.queued(side, maker, to);
+            if (!first) continue;
+            const { token } = await describe(side);
+            const detail = { maker: who(maker), venue: first.venue, pool: first.pool, pairedWith: otherSide(first, side), fee: first.fee, confirmed: first.confirmed, block: first.block, transaction: first.transaction };
+            await record({ kind: "maker.pool_queued", token, source: "Robinhood Chain", ref: first.transaction, at: first.at, detail, ...(BigInt(first.block) < from ? { baseline: true as const } : {}) }, key);
+          }
+        }
       }
 
       state.block = Number(to);

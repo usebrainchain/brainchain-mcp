@@ -2,12 +2,11 @@ import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
 
+import { BASES } from "./chain.js";
 import type { Deliveries } from "./deliver.js";
-import { DEFAULT_LIMIT, knownKind, matches, MAX_LIMIT, type EventLog, type Query, type WatchEvent } from "./events.js";
+import { DEFAULT_LIMIT, knownKind, matches, MAX_FILTERS, MAX_LIMIT, type EventLog, type Query, type WatchEvent } from "./events.js";
 import { DeliveryError } from "./net.js";
-
-/** The most tokens or kinds one request can filter by. */
-export const MAX_FILTERS = 50;
+import type { IndexedPool } from "./pools.js";
 
 const ISO = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
 
@@ -71,8 +70,41 @@ export const STREAM_MS = 30 * 60_000;
 /** A stream whose client has not read this much of what was sent is closed. */
 export const BACKLOG_BYTES = 1_000_000;
 
+/** What `GET /pools` reads: the watcher's index of every Uniswap pool on the chain. */
+export interface PoolLookup {
+  readonly ready: boolean;
+  readonly through: number;
+  poolsOf(token: `0x${string}`): IndexedPool[];
+  basePools(): IndexedPool[];
+}
+
+/** The most pools one answer of `GET /pools` holds; a token with more is answered with `complete` false. */
+export const MAX_POOLS = 5_000;
+
+/**
+ * A token's pools from the index, oldest first. ETH, WETH and USDG are on one side of most pools, so for them the index
+ * keeps, and the answer gives, only their pools with each other.
+ */
+function poolsAnswer(index: PoolLookup, token: string, now: number) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(token)) throw new HttpError(400, "token must be a contract address: 0x and 40 hex characters.");
+  if (!index.ready) throw new HttpError(503, `The pool index is still being filled, through block ${index.through}. Try again later.`);
+  const address = token.toLowerCase() as `0x${string}`;
+  const base = BASES.has(address);
+  const all = base ? index.basePools().filter((pool) => [pool.currency0, pool.currency1].some((currency) => currency.toLowerCase() === address)) : index.poolsOf(address);
+  return {
+    readAt: new Date(now).toISOString(),
+    token: address,
+    through: index.through,
+    ...(base ? { only: "pools between ETH, WETH and USDG" } : {}),
+    complete: all.length <= MAX_POOLS,
+    pools: all.slice(0, MAX_POOLS).map(({ version, pool, currency0, currency1, fee, tickSpacing, hooks, block }) => ({ version, pool, currency0, currency1, fee, tickSpacing, ...(version === 4 ? { hooks: hooks ?? "0x0000000000000000000000000000000000000000" } : {}), block })),
+  };
+}
+
 export interface ServeOptions {
   log: EventLog;
+  /** The pool index, for `GET /pools`; a watcher without one answers 404 there. */
+  pools?: PoolLookup;
   /** The full state of the sources; anyone gets only whether they are reading, and who holds `adminToken` gets it all. */
   health: () => Health;
   adminToken?: string;
@@ -207,10 +239,10 @@ export interface Served {
 
 /**
  * The watcher's HTTP surface. Reads: `GET /events`, `GET /events/stream` (server-sent events, resumed from Last-Event-ID),
- * `GET /health` (503 while a source keeps failing) and `GET /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
+ * `GET /pools?token=` (a token's pools from the index), `GET /health` (503 while a source keeps failing) and `GET /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
  * /watches/:id` with the watch's manage token. Nothing lists watches. Every address is held to `perMinute` requests.
  */
-export function serveEvents({ log, health, adminToken, deliveries, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
+export function serveEvents({ log, pools, health, adminToken, deliveries, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
   const perMinute = new Window(limits.perMinute, 60_000);
   const creations = new Window(limits.watchesPerHour, 3_600_000);
   const streams = new Set<{ response: ServerResponse; address: string; wanted: Pick<Query, "kinds" | "tokens">; cursor: number }>();
@@ -277,6 +309,10 @@ export function serveEvents({ log, health, adminToken, deliveries, trustProxy = 
     }
     if (url.pathname === "/events" && reading) return send(response, 200, { readAt: new Date(clock()).toISOString(), ...log.query(eventsQuery(url.searchParams)) }, OPEN);
     if (url.pathname === "/events/stream" && reading) return stream(request, response, url, address);
+    if (url.pathname === "/pools" && reading) {
+      if (!pools) throw new HttpError(404, "This watcher keeps no pool index: it fills one only with a private RPC in BRAINCHAIN_WATCH_RPC.");
+      return send(response, 200, poolsAnswer(pools, url.searchParams.get("token") ?? "", clock()), OPEN);
+    }
     if (url.pathname === "/watches" && method === "POST") {
       if (!deliveries) throw new HttpError(404, "This watcher sends no events.");
       if (!creations.take(address, clock())) throw new HttpError(429, `An address can make ${limits.watchesPerHour} watches an hour.`);
@@ -308,8 +344,8 @@ export function serveEvents({ log, health, adminToken, deliveries, trustProxy = 
       if (!status) throw gone();
       return send(response, 200, status);
     }
-    if (["/events", "/events/stream", "/health", "/health/live", "/watches"].includes(url.pathname) || id !== undefined) throw new HttpError(405, "That method is not served here.");
-    throw new HttpError(404, "Not found. The watcher serves GET /events, GET /events/stream, GET /health, POST /watches and GET or DELETE /watches/:id.");
+    if (["/events", "/events/stream", "/pools", "/health", "/health/live", "/watches"].includes(url.pathname) || id !== undefined) throw new HttpError(405, "That method is not served here.");
+    throw new HttpError(404, "Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /health, POST /watches and GET or DELETE /watches/:id.");
   }
 
   const server = createServer((request, response) => {

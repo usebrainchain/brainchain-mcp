@@ -14,7 +14,7 @@ import { stateDirProblem } from "./daily.js";
 import { useGitHubToken } from "./github.js";
 import { createLimits } from "./limits.js";
 import { configuredMakers, MAKERS_NAME, makersTool, MARKET_MAKERS, readMakerHoldings, type MakerWallet } from "./makers.js";
-import { MARKET_CAP_NAME, MARKET_CAP_TOOL } from "./marketcap.js";
+import { MARKET_CAP_NAME, MARKET_CAP_TOOL, readMarketCap } from "./marketcap.js";
 import { createDesk, erc20, firstLine } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL } from "./premiums.js";
 import { READINESS_NAME, READINESS_TOOL } from "./readiness.js";
@@ -388,6 +388,8 @@ export function createServer(env: Record<string, string | undefined>, version: s
   const readers: Partial<Readers> = {
     makers: (token, wallet, moment) => readMakerHoldings(token, wallet, moment, followed),
     timeline: (token, until) => readTokenTimeline(token, until, followed),
+    // The watcher's pool index saves the market cap its longest search; without a usable watcher it searches the chain alone.
+    marketCap: (token, moment) => readMarketCap(token, moment, watchProblem ? undefined : watcher, options.fetch),
     changes: (query) => readChanges(watcher, query, options.fetch),
     watch: (request) => createWatch(watcher, request, options.fetch),
     unwatch: (id, manageToken) => removeWatch(watcher, id, manageToken, options.fetch),

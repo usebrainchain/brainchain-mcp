@@ -63,6 +63,7 @@ function context(log: EventLog, readiness: (token: Address) => Promise<Readiness
       chain: (work) => work(reader),
       readiness: async (_, token) => (read.push(token), readiness(token)),
       approvals: async () => [],
+      queued: async () => [],
       sightings: async (token) => sightings(token),
     },
   });
@@ -161,7 +162,7 @@ describe("an event's context", () => {
       times: new Map(),
       worth: async () => Promise.reject(new Error("HTTP request failed: 429")),
       say: (line) => said.push(line),
-      readers: { chain: (work) => work(reader), readiness: async (_, token) => board(token), approvals: async () => [], sightings: async (token) => sightings(token) },
+      readers: { chain: (work) => work(reader), readiness: async (_, token) => board(token), approvals: async () => [], queued: async () => [], sightings: async (token) => sightings(token) },
     });
     expect((await of(pool("2026-08-07T10:00:00.000Z")).done).worthMissing).toBe("Robinhood Chain or a list could not be read just now.");
     expect(said).toEqual(["event 99: the market cap could not be read: HTTP request failed: 429"]);

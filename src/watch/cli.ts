@@ -7,6 +7,7 @@ import { ChainError } from "../history.js";
 import { configuredMakers, firstApprovals, MARKET_MAKERS } from "../makers.js";
 import { marketCap, type CapKept } from "../marketcap.js";
 import { ROBINHOOD_RPC } from "../premiums.js";
+import { firstQueued } from "../queued.js";
 import { readinessIn } from "../readiness.js";
 import { sightingsReader, tokenSightings } from "../sightings.js";
 import { bitGoLists, bitGoMerges, bitGoPullRequests, bitGoReleases } from "./bitgo.js";
@@ -29,8 +30,9 @@ export const WATCH_USAGE = `Usage: brainchain-mcp watch [--state <dir>] [--serve
 
 Watches public sources for changes about Robinhood Chain tokens and keeps each one as an event in an append-only log:
 new Uniswap pools for tokens with a public trace, a followed market maker wallet's first approval or first receipt of a
-token, pull requests and merges that add a Robinhood Chain token in BitGo's, Trust Wallet's and MetaMask's public code,
-releases of @bitgo/statics that include one, Robinhood's pair list and crypto pages, and KuCoin's, Gate's, LI.FI's and
+token, a market maker's multisig queuing a token's pool for its trading contracts for the first time, pull requests and
+merges that add a Robinhood Chain token in BitGo's, Trust Wallet's and MetaMask's public code, releases of @bitgo/statics
+that include one, the pair list Robinhood serves to API clients and its crypto sitemap, and KuCoin's, Gate's, LI.FI's and
 CoinGecko's lists. Each event carries the token's earlier public steps and what it is worth now. The first run records
 what is already public as a baseline and reports none of it as new.
 
@@ -38,7 +40,8 @@ what is already public as a baseline and reports none of it as new.
                          ~/.brainchain/watch). A restart resumes from there.
   --serve [host:]<port>  Serve the events on 127.0.0.1 unless a host is given: GET /events?since=&kinds=&tokens=&limit=,
                          GET /events/stream (server-sent events), POST /watches to have them sent to a webhook, Discord,
-                         Slack or Telegram, GET and DELETE /watches/:id, and GET /health. Point BRAINCHAIN_WATCH_URL at it.
+                         Slack or Telegram, GET and DELETE /watches/:id, GET /pools?token= (a token's Uniswap pools, with
+                         a private RPC set), and GET /health. Point BRAINCHAIN_WATCH_URL at it.
   --print                Write each new event to stdout as one line of JSON.
   --trust-proxy          Behind Cloudflare and a proxy such as Render's, take a client's address from CF-Connecting-IP, or
                          else from the X-Forwarded-For entry before the proxy's own.
@@ -173,7 +176,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
 
   const pollers: Poller[] = [
     // With a private endpoint the chain is read every 10 s, so an event is out within about 20 s of its block.
-    chainPoller({ reader, wallets, watched: tracked, firsts: chainFirsts(reader, kept), ...(rpc ? { interval: 10_000 } : {}), onPools: (from, to, pools) => poolIndex.addLive(from, to, pools) }),
+    chainPoller({ reader, wallets, watched: tracked, firsts: chainFirsts(reader, kept), kept: kept.queued, ...(rpc ? { interval: 10_000 } : {}), onPools: (from, to, pools) => poolIndex.addLive(from, to, pools) }),
     bitGoPullRequests(requests, lists, github),
     bitGoMerges(requests, lists, github),
     bitGoReleases(requests, lists),
@@ -201,6 +204,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       chain: chainTurn(reader),
       readiness: readinessIn,
       approvals: (chain, address, followed, newest) => firstApprovals(chain, address, followed, kept, newest),
+      queued: (chain, address, followed, newest) => Promise.all(followed.map((maker) => firstQueued(chain, maker, address, newest, kept.queued))),
       sightings: (address) => tokenSightings(sightings, address),
     },
     // Off the delivery path, the slow parts get longer: what is not ready by the first deadline follows as an update.
@@ -228,7 +232,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   const deliveries = new Deliveries({ dir, log, post: pinnedPost(), check: async (url) => void (await publicTarget(url.hostname)), say });
   const adminToken = env.BRAINCHAIN_WATCH_ADMIN_TOKEN?.trim() || undefined;
   if (adminToken && !/^[\w-]{32,100}$/.test(adminToken)) throw new Error("BRAINCHAIN_WATCH_ADMIN_TOKEN must be 32 to 100 letters, digits, - or _.");
-  const served = args.serve ? serveEvents({ log, health: () => health(), adminToken, deliveries, trustProxy: args.trustProxy }) : undefined;
+  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), health: () => health(), adminToken, deliveries, trustProxy: args.trustProxy }) : undefined;
   let ticking = false;
   const deliver = () => {
     if (ticking) return;

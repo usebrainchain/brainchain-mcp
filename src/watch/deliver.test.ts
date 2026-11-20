@@ -45,8 +45,20 @@ describe("a chat message", () => {
     expect(line(event())).toBe("A pull request in BitGo's code adds Cash Cat CASHCAT (0x020b…18b4) to its Robinhood Chain tokens. Worth $38.3M now, $12.4K of depth within 2%. https://github.com/BitGo/BitGoJS/pull/9357");
     expect(line(event({ kind: "pool.created", source: "Uniswap v4", ref: TX, detail: { pairedWith: "ETH" }, context: {} }))).toBe(`New Uniswap v4 pool for Cash Cat CASHCAT (0x020b…18b4), paired with ETH. https://robinhoodchain.blockscout.com/tx/${TX}`);
     expect(line(event({ kind: "robinhood.tradability_changed", token: { address: null, symbol: "PONS", name: "Pons" }, ref: "https://nummus.robinhood.com/currency_pairs/#PONS@2026-11-19T12:00:00Z", detail: { tradable: true }, context: { worth: null } }))).toBe(
-      "Robinhood's Pons PONS pair is tradable now. https://nummus.robinhood.com/currency_pairs/#PONS",
+      "Pons PONS is tradable now in the pair list Robinhood serves to API clients. https://nummus.robinhood.com/currency_pairs/#PONS",
     );
+  });
+
+  it("says a pair entered the list Robinhood serves to API clients, and never that Robinhood had no pair before", () => {
+    const added = line(event({ kind: "robinhood.pair_added", token: { address: null, symbol: "PONS", name: "Pons" }, ref: "https://nummus.robinhood.com/currency_pairs/#PONS", detail: { tradable: false, pairsRead: 140 }, context: { worth: null } }));
+    expect(added).toBe("Pons PONS entered the pair list Robinhood serves to API clients, price only (140 pairs read). https://nummus.robinhood.com/currency_pairs/#PONS");
+    expect(added).not.toMatch(/added a|no pair/i);
+  });
+
+  it("says a market maker's multisig queued a token's pool for its trading contracts, and when only the registry's log shows it", () => {
+    const queued = (confirmed: boolean) => line(event({ kind: "maker.pool_queued", source: "Robinhood Chain", ref: TX, detail: { maker: { name: "Wintermute" }, venue: "Uniswap v3", confirmed }, context: {} }));
+    expect(queued(true)).toBe(`Wintermute's multisig queued a Uniswap v3 pool of Cash Cat CASHCAT (0x020b…18b4) for its trading contracts to trade, the first for this token. https://robinhoodchain.blockscout.com/tx/${TX}`);
+    expect(queued(false)).toContain("the first for this token, by the registry's log only.");
   });
 
   it("names the pair's other side when it is ETH, WETH or USDG", () => {

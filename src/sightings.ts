@@ -38,10 +38,12 @@ export const SIGHTINGS_TOOL: Tool = {
     "`exchanges` has an entry for KuCoin and Gate, each with its `source`, `listed` and, when listed, whether `deposits` and `withdrawals` are open. " +
     "All six are matched by the token's contract address. The tool reads the chain only for the time of `atBlock`, so an address that is not a token is listed nowhere. " +
     "Robinhood and Bitstamp, which Robinhood owns, publish no contract addresses, so they are matched by symbol: `robinhood` has an entry for each `symbol` of letters and digits that the six sources give the token. " +
-    "`page` says whether Robinhood's public site has a page for that symbol, `pair` whether Robinhood's public list of crypto pairs has it, and `bitstamp` whether Bitstamp lists it on Robinhood Chain. " +
-    "For a symbol with a pair, `name` is Robinhood's own name for the asset and `tradable` says whether customers can trade it or only see its price. " +
+    "`page` says whether Robinhood's crypto sitemap has a page for that symbol, `pair` whether the pair list Robinhood serves to API clients has it, with `pairsRead`, the number of pairs in that list when it was read, and `bitstamp` whether Bitstamp lists it on Robinhood Chain. " +
+    "That list leaves out most of the pairs Robinhood shows with a price only: on November 20, 2026 it held 140 pairs, while the sitemap had a page for each of the 353 pairs Robinhood's site shows. " +
+    "So `pair` false says only that this list does not have the symbol, and `page` is the field that covers price-only pairs. " +
+    "For a symbol in the list, `name` is Robinhood's own name for the asset and `tradable` says whether customers can trade it or only see its price. " +
     "Two tokens can share a symbol, so compare that `name` with the token's own before reading an entry as this token: a token on Robinhood Chain that calls itself DOGE is not Dogecoin. " +
-    "An entry with a `page` and no `pair` has no name to compare, so it says only that Robinhood has a page under that symbol. " +
+    "An entry with a `page` and `pair` false has no name to compare, so it says only that Robinhood has a page under that symbol. " +
     "`unread` names any source that could not be read just now: Trust Wallet, MetaMask, LI.FI, CoinGecko, KuCoin, Gate, Robinhood's site, Robinhood's pairs or Bitstamp. " +
     "A list or exchange that could not be read has no entry, and a `robinhood` entry leaves out `page`, `pair` or `bitstamp` when its source could not be read. Neither is reported as unlisted. " +
     "`token` holds the `contract` and the `symbol` and `name` the six sources give the token. `readAt` is when the answer was made. A list that was read is kept for ten minutes while the server runs, so what an entry says can be that old. " +
@@ -84,7 +86,9 @@ export interface ExchangeSighting {
 export interface RobinhoodSighting {
   symbol: string;
   page?: boolean;
+  /** Whether the pair list Robinhood serves to API clients has the symbol, and how many pairs that list held. */
   pair?: boolean;
+  pairsRead?: number;
   /** Robinhood's own name for the asset, which tells two tokens with one symbol apart. */
   name?: string;
   tradable?: boolean;
@@ -231,7 +235,10 @@ function robinhoodPages(body: string): Set<string> {
   return new Set([...body.matchAll(/\/us\/en\/crypto\/([A-Za-z0-9]{1,15})\/?</g)].map((page) => page[1]!.toUpperCase()));
 }
 
-/** Robinhood's crypto pairs by the asset's symbol: its name for the asset, and whether customers can trade it. */
+/**
+ * The crypto pairs Robinhood serves to API clients, by the asset's symbol: its name for the asset, and whether customers can
+ * trade it. Browsers are served more, the price-only pairs among them, and no published parameter or page asks for those.
+ */
 function robinhoodPairs(body: string): Map<string, { name?: string; tradable: boolean }> {
   const { next, results } = record(JSON.parse(body));
   // The list fits one page today. Read as whole once it does not, it would report every pair on a later page as missing.
@@ -380,7 +387,7 @@ export async function tokenSightings(reader: SightingsReader, token: Address, no
     robinhood: symbols.map((symbol) => ({
       symbol,
       ...("value" in pages ? { page: pages.value.has(symbol) } : {}),
-      ...("value" in pairs ? { pair: pairs.value.has(symbol), ...pairs.value.get(symbol) } : {}),
+      ...("value" in pairs ? { pair: pairs.value.has(symbol), pairsRead: pairs.value.size, ...pairs.value.get(symbol) } : {}),
       ...("value" in bitstamp ? { bitstamp: bitstamp.value.has(symbol) } : {}),
     })),
     unread,

@@ -34,6 +34,8 @@ export interface MakerWallet {
   wallet: Address;
   /** A Safe that acts for the wallet, so a transaction sent to it can be the wallet's own. */
   safe?: Address;
+  /** The role registry the wallet's trading contracts take their approved pools from, which the Safe adds to. */
+  registry?: Address;
 }
 
 /**
@@ -42,14 +44,16 @@ export interface MakerWallet {
  * The first is Wintermute's trading contract: Etherscan tags the address as a market maker on Ethereum and Arkham
  * attributes it to Wintermute. It is the first contract its deployer created, so only that deployer's key could have put a
  * contract at the same address on Robinhood Chain. `safe` is the Safe its approvals go through: each of the 36
- * transactions in which it approved Cash Cat or Pons was sent to that Safe.
+ * transactions in which it approved Cash Cat or Pons was sent to that Safe. `registry` is the role registry the contract and
+ * the contracts that swap for it read (each names it as accessControlRegistry() and the Safe as multiSigOwner()): the Safe
+ * queues each pool they may trade there before it takes effect.
  *
  * The others are plain wallets with a public name tag on Etherscan. A plain wallet is one key, and one key has the same
  * address on every chain, so the tag on Ethereum names its owner on Robinhood Chain too. A tagged contract does not carry
  * over that way and is left out.
  */
 export const MARKET_MAKERS: readonly MakerWallet[] = [
-  { name: "Wintermute", tag: "Market Maker: 0x51c7...2a7f", wallet: "0x51C72848c68a965f66FA7a88855F9f7784502a7F", safe: "0x7d330DD7AF628c24E9FC75eb2986b130b2125ad0" },
+  { name: "Wintermute", tag: "Market Maker: 0x51c7...2a7f", wallet: "0x51C72848c68a965f66FA7a88855F9f7784502a7F", safe: "0x7d330DD7AF628c24E9FC75eb2986b130b2125ad0", registry: "0x7Ff4Ed8ab94c849B812622EB462682208BE06B93" },
   { name: "Wintermute", tag: "Wintermute 4", wallet: "0xf8191D98ae98d2f7aBDFB63A9b0b812b93C873AA" },
   { name: "Wintermute", tag: "Wintermute 5", wallet: "0xCe84449A8Ebec019AC110a4b6662E55d0fD9f228" },
   { name: "B2C2", tag: "B2C2 Group 1", wallet: "0xC333E80eF2deC2805F239E3f1e810612D294F771" },

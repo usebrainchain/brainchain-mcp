@@ -80,6 +80,8 @@ function change(event: WatchEvent, name: string): string {
       return `${maker}'s wallet approved ${name} for the first time${detail.confirmed ? "" : ", by the token's log only"}.`;
     case "maker.receipt":
       return `${maker}'s wallet received ${name} for the first time.`;
+    case "maker.pool_queued":
+      return `${maker}'s multisig queued a ${String(detail.venue)} pool of ${name} for its trading contracts to trade, the first for this token${detail.confirmed ? "" : ", by the registry's log only"}.`;
     case "bitgo.pr_opened":
       return `A pull request in BitGo's code adds ${name} to its Robinhood Chain tokens.`;
     case "bitgo.merged":
@@ -95,9 +97,9 @@ function change(event: WatchEvent, name: string): string {
     case "metamask.merged":
       return `MetaMask added ${name} to its token list.`;
     case "robinhood.pair_added":
-      return `Robinhood added a ${name} pair, ${detail.tradable ? "tradable" : "price only"}.`;
+      return `${name} entered the pair list Robinhood serves to API clients, ${detail.tradable ? "tradable" : "price only"}${typeof detail.pairsRead === "number" ? ` (${detail.pairsRead} pairs read)` : ""}.`;
     case "robinhood.tradability_changed":
-      return `Robinhood's ${name} pair is ${detail.tradable ? "tradable now" : "price only now"}.`;
+      return `${name} is ${detail.tradable ? "tradable" : "price only"} now in the pair list Robinhood serves to API clients.`;
     case "robinhood.page_added":
       return `Robinhood has a page for ${name} now.`;
     case "kucoin.listed":
