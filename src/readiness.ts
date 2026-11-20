@@ -127,7 +127,7 @@ async function firstPools(reader: ChainHistory, token: Address, start: bigint, n
  * found and one created long before is not. A token with supply and no mint on record is searched from the beginning; one
  * with neither has nothing to trade and is not searched.
  */
-export async function tokenReadiness(reader: ChainHistory, token: Address, kept: ReadinessKept, now = new Date()): Promise<ReadinessBoard> {
+export async function tokenReadiness(reader: ChainHistory, token: Address, kept: ReadinessKept, now = new Date(), poolsFrom?: bigint): Promise<ReadinessBoard> {
   const facts = await tokenFacts(reader, token);
   const readAt = now.toISOString();
   if (!facts) return { chain: "Robinhood Chain", token: { contract: token }, readAt, deployed: false };
@@ -141,7 +141,7 @@ export async function tokenReadiness(reader: ChainHistory, token: Address, kept:
     readAt,
     deployed: true,
     ...(mint ? { firstMint: mint } : {}),
-    pools: start === undefined ? [] : await firstPools(reader, token, start, newest, kept.pools),
+    pools: start === undefined ? [] : await firstPools(reader, token, poolsFrom !== undefined && poolsFrom > start ? poolsFrom : start, newest, kept.pools),
   };
 }
 
@@ -151,5 +151,8 @@ export function readTokenReadiness(token: Address): Promise<ReadinessBoard> {
   return inTurn((reader) => tokenReadiness(reader, token, kept));
 }
 
-/** What `readTokenReadiness` reads, in a turn another tool already holds, so both share what was read. */
-export const readinessIn = (reader: ChainHistory, token: Address) => tokenReadiness(reader, token, kept);
+/**
+ * What `readTokenReadiness` reads, in a turn another tool already holds, so both share what was read. With `poolsFrom`,
+ * pools are looked for only from the stretch that holds that block, for a token whose earlier pools are known already.
+ */
+export const readinessIn = (reader: ChainHistory, token: Address, poolsFrom?: bigint) => tokenReadiness(reader, token, kept, new Date(), poolsFrom);

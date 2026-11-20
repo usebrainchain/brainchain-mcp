@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { expandHome } from "../config.js";
+import { countsFor } from "../dataset/counts.js";
+import { datasetReader, MANIFEST_MS, type DatasetReader } from "../dataset/published.js";
 import { hasGitHubToken, useGitHubToken } from "../github.js";
 import { ChainError } from "../history.js";
 import { configuredMakers, firstApprovals, MARKET_MAKERS } from "../makers.js";
@@ -33,15 +35,17 @@ new Uniswap pools for tokens with a public trace, a followed market maker wallet
 token, a market maker's multisig queuing a token's pool for its trading contracts for the first time, pull requests and
 merges that add a Robinhood Chain token in BitGo's, Trust Wallet's and MetaMask's public code, releases of @bitgo/statics
 that include one, the pair list Robinhood serves to API clients and its crypto sitemap, and KuCoin's, Gate's, LI.FI's and
-CoinGecko's lists. Each event carries the token's earlier public steps and what it is worth now. The first run records
-what is already public as a baseline and reports none of it as new.
+CoinGecko's lists. Each event carries the token's earlier public steps, what it is worth now and, from the newest
+published dataset, how often earlier tokens with the same step were listed within 7, 30 and 90 days. The first run
+records what is already public as a baseline and reports none of it as new.
 
   --state <dir>          Where the log and the watcher's state are kept (default: BRAINCHAIN_STATE_DIR/watch, or
                          ~/.brainchain/watch). A restart resumes from there.
   --serve [host:]<port>  Serve the events on 127.0.0.1 unless a host is given: GET /events?since=&kinds=&tokens=&limit=,
                          GET /events/stream (server-sent events), POST /watches to have them sent to a webhook, Discord,
                          Slack or Telegram, GET and DELETE /watches/:id, GET /pools?token= (a token's Uniswap pools, with
-                         a private RPC set), and GET /health. Point BRAINCHAIN_WATCH_URL at it.
+                         a private RPC set), GET /pools?after= (the whole pool index a page at a time, which
+                         brainchain-mcp dataset reads), and GET /health. Point BRAINCHAIN_WATCH_URL at it.
   --print                Write each new event to stdout as one line of JSON.
   --trust-proxy          Behind Cloudflare and a proxy such as Render's, take a client's address from CF-Connecting-IP, or
                          else from the X-Forwarded-For entry before the proxy's own.
@@ -49,7 +53,8 @@ what is already public as a baseline and reports none of it as new.
 Environment: GITHUB_TOKEN, or GITHUB_TOKEN_FILE naming a file that holds it, lets the watcher read GitHub about once a
 minute; without one each GitHub source is read every ten minutes, inside the 60 requests an hour GitHub allows one IP
 address. BRAINCHAIN_WATCH_RPC reads Robinhood Chain from another RPC, with the public endpoint as the fallback.
-BRAINCHAIN_MAKER_WALLETS adds wallets to follow. GET /health shows anyone whether each source is reading, and its full
+BRAINCHAIN_MAKER_WALLETS adds wallets to follow. BRAINCHAIN_DATASET reads the dataset from a directory or another address
+in place of BrainChain's published copy. GET /health shows anyone whether each source is reading, and its full
 detail to a request with BRAINCHAIN_WATCH_ADMIN_TOKEN as a Bearer token.`;
 
 /** An argument the command cannot take: the usage goes out with it. */
@@ -196,9 +201,29 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   const allSightings = sightingsReader(requests.fetchFor("context"));
   const GITHUB_HOSTS = new Set(["raw.githubusercontent.com", "github.com", "api.github.com"]);
   const sightings: typeof allSightings = { get: (source) => (GITHUB_HOSTS.has(new URL(source.url).host) ? allSightings.get(source) : Promise.reject(new Error("Not read by the watcher."))) };
+  // How often each kind of step was followed by a listing, from the newest published dataset. A dataset that cannot be
+  // read leaves the counts out and is not asked for again for half an hour.
+  let datasets: DatasetReader | undefined;
+  try {
+    datasets = datasetReader(env.BRAINCHAIN_DATASET);
+  } catch (error) {
+    say(`The counts are left out of the events: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let unreadSince = 0;
+  const counts = async (kind: WatchEvent["kind"]) => {
+    if (!datasets || Date.now() - unreadSince < MANIFEST_MS) return undefined;
+    try {
+      return countsFor(await datasets.load(), kind);
+    } catch (error) {
+      unreadSince = Date.now();
+      say(`The dataset could not be read, so the counts are left out of the events for half an hour: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
+  };
   const context = eventContext({
     log,
     wallets,
+    counts,
     times: new Map(),
     readers: {
       chain: chainTurn(reader),
@@ -206,6 +231,8 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       approvals: (chain, address, followed, newest) => firstApprovals(chain, address, followed, kept, newest),
       queued: (chain, address, followed, newest) => Promise.all(followed.map((maker) => firstQueued(chain, maker, address, newest, kept.queued))),
       sightings: (address) => tokenSightings(sightings, address),
+      // The steps up to the dataset's head come from it, so the context reads the chain only after.
+      ...(datasets ? { dataset: () => datasets!.load() } : {}),
     },
     // Off the delivery path, the slow parts get longer: what is not ready by the first deadline follows as an update.
     ms: 150_000,

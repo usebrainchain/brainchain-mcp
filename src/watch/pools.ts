@@ -329,6 +329,42 @@ export class PoolIndex {
     return { ready: this.ready, through: this.checkpoint.through, pools: this.checkpoint.pools, bytes: this.size, loadedMs: this.loadedMs, ...(this.filling ? { fill: this.filling } : {}) };
   }
 
+  /** How many bytes of the file the checkpoint stands behind: what a reader of the whole index may read. */
+  get bytes(): number {
+    return this.checkpoint.bytes;
+  }
+
+  /**
+   * Up to `max` pools in the order the file holds them, from byte `after`, which is 0 or the `next` of an earlier call,
+   * and the byte the next call goes on from. Only what the checkpoint stands behind is read, so a reader never sees a
+   * line a crash could take back.
+   */
+  linesAfter(after: number, max: number): { pools: IndexedPool[]; next: number } {
+    const end = this.checkpoint.bytes;
+    if (after >= end) return { pools: [], next: end };
+    if (after > 0) {
+      const before = Buffer.alloc(1);
+      readSync(this.fd, before, 0, 1, after - 1);
+      if (before[0] !== 0x0a) throw new RangeError("after must be 0 or the next of an earlier answer.");
+    }
+    const pools: IndexedPool[] = [];
+    const chunk = Buffer.alloc(1 << 20);
+    let offset = after;
+    while (pools.length < max && offset < end) {
+      const read = readSync(this.fd, chunk, 0, Math.min(chunk.length, end - offset), offset);
+      if (read === 0) break;
+      const text = chunk.toString("latin1", 0, read);
+      let start = 0;
+      for (let stop = text.indexOf("\n"); stop !== -1 && pools.length < max; stop = text.indexOf("\n", start)) {
+        pools.push(JSON.parse(text.slice(start, stop)) as IndexedPool);
+        start = stop + 1;
+      }
+      if (start === 0) throw new Error("The pool index has a line longer than it ever writes.");
+      offset += start;
+    }
+    return { pools, next: offset };
+  }
+
   /** The pools between two of ETH, WETH and USDG. */
   basePools(): IndexedPool[] {
     return [...this.bases];

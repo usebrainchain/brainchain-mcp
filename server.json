@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hire a model paid only for work that passes, and watch public changes to Robinhood Chain tokens.",
-  "version": "0.15.1",
+  "version": "0.16.0",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.15.1",
+      "version": "0.16.0",
       "transport": {
         "type": "stdio"
       },
@@ -105,6 +105,12 @@
         {
           "name": "BRAINCHAIN_WATCH_URL",
           "description": "The watcher brainchain_changes, brainchain_watch and brainchain_unwatch use, such as your own brainchain-mcp watch --serve at http://127.0.0.1:8787. BrainChain's own, https://watch.usebrainchain.com, by default.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "BRAINCHAIN_DATASET",
+          "description": "Where brainchain_trace_outcomes, brainchain_token_timeline and the symbol lookup read the BrainChain MCP dataset: a directory, absolute or starting with ~/, or an https address of a published copy. BrainChain's published copy by default.",
           "isRequired": false,
           "format": "string"
         },

@@ -299,7 +299,7 @@ export const KUCOIN = { url: "https://api.kucoin.com/api/v3/currencies", parse: 
 export const GATE = { url: "https://api.gateio.ws/api/v4/spot/currencies", parse: required(gateList) };
 export const ROBINHOOD_PAGES = { url: "https://robinhood.com/us/en/sitemap-crypto.xml", parse: required(robinhoodPages) };
 export const ROBINHOOD_PAIRS = { url: "https://nummus.robinhood.com/currency_pairs/", parse: required(robinhoodPairs) };
-const BITSTAMP = { url: "https://www.bitstamp.net/api/v2/currencies/", parse: required(bitstampSymbols) };
+export const BITSTAMP = { url: "https://www.bitstamp.net/api/v2/currencies/", parse: required(bitstampSymbols) };
 const feedCommit = required(firstCommit);
 
 /** A source's answer, or that it could not be read. */
@@ -329,13 +329,37 @@ async function fileList(reader: SightingsReader, repo: string, path: string, lis
  * it. Robinhood and Bitstamp know a token by its symbol only, so they are looked up under every symbol the other sources
  * give it, and Robinhood's name for each goes out with it: nothing else says whether it is the same token.
  */
+/**
+ * Where Trust Wallet and MetaMask keep a token's file, and which of its statuses lists it. Trust Wallet keeps the file of a
+ * token it has dropped or warns about, and says which in the file's status.
+ */
+const LIST_FILES = {
+  "Trust Wallet": { repo: TRUST_WALLET, path: (token: Address) => `blockchains/robinhoodchain/assets/${token}/info.json`, listed: (status: unknown) => status === "active" },
+  MetaMask: { repo: METAMASK, path: (token: Address) => `metadata/eip155:${CHAIN_ID}/erc20:${token}.json`, listed: () => true },
+} as const;
+
+const listFile = (reader: SightingsReader, source: keyof typeof LIST_FILES, token: Address) => {
+  const { repo, path, listed } = LIST_FILES[source];
+  return fileList(reader, repo, path(token), listed);
+};
+
+/**
+ * When master took a token's file in Trust Wallet's or MetaMask's list, as `since` in brainchain_token_sightings: undefined
+ * when the list has no file for it, null when the time cannot be shown. A read that fails throws, so it is asked again.
+ */
+export async function listedSince(reader: SightingsReader, source: keyof typeof LIST_FILES, token: Address): Promise<string | null | undefined> {
+  const { repo, path } = LIST_FILES[source];
+  const entry = await reader.get({ url: `https://raw.githubusercontent.com/${repo}/master/${path(token)}`, parse: tokenFile });
+  if (!entry) return undefined;
+  return (await filedAt(reader, repo, path(token))) ?? null;
+}
+
 export async function tokenSightings(reader: SightingsReader, token: Address, now = new Date(), until?: { at: number; block?: bigint }): Promise<SightingsBoard> {
   const contract = token.toLowerCase();
   const listing = <T>(source: Source<Map<string, T>>) => attempt(reader.get(source).then((byContract) => byContract.get(contract)));
   const [trust, metamask, lifi, coingecko, kucoin, gate, pages, pairs, bitstamp] = await Promise.all([
-    // Trust Wallet keeps the file of a token it has dropped or warns about, and says which in the file's status.
-    attempt(fileList(reader, TRUST_WALLET, `blockchains/robinhoodchain/assets/${token}/info.json`, (status) => status === "active")),
-    attempt(fileList(reader, METAMASK, `metadata/eip155:${CHAIN_ID}/erc20:${token}.json`, () => true)),
+    attempt(listFile(reader, "Trust Wallet", token)),
+    attempt(listFile(reader, "MetaMask", token)),
     listing(LIFI),
     listing(COINGECKO),
     listing(KUCOIN),

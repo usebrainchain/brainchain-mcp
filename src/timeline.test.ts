@@ -4,6 +4,8 @@ import { getAddress, type Address, type Hash } from "viem";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CustodyBoard, CustodyToken } from "./custody.js";
+import type { StepRow } from "./dataset/format.js";
+import type { Dataset } from "./dataset/published.js";
 import type { ChainHistory } from "./history.js";
 import { configuredMakers, MARKET_MAKERS, type Approval, type MakerWallet } from "./makers.js";
 import type { QueuedPool } from "./queued.js";
@@ -217,6 +219,47 @@ describe("tokenTimeline", () => {
       undated: [],
       unread: [],
     });
+  });
+
+  it("takes the pools and the scanned wallets' approvals up to the dataset's head from the dataset, and reads the chain only after it", async () => {
+    const head = 28_900_000;
+    const row = (step: Partial<StepRow>): StepRow => ({ token: CASHCAT.toLowerCase(), step: "pool", source: "Uniswap v4", observedAt: "2026-11-20T22:00:00.000Z", ...step });
+    const dataset: Dataset = {
+      ref: { source: "local directory", date: "2026-11-20", headBlock: head, readAt: "2026-11-20T22:00:00.000Z", manifest: "cd".repeat(32) },
+      tokens: [{ token: CASHCAT, symbol: "CASHCAT", sources: ["KuCoin"], observedAt: "2026-11-19T09:20:49.454Z" }],
+      steps: [
+        row({ at: V4.at, atFrom: "block", block: V4.block, transaction: V4.transaction, pairedWith: "ETH" }),
+        row({ step: "approval", source: "Robinhood Chain", at: APPROVAL.at, atFrom: "block", block: APPROVAL.block, transaction: APPROVAL.transaction, maker: { wallet: MARKET_MAKERS[0]!.wallet }, spender: SPENDER, confirmed: true }),
+      ],
+      outcomes: [],
+      rates: { readAt: "x", headBlock: head, cut: "x", kinds: [], pools: { piece: 10_000, counts: [], ends: [] }, through: { head, pools: head, approvals: head, wallets: MARKET_MAKERS.map(({ wallet }) => wallet) } },
+    };
+    const calls: [string, unknown][] = [];
+    const { readers } = sources({
+      readiness: async (_reader, _token, from) => (calls.push(["readiness", from]), readiness({ pools: [V3] })),
+      approvals: async (_reader, _token, wallets, _newest, from) => (calls.push(["approvals", [wallets.length, from]]), wallets.map(() => undefined)),
+      dataset: async () => dataset,
+    });
+    const board = await timeline(readers);
+    expect(board.dataset).toEqual(dataset.ref);
+    expect(calls).toEqual([
+      ["readiness", BigInt(head + 1)],
+      ["approvals", [MARKET_MAKERS.length - 1, BigInt(head + 1)]],
+    ]);
+    expect(kinds(board)).toEqual(["mint Robinhood Chain", "pool Uniswap v3", "pool Uniswap v4", "listing Trust Wallet", "listing MetaMask", "custody BitGo", "pool_queued Robinhood Chain", "approval Robinhood Chain"]);
+    expect(board.steps.find(({ step }) => step === "approval")).toMatchObject({ block: APPROVAL.block, spender: SPENDER, confirmed: true, maker: { name: "Wintermute" } });
+
+    // A token the dataset does not trace has none of its pools there, so they are read in full; a dataset that cannot be read changes nothing.
+    calls.length = 0;
+    await timeline({ ...readers, dataset: async () => ({ ...dataset, tokens: [], steps: [] }) });
+    expect(calls[0]).toEqual(["readiness", undefined]);
+    calls.length = 0;
+    const without = await timeline({ ...readers, dataset: async () => Promise.reject(new Error("offline")) });
+    expect(without.dataset).toBeUndefined();
+    expect(calls).toEqual([
+      ["readiness", undefined],
+      ["approvals", [MARKET_MAKERS.length, undefined]],
+    ]);
   });
 
   it("dates the contract's creation only when the transaction that first minted the token created it", async () => {

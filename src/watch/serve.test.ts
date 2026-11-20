@@ -379,6 +379,23 @@ describe("GET /pools", () => {
     expect((await fetch(new URL("/pools", bare.base), { method: "POST" })).status).toBe(405);
   });
 
+  it("gives the whole index a page at a time from a byte, for the dataset, and refuses a byte that starts no line", async () => {
+    const pools = index();
+    const { base } = await serving({ pools });
+    const first = await get(new URL("/pools?after=0&limit=3", base));
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ ready: true, through: 20_000_000, after: 0, bytes: pools.bytes });
+    expect((first.body.pools as IndexedPool[]).map(({ pool }) => pool)).toEqual(POOLS.slice(0, 3).map(({ pool }) => pool));
+    const rest = await get(new URL(`/pools?after=${first.body.next}`, base));
+    expect((rest.body.pools as IndexedPool[]).map(({ pool }) => pool)).toEqual(POOLS.slice(3).map(({ pool }) => pool));
+    expect(rest.body.next).toBe(pools.bytes);
+    expect((await get(new URL(`/pools?after=${pools.bytes}`, base))).body.pools).toEqual([]);
+    expect(await get(new URL("/pools?after=7", base))).toEqual({ status: 400, body: { error: "after must be 0 or the next of an earlier answer." } });
+    expect((await get(new URL(`/pools?after=${pools.bytes + 1}`, base))).status).toBe(409);
+    expect((await get(new URL("/pools?after=0&limit=0", base))).status).toBe(400);
+    pools.close();
+  });
+
   it("gives at most MAX_POOLS pools, and says when a token has more", async () => {
     const many = Array.from({ length: MAX_POOLS + 1 }, (_, i): IndexedPool => ({ ...POOLS[1]!, pool: `0x${i.toString(16).padStart(64, "0")}`, block: i }));
     const { base } = await serving({ pools: { ready: true, through: 1, poolsOf: () => many, basePools: () => [] } });

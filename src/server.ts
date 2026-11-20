@@ -11,10 +11,12 @@ import { CHANGES_NAME, CHANGES_RESOURCE, CHANGES_TOOL, CHANGES_URI, createWatch,
 import { expandHome, formatUnits, PRICE, resolveConfig, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL } from "./custody.js";
 import { stateDirProblem } from "./daily.js";
+import { datasetReader, type DatasetReader } from "./dataset/published.js";
 import { useGitHubToken } from "./github.js";
 import { createLimits } from "./limits.js";
 import { configuredMakers, MAKERS_NAME, makersTool, MARKET_MAKERS, readMakerHoldings, type MakerWallet } from "./makers.js";
 import { MARKET_CAP_NAME, MARKET_CAP_TOOL, readMarketCap } from "./marketcap.js";
+import { TRACE_OUTCOMES_NAME, TRACE_OUTCOMES_TOOL } from "./outcomes.js";
 import { createDesk, erc20, firstLine } from "./payments.js";
 import { PREMIUMS_NAME, PREMIUMS_TOOL } from "./premiums.js";
 import { READINESS_NAME, READINESS_TOOL } from "./readiness.js";
@@ -55,7 +57,7 @@ export const INSTRUCTIONS =
 const KEY_HELP =
   `Keep the key in a file only your account can read (chmod 600) and add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config ` +
   `(in Claude Code, \`claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp\`), then restart the server. ` +
-  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME}, ${TIMELINE_NAME}, ${MARKET_CAP_NAME}, ${CHANGES_NAME}, ${WATCH_NAME} and ${UNWATCH_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
+  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME}, ${TIMELINE_NAME}, ${MARKET_CAP_NAME}, ${TRACE_OUTCOMES_NAME}, ${CHANGES_NAME}, ${WATCH_NAME} and ${UNWATCH_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -385,14 +387,24 @@ export function createServer(env: Record<string, string | undefined>, version: s
     log(`brainchain-mcp has an invalid setting: ${watchProblem}`);
     for (const name of [CHANGES_NAME, WATCH_NAME, UNWATCH_NAME]) refused.set(name, watchProblem);
   }
+  // The dataset's setting is read only by the tools that read the dataset, so one it cannot use stops brainchain_trace_outcomes alone.
+  let dataset: DatasetReader | undefined;
+  try {
+    dataset = datasetReader(env.BRAINCHAIN_DATASET, options.fetch);
+  } catch (error) {
+    const problem = `${messageOf(error)} Fix it in this server's environment and restart the server.`;
+    log(`brainchain-mcp has an invalid setting: ${problem}`);
+    refused.set(TRACE_OUTCOMES_NAME, problem);
+  }
   const readers: Partial<Readers> = {
     makers: (token, wallet, moment) => readMakerHoldings(token, wallet, moment, followed),
-    timeline: (token, until) => readTokenTimeline(token, until, followed),
+    timeline: (token, until) => readTokenTimeline(token, until, followed, dataset && (() => dataset.load())),
     // The watcher's pool index saves the market cap its longest search; without a usable watcher it searches the chain alone.
     marketCap: (token, moment) => readMarketCap(token, moment, watchProblem ? undefined : watcher, options.fetch),
     changes: (query) => readChanges(watcher, query, options.fetch),
     watch: (request) => createWatch(watcher, request, options.fetch),
     unwatch: (id, manageToken) => removeWatch(watcher, id, manageToken, options.fetch),
+    ...(dataset ? { dataset: () => dataset.load(), symbols: (symbol: string) => dataset.symbol(symbol) } : {}),
   };
   const leadWatch = (tool: Tool): Tool => (watchProblem ? { ...tool, description: invalidSetting(watchProblem) + tool.description } : tool);
   const tools = [
@@ -407,6 +419,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
     SIGHTINGS_TOOL,
     lead(TIMELINE_TOOL),
     MARKET_CAP_TOOL,
+    TRACE_OUTCOMES_TOOL,
     leadWatch(CHANGES_TOOL),
     leadWatch(WATCH_TOOL),
     leadWatch(UNWATCH_TOOL),

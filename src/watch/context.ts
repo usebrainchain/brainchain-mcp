@@ -2,6 +2,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { getAddress, type Address } from "viem";
 
 import { BITGO_START, CustodyError, within, type CustodyAddition, type CustodyBoard } from "../custody.js";
+import type { EventCounts } from "../dataset/counts.js";
 import { ANSWER_MS, ChainError, type ChainHistory } from "../history.js";
 import type { CapKept, MarketCapBoard, Pool } from "../marketcap.js";
 import { SightingsError } from "../sightings.js";
@@ -48,7 +49,12 @@ export interface ContextOptions {
   patience?: number;
   /** Told the cause of a read that failed for a reason the event does not show, for the operator's log, which redacts it. */
   say?: (line: string) => void;
+  /** How often earlier tokens with the step an event of this kind records were followed by a listing, from the latest dataset. */
+  counts?: (kind: WatchEvent["kind"]) => Promise<EventCounts | undefined>;
 }
+
+/** How long the counts may take: the dataset is kept in memory once read, so only the first event after a new day waits. */
+export const COUNTS_MS = 10_000;
 
 /** What a token is worth when its event is published, and the pool that says so. */
 export interface Worth {
@@ -88,7 +94,7 @@ class LateError extends Error {}
  * read only for a symbol that names exactly one. The steps and the worth are read side by side, each within `ms`, and one
  * that is missing says why in `unread` or `worthMissing`.
  */
-export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT_MS, patience = ms, say }: ContextOptions): (event: WatchEvent) => Reading {
+export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT_MS, patience = ms, say, counts }: ContextOptions): (event: WatchEvent) => Reading {
   const full: TimelineReaders = { ...readers, custody: async () => custodyFromLog(log), listed: async () => [] };
   return (event) => {
     const priorEvents = log
@@ -111,12 +117,20 @@ export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT
       if (matches.length === 1) target = getAddress(matches[0]!.address);
     }
     const context: Record<string, unknown> = { ...(matches ? { matches } : {}), priorEvents };
+    // The counts are about the kind, not the token, so they go with every event of a kind that is a step.
+    const counted: Record<string, unknown> = {};
+    const counting = counts
+      ? within(COUNTS_MS, counts(event.kind), new LateError("The dataset was not read in time.")).then(
+          (found) => void (found && (counted.counts = found)),
+          (error: unknown) => say?.(`event ${event.id}: the dataset's counts could not be read: ${describe(error)}`),
+        )
+      : Promise.resolve();
     if (!target) {
       const missing = matches
         ? `${matches.length === 0 ? "No token in the log goes" : `${matches.length} tokens in the log go`} by this symbol with a contract address, so its worth was not read.`
         : "The source gives no contract address for this token, so its worth was not read.";
-      const whole = { ...context, worth: null, worthMissing: missing };
-      return { now: () => whole, done: Promise.resolve(whole) };
+      const whole = () => ({ ...context, ...counted, worth: null, worthMissing: missing });
+      return { now: whole, done: counting.then(whole) };
     }
     const late = (what: string) => new LateError(`${what} was not read within ${ms / 1000} seconds.`);
     const before = Date.parse(event.at ?? event.observedAt);
@@ -141,9 +155,9 @@ export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT
     );
     const now = () => {
       const pending = ["worth", "priorTraces"].filter((part) => !parts[part]);
-      return { ...context, ...parts.priorTraces, ...parts.worth, ...(pending.length ? { pending } : {}) };
+      return { ...context, ...parts.priorTraces, ...parts.worth, ...counted, ...(pending.length ? { pending } : {}) };
     };
-    return { now, done: Promise.all([steps, value]).then(now) };
+    return { now, done: Promise.all([steps, value, counting]).then(now) };
   };
 }
 
