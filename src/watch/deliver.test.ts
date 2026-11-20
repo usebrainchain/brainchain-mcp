@@ -22,7 +22,7 @@ const event = (more: Partial<WatchEvent> = {}): WatchEvent => ({
   at: "2026-07-27T09:28:36.000Z",
   observedAt: "2026-07-27T09:29:10.000Z",
   detail: { id: "hoodeth:cashcat", pr: 9357 },
-  context: { worth: { marketCapUsd: "38251409.00", liquidityUsd: "1250000.00" } },
+  context: { worth: { marketCapUsd: "38251409.00", depth2pctUsd: "12440.00" } },
   ...more,
 });
 
@@ -42,7 +42,7 @@ describe("a watch's format", () => {
 
 describe("a chat message", () => {
   it("is one line: what changed, the token, its worth now and the link", () => {
-    expect(line(event())).toBe("A pull request in BitGo's code adds Cash Cat CASHCAT (0x020b…18b4) to its Robinhood Chain tokens. Worth $38.3M now, $1.3M in its deepest pool. https://github.com/BitGo/BitGoJS/pull/9357");
+    expect(line(event())).toBe("A pull request in BitGo's code adds Cash Cat CASHCAT (0x020b…18b4) to its Robinhood Chain tokens. Worth $38.3M now, $12.4K of depth within 2%. https://github.com/BitGo/BitGoJS/pull/9357");
     expect(line(event({ kind: "pool.created", source: "Uniswap v4", ref: TX, detail: { pairedWith: "ETH" }, context: {} }))).toBe(`New Uniswap v4 pool for Cash Cat CASHCAT (0x020b…18b4), paired with ETH. https://robinhoodchain.blockscout.com/tx/${TX}`);
     expect(line(event({ kind: "robinhood.tradability_changed", token: { address: null, symbol: "PONS", name: "Pons" }, ref: "https://nummus.robinhood.com/currency_pairs/#PONS@2026-11-19T12:00:00Z", detail: { tradable: true }, context: { worth: null } }))).toBe(
       "Robinhood's Pons PONS pair is tradable now. https://nummus.robinhood.com/currency_pairs/#PONS",
@@ -200,10 +200,10 @@ describe("a token's name in a chat", () => {
 });
 
 describe("a finished context", () => {
-  const worth = { worth: { marketCapUsd: "38251409.00", liquidityUsd: "1250000.00" } };
+  const worth = { worth: { marketCapUsd: "38251409.00", depth2pctUsd: "12440.00" } };
 
   it("follows a chat as one short line with the worth, and a plain webhook as a signed update", () => {
-    expect(followUp(event({ context: worth }))).toBe("Worth now for Cash Cat (0x020b…18b4): $38.3M market cap, $1.3M in its deepest pool.");
+    expect(followUp(event({ context: worth }))).toBe("Worth now for Cash Cat (0x020b…18b4): $38.3M market cap, $12.4K of depth within 2%.");
     expect(followUp(event({ context: { worth: null, worthMissing: "No pool." } }))).toBeUndefined();
     const watch = { id: "w".repeat(22), secret: "s".repeat(43), url: "https://hooks.example.com/x" };
     const { body, headers } = message({ ...watch, format: "webhook" }, event({ context: worth }), 1_795_000_000_000, true);

@@ -123,19 +123,19 @@ export function line(event: WatchEvent): string {
   const safe = (text: string | null) => (text && !LINKISH.test(text) ? text : undefined);
   const label = [safe(name), symbol && symbol !== name ? safe(symbol) : undefined].filter(Boolean).join(" ") || safe(symbol) || (address ? "a token" : "a token named like a link");
   const named = address ? `${label} (${short(address)})` : label;
-  const worth = event.context.worth as { marketCapUsd?: string; liquidityUsd?: string } | null | undefined;
-  const value = worth?.marketCapUsd ? ` Worth ${compact(worth.marketCapUsd)} now${worth.liquidityUsd ? `, ${compact(worth.liquidityUsd)} in its deepest pool` : ""}.` : "";
+  const worth = event.context.worth as { marketCapUsd?: string; depth2pctUsd?: string } | null | undefined;
+  const value = worth?.marketCapUsd ? ` Worth ${compact(worth.marketCapUsd)} now${worth.depth2pctUsd ? `, ${compact(worth.depth2pctUsd)} of depth within 2%` : ""}.` : "";
   const link = /^0x[0-9a-f]{64}$/i.test(event.ref) ? `${EXPLORER}${event.ref}` : event.ref.split("@")[0]!;
   return `${change(event, named)}${value} ${link}`;
 }
 
 /** A chat's follow-up for an event whose worth was read after it went out: one short line. */
 export function followUp(event: WatchEvent): string | undefined {
-  const worth = event.context.worth as { marketCapUsd?: string; liquidityUsd?: string } | null | undefined;
+  const worth = event.context.worth as { marketCapUsd?: string; depth2pctUsd?: string } | null | undefined;
   if (!worth?.marketCapUsd) return undefined;
   const { address, symbol, name } = event.token;
   const label = [name, symbol].find((text) => text && !LINKISH.test(text)) ?? "the token";
-  return `Worth now for ${label}${address ? ` (${short(address)})` : ""}: ${compact(worth.marketCapUsd)} market cap${worth.liquidityUsd ? `, ${compact(worth.liquidityUsd)} in its deepest pool` : ""}.`;
+  return `Worth now for ${label}${address ? ` (${short(address)})` : ""}: ${compact(worth.marketCapUsd)} market cap${worth.depth2pctUsd ? `, ${compact(worth.depth2pctUsd)} of depth within 2%` : ""}.`;
 }
 
 /** What a watch posts for an event, or for an event's finished context with `update`, and the headers that go with it. */

@@ -44,7 +44,7 @@ const CAP: MarketCapBoard = {
   supply: "1000000000",
   marketCapUsd: "38251409.00",
   swap: { block: 117_999_990, at: "2026-11-19T11:59:59.000Z", transaction: TX },
-  pool: { version: "Uniswap v4", id: TX, pair: "CASHCAT/USDG", pairedWith: OTHER, fee: 3000, liquidityUsd: "1250000.00", thin: false },
+  pool: { version: "Uniswap v4", id: TX, pair: "CASHCAT/USDG", pairedWith: OTHER, fee: 3000, depth2pctUsd: "12440.00", thin: false },
   chosen: "the deepest pool",
   pools: [],
 };
@@ -118,7 +118,7 @@ describe("an event's context", () => {
     const asked: Address[] = [];
     const { of } = context(filled(), undefined, undefined, async (token) => (asked.push(token), CAP));
     const extra = await of(pool("2026-08-07T10:00:00.000Z")).done;
-    expect(extra.worth).toEqual({ marketCapUsd: "38251409.00", priceUsd: "0.03825", supply: "1000000000", liquidityUsd: "1250000.00", thin: false, pool: { version: "Uniswap v4", id: TX, pairedWith: OTHER }, asOf: CAP.asOf });
+    expect(extra.worth).toEqual({ marketCapUsd: "38251409.00", priceUsd: "0.03825", supply: "1000000000", depth2pctUsd: "12440.00", thin: false, pool: { version: "Uniswap v4", id: TX, pairedWith: OTHER }, asOf: CAP.asOf });
     expect([asked, extra.worthMissing]).toEqual([[CASHCAT], undefined]);
   });
 

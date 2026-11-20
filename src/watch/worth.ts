@@ -1,7 +1,7 @@
 import { encodeAbiParameters, encodeFunctionData, formatUnits, getAddress, keccak256, multicall3Abi, parseAbi, parseAbiItem, parseAbiParameters, toHex, zeroAddress, type Address, type Hash, type Hex } from "viem";
 
 import { blockTime, ChainError, noContract, tokenFacts, type ChainHistory } from "../history.js";
-import { dollars, LOOKBACK_BLOCKS, priceFrom, quoteReserve, SCALE, significant, THIN_USD, USDG, WETH } from "../marketcap.js";
+import { depthWithin, dollars, LOOKBACK_BLOCKS, priceFrom, SCALE, significant, THIN_USD, USDG, WETH } from "../marketcap.js";
 import { MULTICALL3 } from "../premiums.js";
 import { UNISWAP_V4 } from "../readiness.js";
 import type { Worth } from "./context.js";
@@ -29,7 +29,7 @@ const ten = (decimals: number) => 10n ** BigInt(decimals);
 interface Priced {
   pool: IndexedPool;
   usd: bigint;
-  liquidityUsd: bigint;
+  depthUsd: bigint;
   quote: "USDG" | "ETH";
 }
 
@@ -116,9 +116,9 @@ async function deepest(
         const { sqrtPriceX96, liquidity } = state.get(pool.pool.toLowerCase())!;
         const assetIsCurrency0 = isAsset(pool.currency0);
         const inQuote = priceFrom(sqrtPriceX96, assetIsCurrency0, assetDecimals, quoteDecimals);
-        return { pool, quote, usd: (inQuote * quoteUsd) / SCALE, liquidityUsd: (2n * quoteReserve(liquidity, sqrtPriceX96, assetIsCurrency0) * quoteUsd) / ten(quoteDecimals) };
+        return { pool, quote, usd: (inQuote * quoteUsd) / SCALE, depthUsd: (depthWithin(liquidity, sqrtPriceX96, assetIsCurrency0) * quoteUsd) / ten(quoteDecimals) };
       })
-      .sort((a, b) => (b.liquidityUsd > a.liquidityUsd ? 1 : b.liquidityUsd < a.liquidityUsd ? -1 : 0));
+      .sort((a, b) => (b.depthUsd > a.depthUsd ? 1 : b.depthUsd < a.depthUsd ? -1 : 0));
     for (const candidate of priced.slice(0, TRADED_CHECKS)) if ((await lastSwap(reader, candidate.pool, block)) !== undefined) return { chosen: candidate, unchecked };
     if (priced.length > TRADED_CHECKS) unchecked = true;
   }
@@ -160,8 +160,8 @@ export async function indexedWorth(reader: ChainHistory, token: Address, index: 
     marketCapUsd: dollars((chosen.usd * facts.supply) / ten(facts.decimals)),
     priceUsd: significant(chosen.usd),
     supply: formatUnits(facts.supply, facts.decimals),
-    liquidityUsd: dollars(chosen.liquidityUsd),
-    thin: chosen.liquidityUsd < BigInt(THIN_USD) * SCALE,
+    depth2pctUsd: dollars(chosen.depthUsd),
+    thin: chosen.depthUsd < BigInt(THIN_USD) * SCALE,
     pool: { version: pool.version === 3 ? "Uniswap v3" : "Uniswap v4", ...(pool.version === 3 ? { address: pool.pool } : { id: pool.pool }), pairedWith: same(other, zeroAddress) ? "ETH" : getAddress(other) },
     asOf: { block: Number(block), at: await blockTime(reader, block) },
   };

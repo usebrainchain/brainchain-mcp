@@ -55,7 +55,8 @@ export interface Worth {
   marketCapUsd?: string;
   priceUsd: string;
   supply?: string;
-  liquidityUsd: string;
+  /** What the deepest pool holds within 2% of its price either way, in dollars. */
+  depth2pctUsd: string;
   thin: boolean;
   pool: { version: string; address?: string; id?: string; pairedWith: string };
   asOf: { block: number; at: string };
@@ -65,7 +66,7 @@ export const worthOf = (board: MarketCapBoard): Worth => ({
   ...(board.marketCapUsd ? { marketCapUsd: board.marketCapUsd } : {}),
   priceUsd: board.priceUsd,
   ...(board.supply ? { supply: board.supply } : {}),
-  liquidityUsd: board.pool.liquidityUsd,
+  depth2pctUsd: board.pool.depth2pctUsd,
   thin: board.pool.thin,
   pool: { version: board.pool.version, ...(board.pool.address ? { address: board.pool.address } : {}), ...(board.pool.id ? { id: board.pool.id } : {}), pairedWith: board.pool.pairedWith },
   asOf: board.asOf,
@@ -81,7 +82,7 @@ class LateError extends Error {}
 
 /**
  * What goes with a new event: `priorTraces`, the token's dated public steps before the event, read by the token timeline;
- * `worth`, its market cap, price and deepest pool's liquidity now, read as brainchain_token_market_cap reads them;
+ * `worth`, its market cap, price and deepest pool's depth within 2% now, read as brainchain_token_market_cap reads them;
  * `priorEvents`, what this log held for the token before; and, for a token a source names only by symbol, `matches`, the
  * tokens with an address that the log knows by that symbol. Two tokens can share a symbol, so the steps and the worth are
  * read only for a symbol that names exactly one. The steps and the worth are read side by side, each within `ms`, and one

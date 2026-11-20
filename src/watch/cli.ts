@@ -284,6 +284,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       events: { total: log.size, baseline: log.baselineSize, lastId: log.lastId, published: log.publishedThrough },
       chain: { block: chain.block ?? null, startBlock: chain.startBlock ?? null, rpc: rpc ? "configured, public endpoint as fallback" : "public endpoint" },
       pools: poolIndex.status(),
+      memoryMb: Math.round(process.memoryUsage().rss / 2 ** 20),
       github: { token, ...(requests.github ? { limit: requests.github.limit, remaining: requests.github.remaining, reset: new Date(requests.github.reset).toISOString() } : {}) },
       watches: deliveries.active,
       waiting,

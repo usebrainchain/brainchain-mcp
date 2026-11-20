@@ -116,6 +116,8 @@ export class PoolIndex {
   private bases: IndexedPool[] = [];
   private filling?: FillStatus;
   private filled = false;
+  /** How long opening the file took, in milliseconds. */
+  private loadedMs = 0;
 
   constructor(
     dir: string,
@@ -140,7 +142,9 @@ export class PoolIndex {
       if (length > saved.bytes) ftruncateSync(this.fd, saved.bytes);
       this.checkpoint = saved;
     }
+    const started = Date.now();
     this.load();
+    this.loadedMs = Date.now() - started;
     this.filled = this.checkpoint.through > INDEX_FROM && !this.checkpoint.live;
   }
 
@@ -321,8 +325,8 @@ export class PoolIndex {
     return this.checkpoint.through;
   }
 
-  status(): { ready: boolean; through: number; pools: number; bytes: number; fill?: FillStatus } {
-    return { ready: this.ready, through: this.checkpoint.through, pools: this.checkpoint.pools, bytes: this.size, ...(this.filling ? { fill: this.filling } : {}) };
+  status(): { ready: boolean; through: number; pools: number; bytes: number; loadedMs: number; fill?: FillStatus } {
+    return { ready: this.ready, through: this.checkpoint.through, pools: this.checkpoint.pools, bytes: this.size, loadedMs: this.loadedMs, ...(this.filling ? { fill: this.filling } : {}) };
   }
 
   /** The pools between two of ETH, WETH and USDG. */

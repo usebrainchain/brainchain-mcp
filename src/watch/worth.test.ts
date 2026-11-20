@@ -43,7 +43,7 @@ const v4 = (currency0: Address, currency1: Address, n: number, hooks: Address = 
 const POOLS: Pooled[] = [
   // The deepest USDG pool has never traded, so its price is only what it was opened at.
   { log: v4(USDG, TOKEN, 1, getAddress("0x00000000000000000000000000000000000000c0")), sqrtPriceX96: 2n * Q96, liquidity: 10n ** 18n },
-  { log: v3(USDG, TOKEN, V3_USDG), sqrtPriceX96: Q96, liquidity: 50_000n * 10n ** 6n, swappedAt: HEAD - 100n },
+  { log: v3(USDG, TOKEN, V3_USDG), sqrtPriceX96: Q96, liquidity: 500_000n * 10n ** 6n, swappedAt: HEAD - 100n },
   // Deeper still, but paired with ETH: a traded USDG pool comes first.
   { log: v4(zeroAddress, TOKEN, 3), sqrtPriceX96: Q96, liquidity: 10n ** 30n, swappedAt: HEAD - 5n },
   { log: v4(zeroAddress, ETHY, 4), sqrtPriceX96: Q96, liquidity: 10n ** 18n, swappedAt: HEAD - 50_000n },
@@ -106,14 +106,14 @@ async function indexed(reader: ChainHistory) {
 }
 
 describe("a token's worth from the pool index", () => {
-  it("reads every pool's price and liquidity from state and takes the deepest that traded, a USDG pool before an ETH one", async () => {
+  it("reads every pool's price and active liquidity from state and takes the one with the most depth within 2% that traded, a USDG pool before an ETH one", async () => {
     const { reader, searched } = chain();
     const worth = await indexedWorth(reader, TOKEN, await indexed(reader));
     expect(worth).toEqual({
       marketCapUsd: "1000000.00",
       priceUsd: "1",
       supply: "1000000",
-      liquidityUsd: "100000.00",
+      depth2pctUsd: "9951.48",
       thin: false,
       pool: { version: "Uniswap v3", address: V3_USDG, pairedWith: USDG },
       asOf: { block: Number(HEAD), at: new Date(Number(1_790_000_000n + HEAD / 10n) * 1000).toISOString() },
