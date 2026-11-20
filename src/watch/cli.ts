@@ -40,7 +40,8 @@ what is already public as a baseline and reports none of it as new.
                          ~/.brainchain/watch). A restart resumes from there.
   --serve [host:]<port>  Serve the events on 127.0.0.1 unless a host is given: GET /events?since=&kinds=&tokens=&limit=,
                          GET /events/stream (server-sent events), POST /watches to have them sent to a webhook, Discord,
-                         Slack or Telegram, GET and DELETE /watches/:id, and GET /health. Point BRAINCHAIN_WATCH_URL at it.
+                         Slack or Telegram, GET and DELETE /watches/:id, GET /pools?token= (a token's Uniswap pools, with
+                         a private RPC set), and GET /health. Point BRAINCHAIN_WATCH_URL at it.
   --print                Write each new event to stdout as one line of JSON.
   --trust-proxy          Behind Cloudflare and a proxy such as Render's, take a client's address from CF-Connecting-IP, or
                          else from the X-Forwarded-For entry before the proxy's own.
@@ -231,7 +232,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   const deliveries = new Deliveries({ dir, log, post: pinnedPost(), check: async (url) => void (await publicTarget(url.hostname)), say });
   const adminToken = env.BRAINCHAIN_WATCH_ADMIN_TOKEN?.trim() || undefined;
   if (adminToken && !/^[\w-]{32,100}$/.test(adminToken)) throw new Error("BRAINCHAIN_WATCH_ADMIN_TOKEN must be 32 to 100 letters, digits, - or _.");
-  const served = args.serve ? serveEvents({ log, health: () => health(), adminToken, deliveries, trustProxy: args.trustProxy }) : undefined;
+  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), health: () => health(), adminToken, deliveries, trustProxy: args.trustProxy }) : undefined;
   let ticking = false;
   const deliver = () => {
     if (ticking) return;

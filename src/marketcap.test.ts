@@ -22,7 +22,9 @@ import {
   WETH,
   type CapKept,
   poolsByState,
+  poolsFromWatcher,
   v4PoolId,
+  WATCHER_MS,
 } from "./marketcap.js";
 import { MULTICALL3 } from "./premiums.js";
 import { UNISWAP_V3, UNISWAP_V4 } from "./readiness.js";
@@ -218,7 +220,7 @@ describe("the market cap tool's words", () => {
   });
 
   it("name the answer's fields as the answer does", () => {
-    const fields = ["`priceUsd`", "`supply`", "`marketCapUsd`", "`asOf`", "`block`", "`at`", "`swap`", "`transaction`", "`pool`", "`version`", "`address`", "`id`", "`hooks`", "`pair`", "`pairedWith`", "`fee`", "`depth2pctUsd`", "`thin`", "`chosen`", "`pools`", "`ethUsd`", "`supplyCheck`", "`passed`", "`token`", "`decimals`", "`readAt`", "`atBlock`"];
+    const fields = ["`priceUsd`", "`supply`", "`marketCapUsd`", "`asOf`", "`block`", "`at`", "`swap`", "`transaction`", "`pool`", "`version`", "`address`", "`id`", "`hooks`", "`pair`", "`pairedWith`", "`fee`", "`depth2pctUsd`", "`thin`", "`chosen`", "`pools`", "`ethUsd`", "`supplyCheck`", "`passed`", "`poolIndex`", "`watcher`", "`through`", "`token`", "`decimals`", "`readAt`", "`atBlock`"];
     for (const text of [MARKET_CAP_TOOL.description!, row]) for (const field of fields) expect(text, field).toContain(field);
   });
 
@@ -412,6 +414,106 @@ describe("marketCap", () => {
   it("refuses USDG itself and an address with no contract", async () => {
     await expect(marketCap(chain().reader, USDG, fresh(), NOW)).rejects.toThrow(new ChainError("USDG is the dollar this tool prices in: it counts one USDG as one dollar."));
     await expect(marketCap(chain().reader, OTHER, fresh(), NOW)).rejects.toThrow(/^There is no contract at 0xB97e4298c7F5f55360d207a6196125376675B3eA on Robinhood Chain\./);
+  });
+});
+
+describe("pools from a watcher's index", () => {
+  const WATCHER = new URL("https://watch.example");
+  // Cash Cat's v4 pool with USDG, whose id follows from its key, as the deepest; its v3 pool with USDG and ETH's v3 pool with USDG.
+  const INDEXED = v4PoolId(CASHCAT, USDG, 2690, 54);
+  const THROUGH = CUTOFF - 1_000n;
+  const served = (pool: Record<string, unknown>[], through = THROUGH) => ({ readAt: NOW.toISOString(), through: Number(through), complete: true, pools: pool });
+  const cashCatPools = [
+    { version: 4, pool: INDEXED, currency0: CASHCAT, currency1: USDG, fee: 2690, tickSpacing: 54, hooks: zeroAddress, block: 10_435_412 },
+    { version: 3, pool: V3_CASHCAT_USDG, currency0: CASHCAT, currency1: USDG, fee: 10_000, tickSpacing: 200, block: 3_000_000 },
+    // A pool with another token is in the token's answer too, and is not weighed.
+    { version: 4, pool: v4PoolId(CASHCAT, OTHER, 3000, 60), currency0: CASHCAT, currency1: OTHER, fee: 3000, tickSpacing: 60, hooks: zeroAddress, block: 11_000_000 },
+  ];
+  const usdgPools = [{ version: 3, pool: V3_ETH_USDG, currency0: WETH, currency1: USDG, fee: 500, tickSpacing: 10, block: 50_000 }];
+
+  /** A watcher that answers `GET /pools` from `answers`, by the token asked for, and what it was asked. */
+  function watcher(answers: Record<string, unknown>) {
+    const asked: string[] = [];
+    const fetchImpl = (async (url: URL | string, init?: RequestInit) => {
+      const token = new URL(String(url)).searchParams.get("token")!;
+      asked.push(`${new URL(String(url)).pathname} ${token}`);
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      expect(init?.redirect).toBe("error");
+      const answer = answers[getAddress(token)];
+      if (answer instanceof Error) throw answer;
+      if (answer === undefined) return Response.json({ error: "Not found." }, { status: 404 });
+      return Response.json(answer);
+    }) as typeof fetch;
+    return { fetchImpl, asked };
+  }
+  // The chain prices the pool the index gives: its swaps are Cash Cat's deepest pool's, under the id that follows from its key.
+  const indexedChain = (newest = CUTOFF) =>
+    chain({ newest, pools: POOLS.filter(({ key }) => key !== DEEP), swaps: SWAPS.map((swap) => (swap.key === DEEP ? { ...swap, key: INDEXED } : swap)) });
+
+  it("takes the token's pools and ETH's from the index, and searches the chain only for the blocks after it", async () => {
+    const kept = fresh();
+    const { fetchImpl, asked } = watcher({ [CASHCAT]: served(cashCatPools), [USDG]: served(usdgPools) });
+    await poolsFromWatcher(WATCHER, CASHCAT, kept, fetchImpl);
+    expect(asked.sort()).toEqual([`/pools ${CASHCAT}`, `/pools ${USDG}`]);
+    const { reader, asked: read } = indexedChain();
+    const board = await marketCap(reader, CASHCAT, kept, NOW, { block: CUTOFF });
+    expect(board.pool).toMatchObject({ id: INDEXED, pair: "CASHCAT/USDG" });
+    expect(board.poolIndex).toEqual({ watcher: "https://watch.example", through: Number(THROUGH) });
+    expect(board.pools.map(({ id, address }) => id ?? address)).toEqual([INDEXED, V3_CASHCAT_USDG]);
+    const searched = read.filter(({ event }) => event === "PoolCreated" || event === "Initialize");
+    expect(searched.length).toBeGreaterThan(0);
+    expect(searched.every(({ from }) => from === THROUGH + 1n)).toBe(true);
+    // A second read for the token takes nothing more from the watcher.
+    await poolsFromWatcher(WATCHER, CASHCAT, kept, fetchImpl);
+    expect(asked).toHaveLength(2);
+  });
+
+  it("takes nothing from an answer with a pool whose address or id does not follow from its own key, or that is not the token's", async () => {
+    const forged = [
+      [{ ...cashCatPools[0]!, fee: 3000 }],
+      [{ ...cashCatPools[1]!, pool: OTHER }],
+      [{ ...cashCatPools[0]!, currency0: OTHER, currency1: USDG, pool: v4PoolId(OTHER, USDG, 2690, 54) }],
+      [{ ...cashCatPools[0]!, version: 2 }],
+    ];
+    for (const pools of forged) {
+      const kept = fresh();
+      await poolsFromWatcher(WATCHER, CASHCAT, kept, watcher({ [CASHCAT]: served(pools), [USDG]: served(usdgPools) }).fetchImpl);
+      expect([...kept.index.keys()]).toEqual(["0x0bd7d308f8e1639fab988df18a8011f41eacad73:0x5fc5360d0400a0fd4f2af552add042d716f1d168,0x0000000000000000000000000000000000000000:0x5fc5360d0400a0fd4f2af552add042d716f1d168"]);
+    }
+  });
+
+  it("goes on without the watcher when it fails, answers an error, gives an unfinished list or holds no index", async () => {
+    for (const answer of [new TypeError("fetch failed"), undefined, { ...served(cashCatPools), complete: false }, { error: "The pool index is still being filled." }, { ...served(cashCatPools), through: "soon" }]) {
+      const kept = fresh();
+      await poolsFromWatcher(WATCHER, CASHCAT, kept, watcher({ [CASHCAT]: answer, [USDG]: answer }).fetchImpl);
+      expect(kept.index.size).toBe(0);
+      // The tool searches the chain itself, from the token's start, and says nothing of an index.
+      const { reader, asked } = chain({ newest: CUTOFF });
+      const board = await marketCap(reader, CASHCAT, kept, NOW, { block: CUTOFF });
+      expect(board.pool).toMatchObject({ id: DEEP });
+      expect(board).not.toHaveProperty("poolIndex");
+      expect(asked.some(({ event, from }) => (event === "PoolCreated" || event === "Initialize") && from < 1_000_000n)).toBe(true);
+    }
+  });
+
+  it("waits at most three seconds for the watcher", async () => {
+    expect(WATCHER_MS).toBe(3_000);
+    const kept = fresh();
+    const started = Date.now();
+    const hanging = ((_url: URL, init?: RequestInit) => new Promise((_, reject) => init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason)))) as typeof fetch;
+    await poolsFromWatcher(WATCHER, CASHCAT, kept, hanging);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(2_900);
+    expect(Date.now() - started).toBeLessThan(4_500);
+    expect(kept.index.size).toBe(0);
+  }, 10_000);
+
+  it("asks only for USDG's pools for WETH, and nothing for USDG itself", async () => {
+    const weth = watcher({ [USDG]: served(usdgPools) });
+    await poolsFromWatcher(WATCHER, WETH, fresh(), weth.fetchImpl);
+    expect(weth.asked).toEqual([`/pools ${USDG}`]);
+    const usdg = watcher({});
+    await poolsFromWatcher(WATCHER, USDG, fresh(), usdg.fetchImpl);
+    expect(usdg.asked).toEqual([]);
   });
 });
 

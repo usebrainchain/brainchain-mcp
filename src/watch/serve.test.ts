@@ -14,9 +14,10 @@ import { callTool, type Desk } from "../tools.js";
 import { githubEvery, githubToken, watchArgs } from "./cli.js";
 import { useGitHubToken } from "../github.js";
 import { Deliveries } from "./deliver.js";
-import { EventLog, type Found } from "./events.js";
+import { EventLog, KINDS, type Found } from "./events.js";
 import type { Post } from "./net.js";
-import { clientOf, eventsQuery, keyOf, SERVE_LIMITS, serveEvents } from "./serve.js";
+import { INDEX_FROM, PoolIndex, type IndexedPool } from "./pools.js";
+import { clientOf, eventsQuery, keyOf, MAX_POOLS, SERVE_LIMITS, serveEvents, type PoolLookup } from "./serve.js";
 
 const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
 const found = (kind: Found["kind"], ref: string, token: Found["token"] = { address: CASHCAT, symbol: "CASHCAT", name: "Cash Cat" }): Found => ({ kind, token, source: "x", ref, at: null, detail: {} });
@@ -38,7 +39,7 @@ function poster(status = 204) {
   return { posts, post };
 }
 
-async function serving({ healthy = true, trustProxy = false, limits = SERVE_LIMITS, post = poster().post } = {}) {
+async function serving({ healthy = true, trustProxy = false, limits = SERVE_LIMITS, post = poster().post, pools = undefined as PoolLookup | undefined } = {}) {
   const where = dir();
   const log = new EventLog(where);
   settled(log, [{ ...found("bitgo.merged", "old"), observedAt: "2026-11-18T00:00:00.000Z", baseline: true }]);
@@ -46,7 +47,7 @@ async function serving({ healthy = true, trustProxy = false, limits = SERVE_LIMI
   settled(log, [{ ...found("pool.created", "0xabc"), observedAt: "2026-11-19T11:00:00.000Z" }]);
   settled(log, [{ ...found("robinhood.pair_added", "pairs#PONS", { address: null, symbol: "PONS", name: "Pons" }), observedAt: "2026-11-19T12:00:00.000Z" }]);
   const deliveries = new Deliveries({ dir: where, log, post, check: async () => {} });
-  const served = serveEvents({ log, health: () => ({ ok: healthy, sources: {} }), deliveries, trustProxy, limits, clock: () => Date.parse("2026-11-19T13:00:00Z") });
+  const served = serveEvents({ log, ...(pools ? { pools } : {}), health: () => ({ ok: healthy, sources: {} }), deliveries, trustProxy, limits, clock: () => Date.parse("2026-11-19T13:00:00Z") });
   await new Promise<void>((resolve) => served.server.listen(0, "127.0.0.1", resolve));
   close = () => served.close();
   return { base: new URL(`http://127.0.0.1:${(served.server.address() as AddressInfo).port}`), log, served, deliveries };
@@ -106,6 +107,18 @@ const desk = {} as Desk;
 const text = (result: { content: unknown }) => (result.content as { text: string }[])[0]!.text;
 
 describe("the changes tool", () => {
+  it("names every kind the watcher records, in the description and in the README, and says what the Robinhood pair list leaves out", () => {
+    const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+    const section = readme.slice(readme.indexOf("## Watch public changes"), readme.indexOf("## Market cap at a time"));
+    for (const text of [CHANGES_TOOL.description!, section]) {
+      for (const kind of KINDS) expect(text, kind).toContain(`\`${kind}\``);
+      expect(text).toContain("the pair list Robinhood serves to API clients");
+      expect(text).toMatch(/leaves out most price-only pairs/);
+      expect(text).not.toMatch(/public list of crypto pairs|new pair on Robinhood|no pair/i);
+    }
+    expect(CHANGES_TOOL.description).toContain("`maker.pool_queued`, a market maker adding one of a token's pools to its trading contracts' approved list for the first time");
+  });
+
   it("reads BrainChain's own watcher unless BRAINCHAIN_WATCH_URL names another", async () => {
     const asked: string[] = [];
     const answering = (async (url: URL) => (asked.push(String(url)), Response.json({ readAt: "2026-11-19T13:00:00.000Z", events: [], next: 9, more: false }))) as unknown as typeof fetch;
@@ -300,6 +313,77 @@ describe("watches", () => {
     for (let i = 0; i < 5; i++) expect((await post(base, { url: `https://hooks.example.com/${i}` })).status).toBe(201);
     expect(await post(base, { url: "https://hooks.example.com/6" })).toEqual({ status: 400, body: { error: "An address can have 5 watches at a time, switched-off ones included until they are removed. Remove one first." } });
     expect((await post(base, { url: "https://hooks.example.com/7" })).status).toBe(429);
+  });
+});
+
+describe("GET /pools", () => {
+  const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
+  const WETH = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73";
+  const ZERO = "0x0000000000000000000000000000000000000000";
+  const POOLS: IndexedPool[] = [
+    { version: 3, pool: "0x4B0c312fFbB068F6a0bEa128759E35d94B94D0E1", currency0: CASHCAT, currency1: USDG, fee: 10_000, tickSpacing: 200, block: 3_000_000 },
+    { version: 4, pool: "0xa92a3df27a00a276183ff7265fd8affa11df1fe8bb23ddfaf13f6c879a3f818b", currency0: CASHCAT, currency1: USDG, fee: 2690, tickSpacing: 54, hooks: ZERO, block: 10_435_412 },
+    { version: 3, pool: "0x69BfaF19C9f377BB306a89aEd9F6B07e2c1a8d9a", currency0: WETH, currency1: USDG, fee: 500, tickSpacing: 10, block: 50_000 },
+    { version: 4, pool: `0x${"15".repeat(32)}`, currency0: ZERO, currency1: USDG, fee: 500, tickSpacing: 10, hooks: ZERO, block: 60_000 },
+    { version: 4, pool: `0x${"16".repeat(32)}`, currency0: ZERO, currency1: "0x39dBED3a2bd333467115dE45665cC57F813C4571", fee: 3000, tickSpacing: 60, hooks: ZERO, block: 70_000 },
+  ];
+  /** The watcher's own index on disk, filled through block 20,000,000 and opened again, as a restart opens it. */
+  const index = () => {
+    const where = dir();
+    const filling = new PoolIndex(where);
+    filling.addLive(INDEX_FROM, 20_000_000, POOLS);
+    filling.close();
+    return new PoolIndex(where);
+  };
+
+  it("gives a token's pools from the index, oldest first, with fee, tick spacing, hooks and creation block", async () => {
+    const pools = index();
+    const { base } = await serving({ pools });
+    const answer = await fetch(new URL(`/pools?token=${CASHCAT.toLowerCase()}`, base));
+    expect(answer.headers.get("access-control-allow-origin")).toBe("*");
+    expect([answer.status, await answer.json()]).toEqual([
+      200,
+      {
+        readAt: "2026-11-19T13:00:00.000Z",
+        token: CASHCAT.toLowerCase(),
+        through: 20_000_000,
+        complete: true,
+        pools: [
+          { version: 3, pool: POOLS[0]!.pool, currency0: CASHCAT, currency1: USDG, fee: 10_000, tickSpacing: 200, block: 3_000_000 },
+          { version: 4, pool: POOLS[1]!.pool, currency0: CASHCAT, currency1: USDG, fee: 2690, tickSpacing: 54, hooks: ZERO, block: 10_435_412 },
+        ],
+      },
+    ]);
+    pools.close();
+  });
+
+  it("gives ETH, WETH and USDG only their pools with each other, and says so", async () => {
+    const pools = index();
+    const { base } = await serving({ pools });
+    const { status, body } = await get(new URL(`/pools?token=${USDG}`, base));
+    expect(status).toBe(200);
+    expect(body.only).toBe("pools between ETH, WETH and USDG");
+    expect((body.pools as { pool: string }[]).map(({ pool }) => pool)).toEqual([POOLS[2]!.pool, POOLS[3]!.pool]);
+    expect(((await get(new URL(`/pools?token=${ZERO}`, base))).body.pools as { pool: string }[]).map(({ pool }) => pool)).toEqual([POOLS[3]!.pool]);
+    pools.close();
+  });
+
+  it("refuses an address that is not one, answers 503 while the index fills, and 404 on a watcher with no index", async () => {
+    const filling: PoolLookup = { ready: false, through: 42_000_000, poolsOf: () => [], basePools: () => [] };
+    const { base } = await serving({ pools: filling });
+    expect(await get(new URL("/pools?token=CASHCAT", base))).toEqual({ status: 400, body: { error: "token must be a contract address: 0x and 40 hex characters." } });
+    expect(await get(new URL(`/pools?token=${CASHCAT}`, base))).toEqual({ status: 503, body: { error: "The pool index is still being filled, through block 42000000. Try again later." } });
+    close?.();
+    const bare = await serving();
+    expect((await get(new URL(`/pools?token=${CASHCAT}`, bare.base))).status).toBe(404);
+    expect((await fetch(new URL("/pools", bare.base), { method: "POST" })).status).toBe(405);
+  });
+
+  it("gives at most MAX_POOLS pools, and says when a token has more", async () => {
+    const many = Array.from({ length: MAX_POOLS + 1 }, (_, i): IndexedPool => ({ ...POOLS[1]!, pool: `0x${i.toString(16).padStart(64, "0")}`, block: i }));
+    const { base } = await serving({ pools: { ready: true, through: 1, poolsOf: () => many, basePools: () => [] } });
+    const { body } = await get(new URL(`/pools?token=${CASHCAT}`, base));
+    expect([body.complete, (body.pools as unknown[]).length]).toEqual([false, MAX_POOLS]);
   });
 });
 
