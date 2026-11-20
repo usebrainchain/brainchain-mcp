@@ -3,11 +3,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { isIP } from "node:net";
 
 import type { Deliveries } from "./deliver.js";
-import { DEFAULT_LIMIT, knownKind, matches, MAX_LIMIT, type EventLog, type Query, type WatchEvent } from "./events.js";
+import { DEFAULT_LIMIT, knownKind, matches, MAX_FILTERS, MAX_LIMIT, type EventLog, type Query, type WatchEvent } from "./events.js";
 import { DeliveryError } from "./net.js";
-
-/** The most tokens or kinds one request can filter by. */
-export const MAX_FILTERS = 50;
 
 const ISO = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
 

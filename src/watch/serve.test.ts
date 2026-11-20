@@ -304,6 +304,23 @@ describe("watches", () => {
 });
 
 describe("the watcher's HTTP surface", () => {
+  it("is not loaded when the MCP server starts: nothing it imports at start reaches the HTTP server", () => {
+    const reached = new Set<string>();
+    const visit = (file: URL) => {
+      if (reached.has(file.pathname)) return;
+      reached.add(file.pathname);
+      const source = readFileSync(file, "utf8");
+      // Static imports only: the watch command's own module is imported when the command runs.
+      for (const [, from] of source.matchAll(/^(?:import|export)\s[^;]*?from\s+"([^"]+)";/gms)) {
+        if (from!.startsWith(".")) visit(new URL(from!.replace(/\.js$/, ".ts"), file));
+        else expect(from, file.pathname).not.toBe("node:http");
+      }
+    };
+    visit(new URL("../index.ts", import.meta.url));
+    expect([...reached].some((path) => path.endsWith("/changes.ts"))).toBe(true);
+    expect([...reached].filter((path) => path.endsWith("/watch/serve.ts") || path.endsWith("/watch/cli.ts"))).toEqual([]);
+  });
+
   it("holds each address to its requests a minute, telling it when to come back", async () => {
     const { base } = await serving({ limits: { ...SERVE_LIMITS, perMinute: 2 } });
     await fetch(new URL("/health/live", base));

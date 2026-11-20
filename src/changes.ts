@@ -1,7 +1,6 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
-import { DEFAULT_LIMIT, knownKind, MAX_LIMIT } from "./watch/events.js";
-import { MAX_FILTERS } from "./watch/serve.js";
+import { DEFAULT_LIMIT, knownKind, MAX_FILTERS, MAX_LIMIT } from "./watch/events.js";
 
 export const CHANGES_NAME = "brainchain_changes";
 export const WATCH_NAME = "brainchain_watch";
