@@ -263,8 +263,8 @@ describe("the market maker tool's words", () => {
     expect(MAKERS_TOOL.inputSchema).toMatchObject({ required: ["token"], additionalProperties: false });
     expect(Object.keys(MAKERS_TOOL.inputSchema.properties!)).toEqual(["token", "wallet", "atBlock", "at"]);
     expect(readme).toContain(`- \`${MAKERS_NAME}\` `);
-    expect(readme).toContain("The other thirteen spend nothing: `brainchain_watch` and `brainchain_unwatch` set up and remove a watch, and the rest only read.");
-    expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap`, `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`.");
+    expect(readme).toContain("The other fourteen spend nothing: `brainchain_watch` and `brainchain_unwatch` set up and remove a watch, and the rest only read.");
+    expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap`, `brainchain_trace_outcomes`, `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`.");
   });
 });
 
