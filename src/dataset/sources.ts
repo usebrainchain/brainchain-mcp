@@ -51,6 +51,8 @@ export function poolDir(dir: string): PoolSource {
   const file = join(dir, POOLS_FILE);
   const checkpoint = join(dir, CHECKPOINT_FILE);
   if (!existsSync(file) || !existsSync(checkpoint)) throw new Error(`${dir} holds no pool index: ${POOLS_FILE} and ${CHECKPOINT_FILE} are what brainchain-mcp watch keeps there.`);
+  // One buffer for every page, so reading the whole index allocates nothing per page but the pools themselves.
+  const chunk = Buffer.alloc(2 << 20);
   return {
     name: `dir:${dir}`,
     async page(after) {
@@ -58,8 +60,7 @@ export function poolDir(dir: string): PoolSource {
       if (after >= bytes) return { pools: [], next: after, bytes, through };
       const fd = openSync(file, "r");
       try {
-        const chunk = Buffer.alloc(Math.min(8 << 20, bytes - after));
-        const read = readSync(fd, chunk, 0, chunk.length, after);
+        const read = readSync(fd, chunk, 0, Math.min(chunk.length, bytes - after), after);
         const text = chunk.toString("latin1", 0, read);
         const end = text.lastIndexOf("\n") + 1;
         if (end === 0) throw new Error(`${file} has a line longer than the pool index writes.`);

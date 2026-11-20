@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, createReadStream, existsSync, ftruncateSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -105,21 +106,49 @@ export function trimTail(path: string): void {
   }
 }
 
+/** A file's SHA-256 and its lines, read a chunk at a time into `chunk`, so a file of any size takes no more memory than it. */
+function hashed(path: string, chunk: Buffer): { digest: string; lines: number; bytes: number } {
+  const hash = createHash("sha256");
+  const fd = openSync(path, "r");
+  let lines = 0;
+  let bytes = 0;
+  try {
+    for (let read = readSync(fd, chunk, 0, chunk.length, null); read > 0; read = readSync(fd, chunk, 0, chunk.length, null)) {
+      const part = chunk.subarray(0, read);
+      hash.update(part);
+      for (let at = part.indexOf(0x0a); at !== -1; at = part.indexOf(0x0a, at + 1)) lines++;
+      bytes += read;
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return { digest: hash.digest("hex"), lines, bytes };
+}
+
 const shardFiles = (out: string, folder: string) => (existsSync(join(out, folder)) ? readdirSync(join(out, folder)).filter((name) => name.endsWith(".jsonl")).sort().map((name) => `${folder}/${name}`) : []);
 
 /** Appends rows to files under `out`, grouped by file, each group in one write. */
 function appendGrouped<T extends object>(out: string, rows: readonly T[], fileOf: (row: T) => string): void {
   const groups = new Map<string, T[]>();
-  for (const row of rows) groups.set(fileOf(row), [...(groups.get(fileOf(row)) ?? []), row]);
+  for (const row of rows) {
+    const file = fileOf(row);
+    const group = groups.get(file);
+    if (group) group.push(row);
+    else groups.set(file, [row]);
+  }
   for (const [file, group] of groups) {
     mkdirSync(dirname(join(out, file)), { recursive: true });
     appendFileSync(join(out, file), jsonl(group));
   }
 }
 
+/**
+ * The pool's other side as the index writes it, already checksummed: hashing each of a million and a half pools' addresses
+ * again would cost a build most of its memory and time for nothing.
+ */
 const otherSide = (pool: IndexedPool, token: string) => {
   const other = pool.currency0.toLowerCase() === token ? pool.currency1 : pool.currency0;
-  return other.toLowerCase() === zeroAddress ? "ETH" : getAddress(other);
+  return other.toLowerCase() === zeroAddress ? "ETH" : other;
 };
 const venueBit = (pool: { version: 3 | 4 }) => (pool.version === 3 ? 1 : 2);
 const venueName = (version: 3 | 4) => (version === 3 ? "Uniswap v3" : "Uniswap v4");
@@ -176,7 +205,8 @@ export async function buildDataset(options: BuildOptions): Promise<BuildReport> 
   };
 
   say(`reading the watcher's log at ${watcher.origin}`);
-  const events: WatchEvent[] = await watcherEvents(watcher, fetchImpl);
+  // The context each event carries is the watcher's own reading and is never a row, so it is not kept.
+  const events: WatchEvent[] = (await watcherEvents(watcher, fetchImpl)).map((event) => ({ ...event, context: {} }));
   const traced = tracedIn(events);
 
   // Trust Wallet's and MetaMask's files that were there when the watcher started have no date in its log.
@@ -302,11 +332,12 @@ export async function buildDataset(options: BuildOptions): Promise<BuildReport> 
   const addPools = (pools: readonly IndexedPool[]) => {
     const rows: PoolRow[] = [];
     for (const pool of pools) {
-      for (const side of new Set([pool.currency0.toLowerCase(), pool.currency1.toLowerCase()])) {
+      for (const token of pool.currency0 === pool.currency1 ? [pool.currency0] : [pool.currency0, pool.currency1]) {
+        const side = token.toLowerCase();
         if (BASES.has(side)) continue;
         noteTraced(side, pool.version, pool.block, otherSide(pool, side));
         if (!table.addPool(side, venueBit(pool), pool.block)) continue;
-        rows.push({ token: getAddress(side), source: venueName(pool.version), block: pool.block, pairedWith: otherSide(pool, side), observedAt: readAt, ...backfill(pool.block) });
+        rows.push({ token, source: venueName(pool.version), block: pool.block, pairedWith: otherSide(pool, side), observedAt: readAt, ...backfill(pool.block) });
       }
     }
     appendGrouped(out, rows, (row) => poolShard(row.block));
@@ -492,10 +523,12 @@ export async function buildDataset(options: BuildOptions): Promise<BuildReport> 
 
   const files: BuildReport["files"] = {};
   const listed = [...FILES, ...shardFiles(out, "pools"), ...shardFiles(out, "symbols")];
+  const chunk = Buffer.alloc(1 << 20);
   for (const path of listed) {
-    const bytes = readFileSync(join(out, path));
-    const rows = path.endsWith(".jsonl") ? bytes.toString("utf8").split("\n").filter((line) => line.trim()).length : path.endsWith(".csv") ? bytes.toString("utf8").split("\n").filter(Boolean).length - 1 : path === "base-rates.json" ? rates.length : items.length;
-    files[path] = { sha256: sha256(bytes), rows, bytes: statSync(join(out, path)).size };
+    const { digest, lines, bytes } = hashed(join(out, path), chunk);
+    // Every row ends in a newline, and a CSV file has a header line besides.
+    const rows = path.endsWith(".jsonl") ? lines : path.endsWith(".csv") ? lines - 1 : path === "base-rates.json" ? rates.length : items.length;
+    files[path] = { sha256: digest, rows, bytes };
   }
   const manifest: Manifest = { date, readAt, headBlock, files: Object.fromEntries(Object.entries(files).map(([path, { sha256: hash, rows }]) => [path, { sha256: hash, rows }])) };
   writeWhole(join(out, "manifests", `${date}.json`), `${JSON.stringify(manifest, null, 1)}\n`);
