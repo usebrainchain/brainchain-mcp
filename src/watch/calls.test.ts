@@ -35,13 +35,14 @@ function chain(entries: Entry[], head: { block: number }, records: Record<string
   const fetchImpl = (async (url: string) => {
     if (url === `${BRAIN}/network.json`) return new Response(JSON.stringify({ manifest: { activeSet: { fromBlock: 2787, contracts: { DecisionLog: LOG } } } }));
     const key = url.split("#")[0]!;
+    if (key.startsWith(`${BRAIN}/x402/grades/`)) return new Response(JSON.stringify({ state: "graded", accepted: true }));
     if (failing.has(key)) return new Response("busy", { status: 503 });
     return key in records ? new Response(JSON.stringify(records[key])) : new Response("missing", { status: 404 });
   }) as typeof fetch;
   return { client: client as never, fetch: fetchImpl, asked };
 }
 
-const record = (subject: bigint, brief: string, payer = PAYER) => ({ subject: subject.toString(), answer: "accept", request: { state: JSON.stringify({ task: { brief }, result: "facts" }) }, payments: [{ payer, network: "eip155:4663", amount: "250000" }] });
+const record = (subject: bigint, brief: string, payer = PAYER) => ({ subject: subject.toString(), request: { state: JSON.stringify({ task: { brief }, result: "facts" }) }, payments: [{ payer, network: "eip155:4663", amount: "250000" }] });
 
 describe("the call index", () => {
   it("starts at the head, then keeps every grade whose brief is a call, with its payer and time, and nothing else", async () => {
@@ -78,7 +79,7 @@ describe("the call index", () => {
       outcome: "any",
       days: 30,
       dataset: { date: "2026-11-22", manifest: MANIFEST },
-      answer: "accept",
+      accepted: true,
       record: `${BRAIN}/records/0x02.json`,
     });
     expect(index.get(toHex(2n, { size: 32 }).toUpperCase().replace("0X", "0x"))).toEqual(call);

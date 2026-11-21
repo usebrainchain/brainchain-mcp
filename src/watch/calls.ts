@@ -56,7 +56,11 @@ export class CallIndex {
     this.brain = (options.brain ?? BRAIN_URL).replace(/\/$/, "");
     this.client = options.client ?? createPublicClient({ transport: http(BRAINCHAIN_RPC, { timeout: 20_000, retryCount: 2 }) });
     this.fetchImpl = options.fetch ?? fetch;
-    for (const call of existsSync(this.path) ? parseJsonl<IndexedCall>(readFileSync(this.path, "utf8")) : []) this.keep(call);
+    for (const row of existsSync(this.path) ? parseJsonl<IndexedCall & { answer?: string }>(readFileSync(this.path, "utf8")) : []) {
+      // The one call kept before the release carries Jev's answer, not whether the grade was accepted: it was not.
+      const { answer: _, ...call } = row;
+      this.keep({ ...call, accepted: call.accepted ?? false });
+    }
     this.checkpoint = existsSync(this.checkpointPath) ? (JSON.parse(readFileSync(this.checkpointPath, "utf8")) as Checkpoint) : { logs: {} };
   }
 
@@ -136,21 +140,25 @@ export class CallIndex {
     if (!response.ok) throw new Error(`the record of decision ${decision} answered ${response.status}`);
     const text = await response.text();
     if (text.length > MAX_RECORD_BYTES) return undefined;
-    const payload = JSON.parse(text) as { subject?: string; answer?: string; request?: { state?: string }; payments?: { payer?: string; network?: string; amount?: string }[] };
+    const payload = JSON.parse(text) as { subject?: string; request?: { state?: string }; payments?: { payer?: string; network?: string; amount?: string }[] };
     const brief = String((JSON.parse(payload.request?.state ?? "{}") as { task?: { brief?: unknown } }).task?.brief ?? "");
     const call = parseCall(brief);
     const payment = payload.payments?.[0];
     if (!call || !payment?.payer || !payload.subject) return undefined;
+    const grade = toHex(BigInt(payload.subject), { size: 32 });
+    const view = await this.fetchImpl(`${this.brain}/x402/grades/${grade}`, { signal: AbortSignal.timeout(20_000) });
+    if (!view.ok) throw new Error(`the grade of decision ${decision} answered ${view.status}`);
+    const { accepted } = (await view.json()) as { accepted?: unknown };
     const { timestamp } = await this.client.getBlock({ blockNumber: block });
     return {
-      grade: toHex(BigInt(payload.subject), { size: 32 }),
+      grade,
       decision,
       at: new Date(Number(timestamp) * 1000).toISOString(),
       payer: getAddress(payment.payer),
       network: payment.network ?? "",
       amount: payment.amount ?? "",
       ...call,
-      answer: payload.answer === "accept" ? "accept" : "reject",
+      accepted: accepted === true,
       record,
     };
   }

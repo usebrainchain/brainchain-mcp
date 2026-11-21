@@ -29,7 +29,7 @@ const made = (more: Partial<IndexedCall> = {}): IndexedCall => ({
   payer: "0xFe4d9d7c5c530c9652A46D0BF6178b041Bc2F858",
   network: "eip155:4663",
   amount: "250000",
-  answer: "accept",
+  accepted: true,
   record: "https://brain.usebrainchain.com/records/0xabc.json",
   ...more,
 });
@@ -39,9 +39,10 @@ describe("a call's request", () => {
     const { call, brief, result, levels, pass, title } = callRequest(dataset(), CASHCAT, { outcome: "kucoin", days: 30 });
     expect(call).toEqual({ token: CASHCAT, outcome: "kucoin", days: 30, dataset: { date: "2026-11-22", manifest: MANIFEST } });
     expect(brief.split("\n").slice(0, 5)).toEqual([CALL_HEADER, `token: ${CASHCAT}`, "outcome: kucoin", "days: 30", `dataset: 2026-11-22 ${MANIFEST}`]);
-    expect(brief).toContain("Do not judge whether the call will come true.");
-    expect(result).toContain(`No outcome row for ${CASHCAT}.`);
-    expect(result).toContain("Dated steps: custody 2026-07-28T07:09:00.000Z.");
+    expect(brief).toContain("State this call as one sentence: KuCoin listing it on Robinhood Chain for Cash Cat CASHCAT");
+    expect(result.split("\n")[0]).toBe(`Call: KuCoin listing it on Robinhood Chain for Cash Cat CASHCAT (${CASHCAT}) on Robinhood Chain within 30 days of this grade being recorded.`);
+    expect(result).toContain(`- No outcome row for ${CASHCAT}, so the outcome was not public in the dataset.`);
+    expect(result).toContain("- Dated steps: custody 2026-07-28T07:09:00.000Z.");
     expect([levels, pass, title]).toEqual([CALL_LEVELS, 0, "BrainChain call: CASHCAT, kucoin, 30 days"]);
     expect(levels.every((level) => level.length <= 200)).toBe(true);
     expect(`${brief}\n${result}`).not.toMatch(/alpha|front-?run|insider|will list|forecast|—/i);
@@ -49,11 +50,16 @@ describe("a call's request", () => {
 
   it("is refused before anything is paid when the dataset already has the outcome", () => {
     expect(() => callRequest(dataset([row({ at: "2026-08-12T10:00:00Z" })]), CASHCAT, { outcome: "any", days: 30 })).toThrow(
-      "The dataset of 2026-11-22 already has KuCoin listing it on Robinhood Chain for Cash Cat CASHCAT, from 2026-08-12T10:00:00.000Z, so a call on it would settle as already public. Nothing was paid.",
+      `The dataset of 2026-11-22 already has KuCoin listing it on Robinhood Chain for Cash Cat CASHCAT (${CASHCAT}), from 2026-08-12T10:00:00.000Z, so a call on it would settle as already public. Nothing was paid.`,
     );
     // Another outcome, or a row tied by the symbol alone, leaves the call open.
     expect(callRequest(dataset([row({ at: "2026-08-12T10:00:00Z" })]), CASHCAT, { outcome: "gate", days: 7 }).call.outcome).toBe("gate");
     expect(callRequest(dataset([row({ at: "2026-08-12T10:00:00Z", unconfirmed: true, match: "symbol" })]), CASHCAT, { outcome: "any", days: 7 }).result).toContain("kucoin (by symbol only, unconfirmed)");
+  });
+
+  it("names a token newer than the dataset by what its contract calls itself, and an unnamed one by its address", () => {
+    expect(callRequest(dataset(), PONS, { outcome: "gate", days: 7 }, { name: "Pons\n", symbol: "PONS" }).result.split("\n")[0]).toBe(`Call: Gate listing it on Robinhood Chain for Pons PONS (${PONS}) on Robinhood Chain within 7 days of this grade being recorded.`);
+    expect(callRequest(dataset(), PONS, { outcome: "gate", days: 7 }).title).toBe(`BrainChain call: ${PONS.slice(0, 10)}, gate, 7 days`);
   });
 
   it("takes an outcome and a number of days from the fixed choices", () => {

@@ -8,7 +8,7 @@ import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, within, type CustodyBoard, type CustodyToken } from "./custody.js";
 import type { SymbolRow } from "./dataset/format.js";
 import { datasetReader, DatasetError, type Dataset, type DatasetRef } from "./dataset/published.js";
-import { blockOf, ChainError, inTurn, type Moment } from "./history.js";
+import { blockOf, ChainError, inTurn, tokenFacts, type Moment } from "./history.js";
 import { MAKERS_NAME, MAKERS_TOOL, readMakerHoldings, type MakerBoard } from "./makers.js";
 import { MARKET_CAP_NAME, MARKET_CAP_TOOL, readMarketCap, type MarketCapBoard } from "./marketcap.js";
 import { TRACE_OUTCOMES_NAME, TRACE_OUTCOMES_TOOL, traceOutcomes, traceQuery } from "./outcomes.js";
@@ -679,7 +679,10 @@ export async function callTool(
         throw new Error(`The dataset could not be read just now, and a call is checked against it before anything is paid: ${brief(error)} Try again in a minute.`);
       });
       const { token, lookup } = await tokenOf(input.token, listed, dataset, symbols);
-      const { call, ...request } = callRequest(read, token, args);
+      // A token newer than the dataset goes by what its contract calls itself; a call that names only an address reads as incomplete.
+      const listedThere = read.tokens.some((row) => row.token.toLowerCase() === token.toLowerCase());
+      const onChain = listedThere ? undefined : await inTurn((reader) => tokenFacts(reader, token)).catch(() => undefined);
+      const { call, ...request } = callRequest(read, token, args, onChain);
       return reply(withLookup({ call, graded: await desk.grade(request) }, lookup));
     }
     if (name === CALLS_NAME) {

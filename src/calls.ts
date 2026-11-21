@@ -14,8 +14,8 @@ export const CALL_DAYS = [7, 30, 90] as const;
 const DAY_MS = 86_400_000;
 
 export const CALL_LEVELS = [
-  "The call names one Robinhood Chain token, one outcome and a deadline, and the facts show the outcome was not public when it was made",
-  "The call is incomplete, or the facts show its outcome was already public",
+  "Names the token, the outcome and the deadline in one sentence",
+  "Leaves out the token, the outcome or the deadline",
 ];
 
 export interface Call {
@@ -35,7 +35,8 @@ export interface IndexedCall extends Call {
   payer: string;
   network: string;
   amount: string;
-  answer: "accept" | "reject";
+  /** Whether Jev accepted the call as complete, at the board's grade bar. A call counts either way. */
+  accepted: boolean;
   record: string;
 }
 
@@ -56,9 +57,18 @@ export function callArgs(input: Record<string, unknown>): Pick<Call, "outcome" |
  * The grade request that makes a call: the brief holds the call in lines the watcher reads back, the result the dataset's
  * facts about the token. Refused before anything is paid when the dataset already has the outcome.
  */
-export function callRequest(dataset: Dataset, token: string, { outcome, days }: Pick<Call, "outcome" | "days">): { title: string; brief: string; result: string; levels: string[]; pass: number; call: Call } {
-  const known = dataset.tokens.find((row) => row.token.toLowerCase() === token.toLowerCase());
-  const label = [known?.name, known?.symbol && known.symbol !== known.name ? known.symbol : undefined].filter(Boolean).join(" ") || token;
+export function callRequest(
+  dataset: Dataset,
+  token: string,
+  { outcome, days }: Pick<Call, "outcome" | "days">,
+  /** What the contract calls itself, for a token newer than the dataset. */
+  onChain?: { name?: string; symbol?: string },
+): { title: string; brief: string; result: string; levels: string[]; pass: number; call: Call } {
+  const known = dataset.tokens.find((row) => row.token.toLowerCase() === token.toLowerCase()) ?? onChain;
+  const clean = (text?: string) => text?.replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, " ").trim().slice(0, 40) || undefined;
+  const [name, symbol] = [clean(known?.name), clean(known?.symbol)];
+  const named = [name, symbol && symbol !== name ? symbol : undefined].filter(Boolean).join(" ");
+  const label = named ? `${named} (${token})` : token;
   const rows = dataset.outcomes.filter((row) => row.token.toLowerCase() === token.toLowerCase());
   const already = settling(token, outcome, rows).filter((row) => !row.unconfirmed);
   if (already.length) {
@@ -67,6 +77,7 @@ export function callRequest(dataset: Dataset, token: string, { outcome, days }: 
   }
   const call: Call = { token, outcome, days, dataset: { date: dataset.ref.date, manifest: dataset.ref.manifest } };
   const steps = dataset.steps.filter((step) => step.token.toLowerCase() === token.toLowerCase()).sort((a, b) => timeOf(a) - timeOf(b));
+  const statement = `${outcomeWords(outcome)} for ${label} on Robinhood Chain within ${days} days of this grade being recorded`;
   const brief = [
     CALL_HEADER,
     `token: ${token}`,
@@ -74,16 +85,18 @@ export function callRequest(dataset: Dataset, token: string, { outcome, days }: 
     `days: ${days}`,
     `dataset: ${dataset.ref.date} ${dataset.ref.manifest}`,
     "",
-    `The caller calls ${outcomeWords(outcome)} for ${label} on Robinhood Chain within ${days} days of this grade being recorded. ` +
-      "Grade only whether the call is complete and whether the facts show the outcome was not yet public. Do not judge whether the call will come true.",
+    `State this call as one sentence: ${statement}. Add, as context, what the BrainChain MCP dataset of ${dataset.ref.date} holds for the token.`,
   ].join("\n");
   const result = [
+    `Call: ${statement}.`,
+    "",
     `Facts from the BrainChain MCP dataset of ${dataset.ref.date} (manifest ${dataset.ref.manifest}, through block ${dataset.ref.headBlock}):`,
-    rows.length ? `Outcome rows for ${token}: ${rows.map((row) => `${row.outcome}${row.unconfirmed ? " (by symbol only, unconfirmed)" : ""} at ${new Date(timeOf(row)).toISOString()}`).join("; ")}.` : `No outcome row for ${token}.`,
-    `No ${outcome === "any" ? "outcome" : outcome} row that settles this call.`,
-    steps.length ? `Dated steps: ${steps.map((step) => `${step.step} ${new Date(timeOf(step)).toISOString()}`).join("; ")}.` : "No dated steps.",
+    rows.length
+      ? `- Outcome rows for ${token}: ${rows.map((row) => `${row.outcome}${row.unconfirmed ? " (by symbol only, unconfirmed)" : ""} at ${new Date(timeOf(row)).toISOString()}`).join("; ")}. None is ${outcome === "any" ? "a confirmed listing" : `a confirmed ${outcome} row`}, so the outcome was not public in the dataset.`
+      : `- No outcome row for ${token}, so the outcome was not public in the dataset.`,
+    steps.length ? `- Dated steps: ${steps.map((step) => `${step.step} ${new Date(timeOf(step)).toISOString()}`).join("; ")}.` : "- No dated step for the token yet.",
   ].join("\n");
-  return { title: `BrainChain call: ${known?.symbol ?? token.slice(0, 10)}, ${outcome}, ${days} days`, brief, result, levels: CALL_LEVELS, pass: 0, call };
+  return { title: `BrainChain call: ${symbol ?? token.slice(0, 10)}, ${outcome}, ${days} days`, brief, result, levels: CALL_LEVELS, pass: 0, call };
 }
 
 /** The call in a grade's brief, or nothing when the brief holds none or a malformed one. */
@@ -150,7 +163,7 @@ export const CALL_TOOL: Tool = {
   title: "Make a public, graded call on a Robinhood Chain token",
   description:
     "Records your agent's call that a Robinhood Chain token reaches an outcome within 7, 30 or 90 days: a listing at any venue the dataset reads, or one of them. " +
-    "The call is a paid grade on BrainChain: this server's wallet pays the grade's price, Jev checks the call is complete and that the dataset shows the outcome was not yet public, and the call is recorded on BrainChain's DecisionLog with the wallet that paid. " +
+    "The call is a paid grade on BrainChain: this server's wallet pays the grade's price, Jev checks that the call names the token, the outcome and the deadline, and the call is recorded on BrainChain's DecisionLog with the wallet that paid. " +
     `Nothing is paid when the published dataset already has the outcome. Each call counts in brainchain_calls for that wallet once made, hit or miss: a call cannot be withdrawn or left out. ` +
     "The published dataset settles it: a hit when the outcome is dated after the call and by its deadline, a miss once the deadline has passed. " +
     `Returns the call, its deadline and the grade, as brainchain_grade returns it.`,
