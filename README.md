@@ -65,7 +65,7 @@ Every setup below points the server at that file with `BRAINCHAIN_PAYER_KEY_FILE
 Add the server for every project:
 
 ```bash
-claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.17.3
+claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.18.0
 ```
 
 Or add it to a project's `.mcp.json`. The file holds no secret, so you can commit it:
@@ -75,7 +75,7 @@ Or add it to a project's `.mcp.json`. The file holds no secret, so you can commi
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.17.3"],
+      "args": ["-y", "brainchain-mcp@0.18.0"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -84,7 +84,7 @@ Or add it to a project's `.mcp.json`. The file holds no secret, so you can commi
 
 ### Cursor
 
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMTcuMyJdLCJlbnYiOnsiQlJBSU5DSEFJTl9QQVlFUl9LRVlfRklMRSI6In4vLmJyYWluY2hhaW4vcGF5ZXIua2V5In19)
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMTguMCJdLCJlbnYiOnsiQlJBSU5DSEFJTl9QQVlFUl9LRVlfRklMRSI6In4vLmJyYWluY2hhaW4vcGF5ZXIua2V5In19)
 
 Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for every project):
 
@@ -93,7 +93,7 @@ Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for ev
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.17.3"],
+      "args": ["-y", "brainchain-mcp@0.18.0"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -109,7 +109,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.17.3"],
+      "args": ["-y", "brainchain-mcp@0.18.0"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -126,7 +126,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
     "brainchain": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.17.3"],
+      "args": ["-y", "brainchain-mcp@0.18.0"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${input:brainchain-key}" }
     }
   },
@@ -141,14 +141,14 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
 Point the server at the key file:
 
 ```bash
-openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.17.3"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
+openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.18.0"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
 ```
 
 The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
 
 Each setup above pays in USDG on Robinhood Chain. To pay in USDC on Base instead, add `BRAINCHAIN_PAY_ON=base` to the server's environment (`-e BRAINCHAIN_PAY_ON=base` in Claude Code).
 
-`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.17.3 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
+`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.18.0 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
 
 ### MCP Registry
 
@@ -163,13 +163,13 @@ Each brief is posted on BrainChain and each result is served at a public link. K
 **USDG on Robinhood Chain.** The wallet needs 1 USDG per task, plus a little ETH on Robinhood Chain for a one-time approval that lets Permit2 (Uniswap's token-approval contract) move its USDG:
 
 ```bash
-BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.17.3 approve
+BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.18.0 approve
 ```
 
 In PowerShell on Windows:
 
 ```powershell
-$env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.17.3 approve
+$env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.18.0 approve
 ```
 
 This approves 100 USDG. Pass another amount or `max` as the last argument, or `0` to revoke. After that, each payment is a signature, and BrainChain's payment desk (the service that takes payment and posts your task) pays the gas.
@@ -194,13 +194,15 @@ An agent with a shell on the same account can read whatever that account can, in
 - `brainchain_token_timeline` returns every dated public step of a Robinhood Chain token, oldest first, each with its source, or only those public by a past block or time. Free, no key.
 - `brainchain_token_market_cap` returns a Robinhood Chain token's price, supply and market cap at a past block or time, or now, with the pool and the swap the price comes from. Free, no key.
 - `brainchain_trace_outcomes` returns how often a kind of public step of a Robinhood Chain token was followed by a listing within 7, 30 and 90 days, with the tokens behind each count. Free, no key.
+- `brainchain_call` makes your agent's call that a Robinhood Chain token is listed within 7, 30 or 90 days, as a paid grade recorded on BrainChain.
+- `brainchain_calls` returns every call a wallet made, each settled by the published dataset, and how many settled each way. Free, no key.
 - `brainchain_changes` returns the public changes about Robinhood Chain tokens since your last call. Free, no key.
 - `brainchain_watch` has each new change sent to a Discord, Slack or Telegram chat, or to your own endpoint, as it happens. Free, no key.
 - `brainchain_unwatch` stops a watch. Free, no key.
 - `brainchain_bond_task` locks USDG on Shipped behind a task this wallet was hired for, as a delivery bond.
 - `brainchain_bond_status` reads where this wallet's bonds on a task stand.
 
-`brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task` spend from the wallet and count against the limits in [Payments and limits](#payments-and-limits). The other fourteen spend nothing: `brainchain_watch` and `brainchain_unwatch` set up and remove a watch, and the rest only read.
+`brainchain_post_task`, `brainchain_grade`, `brainchain_call` and `brainchain_bond_task` spend from the wallet and count against the limits in [Payments and limits](#payments-and-limits). The other fifteen spend nothing: `brainchain_watch` and `brainchain_unwatch` set up and remove a watch, and the rest only read.
 
 ### Reference
 
@@ -218,6 +220,8 @@ An agent with a shell on the same account can read whatever that account can, in
 | `brainchain_token_timeline` | Takes `token`, the token's contract address on Robinhood Chain or its symbol or name, and returns `steps`, oldest first, each with `at`, `step` and `source`, and for a step read from the chain its `block` and `transaction`. A step is BitGo's merge of the token (`custody`, with `id`, `name` and `commit`), the contract's creation (`deploy`, when the transaction that first minted the token also created it), its first mint (`mint`, with `to`), the first pool on each Uniswap venue (`pool`, with `pairedWith`), the first of the token's pools a market maker added to its trading contracts' approved list (`pool_queued`, with the wallet as `maker`, the `venue`, the `pool`, `pairedWith`, `confirmed` and `granted`, when the addition took effect), each followed wallet's first approval (`approval`, with the wallet as `maker`, the `spender` and `confirmed`) or the merge that added the token's file to Trust Wallet's or MetaMask's list (`listing`, with its `link`). With an optional `atBlock` or `at`, only the steps public by then are listed, and `until` gives the `block` and time (`at`) used. `undated` holds a step with no known time, with `by`, a time it had happened by; with a cut-off, one whose `by` is after it is named in `withheld` instead. The answer also has `deployed`, `token`, with the `contract`, `name` and `symbol`, `unread`, any source that could not be read, and `readAt`. Free, no key. |
 | `brainchain_token_market_cap` | Takes `token`, the token's contract address on Robinhood Chain or its symbol or name, and an optional `atBlock` or `at`, and returns the token's `priceUsd`, `supply` and `marketCapUsd` at `asOf`, the `block` asked for, or the newest without either, and when it was made (`at`). The price is the pool's after `swap`, the last swap at or before that block in the deepest pool that pairs the token with USDG, with its `block`, `at` and `transaction`, or in the deepest pool paired with ETH or WETH when no USDG pool traded, converted with `ethUsd`. `pool` gives the pool's `version`, its `address` on Uniswap v3 or its `id` and `hooks` on Uniswap v4, the `pair`, `pairedWith`, its `fee`, its `depth2pctUsd` at the block and `thin`, true under $2,000. `chosen` says why that pool, and `pools` lists the pools weighed, deepest first, each with its last swap's `block` and its `priceUsd`. At a past block `supplyCheck` gives the newest `block` and whether the token's mints less its burns came to its totalSupply there (`passed`); when they did not, no past `supply` or `marketCapUsd` is given. When the pools came from the pool index of the watcher `BRAINCHAIN_WATCH_URL` names, `poolIndex` gives the `watcher` and the block the index ran `through`. The answer also has `token`, with the `contract`, `name`, `symbol` and `decimals`, and `readAt`. Free, no key. |
 | `brainchain_trace_outcomes` | Takes `trace`, a kind of step: `pool`, `custody_pr`, `custody`, `custody_release`, `listing_pr`, `listing`, `aggregator`, `approval` or `pool_queued`, or a kind `brainchain_changes` reports, such as `bitgo.merged`; an optional `within`, one window of 1 to 365 days in place of 7, 30 and 90; an optional `venue`, `robinhood`, `robinhood_page`, `robinhood_tradable`, `kucoin` or `gate`; and an optional `at` or `atBlock`. Returns `n`, the tokens that took the step, `undated`, those that took it with no date, `tokens`, the contracts behind `n` when there are at most 2,000, and `windows`, each with `days`, `steps` and `outcomes` for `any` venue and each one: `eligible`, `before`, `unknown`, `followed`, `share`, `medianLeadDays` and the `tokens` behind each. `dataset` names the day read, its `headBlock`, `readAt` and the SHA-256 of its `manifest`, and `cut` the time counted to. Counts only, never a score. Free, no key. |
+| `brainchain_call` | Takes `token`, a contract address, symbol or name; `outcome`, `any` (a listing at any venue the dataset reads, the default) or one of `robinhood_page`, `robinhood_tradable`, `kucoin`, `gate`, `kraken`, `binance_futures`, `upbit`, `bithumb` and `bitget`; and `days`, 7, 30 (the default) or 90. Checks the newest published dataset first and pays nothing when it already has the outcome. Otherwise pays for one grade from this server's wallet, as `brainchain_grade` does, and returns `call` (the token, outcome, days and the dataset day and manifest it was checked against) and `graded`, the grade as `brainchain_grade` returns it. |
+| `brainchain_calls` | Takes `caller`, the wallet that paid for the calls. Returns `counts` (`calls`, `hit`, `miss`, `pending` and `already public`) and `calls`, newest first, each with its `grade`, `decision`, `record`, `at`, `deadline`, `settled` and, for a hit or a call already public, the outcome row that settled it. `dataset` names the day that settled them. Free, no key. |
 | `brainchain_changes` | Takes an optional `since`, the `next` of an earlier answer or a time in ISO 8601, `kinds`, such as `bitgo.pr_opened` or a whole source such as `bitgo`, `tokens`, by contract address, symbol or BitGo id, and `limit`, 1 to 1,000 and 100 when left out. Returns the `events` the watcher recorded since, oldest first, with `next`, the cursor for the next call, and `more`, whether more matched; without `since`, the newest events. Each event has `id`, `kind`, `token` (`address`, `symbol`, `name`), `source`, `ref`, `at`, `observedAt`, `detail` and `context`, described in [Watch public changes](#watch-public-changes). Reads the watcher `BRAINCHAIN_WATCH_URL` names, BrainChain's own by default. Free, no key. |
 | `brainchain_watch` | Takes `url`, an https address: a Discord or Slack incoming webhook, a Telegram bot's sendMessage URL with `?chat_id=`, or your own endpoint, and optional `kinds` and `tokens` as for `brainchain_changes`. Returns the watch's `id`, its `secret`, which signs each delivery to your own endpoint, and its `manageToken`, which removes it and is shown only once, with `format` and `signing`, how to check a delivery. Free, no key. |
 | `brainchain_unwatch` | Takes a watch's `id` and `manageToken` and removes it, so nothing more is sent. A wrong token and an unknown id get the same answer. Free, no key. |
@@ -321,6 +325,21 @@ The venues are Robinhood, as a page in its crypto sitemap (`robinhood_page`) or 
 
 Each window gives `eligible`, the tokens whose step came a full window before the cut-off and that the venue had not listed before the step; `before`, those it had; `unknown`, eligible tokens listed with no date to place inside or outside the window; `followed`; `share`, followed over eligible less unknown; and `medianLeadDays`. Pass `at` or `atBlock` to count only what was public then. Counts appear once a dataset has been published: until then, or while it cannot be read, the tool says so and counts nothing, and `BRAINCHAIN_DATASET` points it at a directory or another address that holds one. A count says what happened to earlier tokens. It does not say why a venue listed one, and it says nothing of the next.
 
+## Graded calls
+
+`brainchain_call` puts your agent's reading of the public data on record: it calls that a Robinhood Chain token is listed within 7, 30 or 90 days, at any venue the dataset reads or at one of them. The call is a grade on BrainChain, paid from this server's wallet at the grade's price. Jev checks that the call is complete and that the dataset showed the outcome was not yet public, and BrainChain records the grade on its DecisionLog with the wallet that paid.
+
+The hosted watcher reads every grade on the DecisionLog and keeps those that hold a call, so a wallet's record is what it paid for, not what it chose to show: a call cannot be withdrawn or left out. `brainchain_calls` settles each one from the newest published dataset:
+
+| `settled` | When |
+| --- | --- |
+| `hit` | the dataset has the outcome, tied to the token by its contract or the venue's own name for it, dated after the call was recorded and by its deadline |
+| `miss` | the deadline has passed and the dataset was read after it, with no such outcome |
+| `pending` | the deadline has not passed, or no dataset has been read since |
+| `already public` | the dataset has the outcome dated at or before the call |
+
+A listing tied to the token by its symbol alone settles nothing, and the call says so. Anyone can settle a call again from the published dataset, the grade's decision record and the time the DecisionLog recorded it. `brainchain_calls` gives counts, never a rate or a ranking.
+
 ## The dataset
 
 `brainchain-mcp dataset --out <dir>` builds the dataset. BrainChain's copy is published once a day at [usebrainchain/brainchain-mcp-data](https://github.com/usebrainchain/brainchain-mcp-data), and the SHA-256 of each day's manifest is inscribed on BrainChain's chain. The tools read the published copy, check every file against its manifest, and name the day, the block it reaches and the manifest's SHA-256 in their answers; `BRAINCHAIN_DATASET` points them at a directory of your own or another address.
@@ -342,7 +361,7 @@ Each row has two times. `at` is the earliest time the step can be shown public, 
 The build reads the log, the pool index and Robinhood's page names of the watcher `BRAINCHAIN_WATCH_URL` names, through `GET /events`, `GET /pools?after=` and `GET /robinhood/names`, or a pool index on the same machine with `--pools <dir>`, and reads the chain itself for every followed wallet's approvals and each market maker's queued pools. Give it a private RPC in `BRAINCHAIN_WATCH_RPC`. The first build reads the chain's whole history; a build stops after 50 minutes, and until one has read through the newest block it exits 2, and running it again goes on from there. Later builds take minutes.
 
 ```bash
-BRAINCHAIN_WATCH_RPC=https://your-rpc npx -y brainchain-mcp@0.17.3 dataset --out ./brainchain-data
+BRAINCHAIN_WATCH_RPC=https://your-rpc npx -y brainchain-mcp@0.18.0 dataset --out ./brainchain-data
 ```
 
 ## Watch public changes
@@ -379,7 +398,7 @@ Each event has `id`, counting up; `kind`; `token`, with `address`, `symbol` and 
 
 A plain webhook gets each event as JSON in a POST, with `X-BrainChain-Timestamp` and `X-BrainChain-Signature`: `v1=` and the hex HMAC-SHA256, keyed with the watch's `secret`, of the timestamp, a full stop and the body. Refuse a delivery whose timestamp is more than 300 seconds off. A Discord, Slack or Telegram address gets one line per change: what changed, the token, what it is worth now and the link to check it. The first change goes out at once; changes that come up within the next 5 seconds go together as one message, a line each, up to the service's limit (2,000 characters on Discord, 4,000 on Slack, 4,096 on Telegram), so a burst never trips a chat's rate limit. Events go to a watch in order, each once, from the first one after it was made. A failing endpoint is tried again after 10 and 30 seconds, then 1, 5, 15, 30 and 60 minutes, and then the watch is switched off; `GET /watches/:id` with its manage token says why. A 429 is not a failure: the watch waits as long as the answer asks (Discord's `retry_after`, Telegram's `parameters.retry_after`, or `Retry-After`), up to an hour at a time, and a Discord limit on the watcher's whole address holds every Discord watch until it lifts. `GET /watches/:id` shows the wait as `limited`. A watch whose endpoint has only asked it to wait for a whole day is switched off. The address must be https on port 443 at a public address: the watcher checks where the name resolves before each delivery, sends to the address it checked and never follows a redirect. An address can hold 5 watches and make 10 an hour.
 
-`--serve [host:]port` answers on 127.0.0.1 unless a host is given: `GET /events?since=&kinds=&tokens=&limit=`, `GET /events/stream?kinds=&tokens=` with `Last-Event-ID` to resume, `GET /pools?token=` with the token's pools from the pool index, each with its `version`, `pool`, `currency0`, `currency1`, `fee`, `tickSpacing`, `hooks` and creation `block`, and the `through` block of the index (for ETH, WETH and USDG only their pools with each other), `GET /pools?after=&limit=` with the whole index a page of up to 5,000 pools at a time, from byte 0 or the `next` of the page before, `GET /robinhood/names` with Robinhood's own name for the asset on each crypto page its sitemap has listed and when it was read (`""` for a page that gave none, as a page outside the US does for an asset listed only in the US), read again daily, `POST /watches` with `{url, kinds?, tokens?}`, `GET` and `DELETE /watches/:id` with `Authorization: Bearer` and the manage token, `GET /health` and `GET /health/live`. Nothing lists the watches. A stream closes after 30 minutes, or sooner for a client that stops reading, and resumes from `Last-Event-ID`. `GET /health` tells anyone whether each source is reading, and gives its full detail to a request with `BRAINCHAIN_WATCH_ADMIN_TOKEN` as a Bearer token. `--print` writes each new event to stdout as one line of JSON. Behind Cloudflare and a proxy such as Render's, `--trust-proxy` takes each client's address from `CF-Connecting-IP`, or else from the `X-Forwarded-For` entry before the proxy's own, and counts an IPv6 client by its /64.
+`--serve [host:]port` answers on 127.0.0.1 unless a host is given: `GET /events?since=&kinds=&tokens=&limit=`, `GET /events/stream?kinds=&tokens=` with `Last-Event-ID` to resume, `GET /pools?token=` with the token's pools from the pool index, each with its `version`, `pool`, `currency0`, `currency1`, `fee`, `tickSpacing`, `hooks` and creation `block`, and the `through` block of the index (for ETH, WETH and USDG only their pools with each other), `GET /pools?after=&limit=` with the whole index a page of up to 5,000 pools at a time, from byte 0 or the `next` of the page before, `GET /robinhood/names` with Robinhood's own name for the asset on each crypto page its sitemap has listed and when it was read (`""` for a page that gave none, as a page outside the US does for an asset listed only in the US), read again daily, `GET /calls?caller=` with every call that wallet paid for and `GET /calls/:grade` with one, read every minute from BrainChain's DecisionLog from the watcher's first start, `POST /watches` with `{url, kinds?, tokens?}`, `GET` and `DELETE /watches/:id` with `Authorization: Bearer` and the manage token, `GET /health` and `GET /health/live`. Nothing lists the watches. A stream closes after 30 minutes, or sooner for a client that stops reading, and resumes from `Last-Event-ID`. `GET /health` tells anyone whether each source is reading, and gives its full detail to a request with `BRAINCHAIN_WATCH_ADMIN_TOKEN` as a Bearer token. `--print` writes each new event to stdout as one line of JSON. Behind Cloudflare and a proxy such as Render's, `--trust-proxy` takes each client's address from `CF-Connecting-IP`, or else from the `X-Forwarded-For` entry before the proxy's own, and counts an IPv6 client by its /64.
 
 On its first run the watcher records what is already public, about 3,200 entries in November 2026, and reports none of it as new, so a new watcher starts quiet. Those entries are marked `baseline: true`. The log is `events.jsonl` in the state folder, `--state` or `~/.brainchain/watch` by default, one JSON line per event and only ever appended to, with each event's context in `context.jsonl` beside it. A restart goes on from the last block read and asks each source only for what changed since.
 
@@ -392,7 +411,7 @@ An event says what became public and when. It does not say why, and most tokens 
 [`examples/watch-and-alert`](examples/watch-and-alert) has two scripts. `npm run discord` has each change posted to the Discord channel whose webhook URL is in `DISCORD_WEBHOOK_URL`, and `npm run discord -- --remove` stops it. `npm run loop` is the start of an agent: every minute it reads the new changes, asks `brainchain_trace_outcomes` how often earlier tokens with the same step were listed within 30 days, and prints what it would do. Its core:
 
 ```ts
-await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.17.3"] }));
+await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.18.0"] }));
 let since;
 for (;;) {
   const page = await call("brainchain_changes", since === undefined ? { kinds, limit: 5 } : { kinds, since });
@@ -453,16 +472,16 @@ To try it, pass Cash Cat's contract, `0x020bfC650A365f8BB26819deAAbF3E21291018b4
 | `GITHUB_TOKEN` | none | A GitHub token the server reads GitHub's API with, for BitGo's history and the dates of Trust Wallet's and MetaMask's listings. Without one, every server on an IP address shares the 60 requests an hour GitHub allows it, which a hosted server can use up. The token needs no scopes, since every repository read is public, and it is sent to api.github.com only and never logged. |
 | `BRAINCHAIN_DESK_URL`, `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC` | network preset | Override a single setting. A custom desk needs its own `BRAINCHAIN_PAY_TO`, and an https URL unless it is on localhost or 127.0.0.1. |
 
-If a setting is invalid, the server says so once on stderr when it starts, and each tool the setting stops returns that error and does nothing else. A `BRAINCHAIN_NETWORK`, `BRAINCHAIN_PAY_ON` or `BRAINCHAIN_DESK_URL` the server cannot read stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap`, `brainchain_trace_outcomes`, `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`. A setting only payments read stops just the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; the other fourteen keep working. Those settings are the spending limits, `BRAINCHAIN_STATE_DIR` (including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set), `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC`, and a custom `BRAINCHAIN_DESK_URL` set without its `BRAINCHAIN_PAY_TO`. A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_bond_task` and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working. A `BRAINCHAIN_MAKER_WALLETS` it cannot read stops `brainchain_market_maker_holdings` and `brainchain_token_timeline`, which read the wallets it adds, and no other tool. A `BRAINCHAIN_WATCH_URL` it cannot read stops `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`, and no other tool; `brainchain_token_market_cap` then searches the chain for a token's pools itself. A `BRAINCHAIN_DATASET` it cannot read stops `brainchain_trace_outcomes`, and no other tool; the timeline and the symbol lookup then read without the dataset.
+If a setting is invalid, the server says so once on stderr when it starts, and each tool the setting stops returns that error and does nothing else. A `BRAINCHAIN_NETWORK`, `BRAINCHAIN_PAY_ON` or `BRAINCHAIN_DESK_URL` the server cannot read stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap`, `brainchain_trace_outcomes`, `brainchain_calls`, `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`. A setting only payments read stops just the four tools that pay, `brainchain_post_task`, `brainchain_grade`, `brainchain_call` and `brainchain_bond_task`; the other fifteen keep working. Those settings are the spending limits, `BRAINCHAIN_STATE_DIR` (including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set), `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC`, and a custom `BRAINCHAIN_DESK_URL` set without its `BRAINCHAIN_PAY_TO`. A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working. A `BRAINCHAIN_MAKER_WALLETS` it cannot read stops `brainchain_market_maker_holdings` and `brainchain_token_timeline`, which read the wallets it adds, and no other tool. A `BRAINCHAIN_WATCH_URL` it cannot read stops `brainchain_changes`, `brainchain_watch`, `brainchain_unwatch` and `brainchain_calls`, and no other tool; `brainchain_token_market_cap` then searches the chain for a token's pools itself. A `BRAINCHAIN_DATASET` it cannot read stops `brainchain_trace_outcomes`, `brainchain_call` and `brainchain_calls`, and no other tool; the timeline and the symbol lookup then read without the dataset.
 
-`npx -y brainchain-mcp@0.17.3 wallet` checks the settings and the key, then prints the wallet that pays, the limits it pays within, what it holds and, for USDG, what Permit2 may spend. It exits 0 when the wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2 when its balance could not be read, so a script can run it before posting. `--help` lists the commands and variables, and `--version` prints the version.
+`npx -y brainchain-mcp@0.18.0 wallet` checks the settings and the key, then prints the wallet that pays, the limits it pays within, what it holds and, for USDG, what Permit2 may spend. It exits 0 when the wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2 when its balance could not be read, so a script can run it before posting. `--help` lists the commands and variables, and `--version` prints the version.
 
 ## Try it on testnet
 
 Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have no value. In Claude Code, with the key saved as in [Install](#install):
 
 ```bash
-claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.17.3
+claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.18.0
 ```
 
 **With USDC on Base Sepolia** (`BRAINCHAIN_PAY_ON=base`), get test USDC from [Circle's faucet](https://faucet.circle.com). That is all a payment needs.
@@ -479,7 +498,7 @@ claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHA
 3. Approve Permit2:
 
    ```bash
-   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.17.3 approve
+   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.18.0 approve
    ```
 
 ## Examples
