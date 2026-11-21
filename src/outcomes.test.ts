@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import type { OutcomeRow, StepRow } from "./dataset/format.js";
-import type { Dataset } from "./dataset/published.js";
+import { DatasetError, type Dataset } from "./dataset/published.js";
 import { TRACE_OUTCOMES_NAME, TRACE_OUTCOMES_TOOL, traceOutcomes, traceQuery } from "./outcomes.js";
 import { callTool, type Desk } from "./tools.js";
 
@@ -61,6 +61,14 @@ describe("trace outcomes", () => {
     expect(() => traceQuery({ trace: "custody", venue: "binance" })).toThrow(/venue must be one of/);
     expect(body(await call({ trace: "custody", at: at(1), atBlock: 5 }))).toEqual({ error: "Pass atBlock or at, not both." });
     expect(body(await call({ trace: "custody", extra: 1 }))).toEqual({ error: "Unknown field: extra. This tool takes only trace, within, at, atBlock, venue." });
+  });
+
+  it("says counts appear once a dataset is published, and names the setting that points it at another", async () => {
+    const result = await callTool(desk, TRACE_OUTCOMES_NAME, { trace: "pool" }, undefined, undefined, undefined, { dataset: async () => Promise.reject(new DatasetError("No dataset was published in the last 7 days at x, so there is nothing to count yet: counts appear once one is. BRAINCHAIN_DATASET points the tools at a directory or another address that holds one.")) });
+    expect(result.isError).toBe(true);
+    expect(body(result).error).toMatch(/counts appear once one is\. BRAINCHAIN_DATASET points/);
+    expect(TRACE_OUTCOMES_TOOL.description).toContain("Counts appear once a dataset has been published there");
+    expect(TRACE_OUTCOMES_TOOL.description).toContain("BRAINCHAIN_DATASET");
   });
 
   it("passes on why the dataset could not be read", async () => {

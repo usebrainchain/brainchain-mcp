@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { CustodyBoard, CustodyToken } from "./custody.js";
 import type { StepRow } from "./dataset/format.js";
-import type { Dataset } from "./dataset/published.js";
+import { DatasetError, type Dataset } from "./dataset/published.js";
 import type { ChainHistory } from "./history.js";
 import { configuredMakers, MARKET_MAKERS, type Approval, type MakerWallet } from "./makers.js";
 import type { QueuedPool } from "./queued.js";
@@ -256,10 +256,15 @@ describe("tokenTimeline", () => {
     calls.length = 0;
     const without = await timeline({ ...readers, dataset: async () => Promise.reject(new Error("offline")) });
     expect(without.dataset).toBeUndefined();
+    expect(without.datasetMissing).toBe("The dataset could not be read just now. Every step was read live, from the chain's whole history.");
     expect(calls).toEqual([
       ["readiness", undefined],
       ["approvals", [MARKET_MAKERS.length, undefined]],
     ]);
+    const unpublished = await timeline({ ...readers, dataset: async () => Promise.reject(new DatasetError("No dataset was published in the last 7 days at x.")) });
+    expect(unpublished.datasetMissing).toBe("No dataset was published in the last 7 days at x. Every step was read live, from the chain's whole history.");
+    expect(board.datasetMissing).toBeUndefined();
+    expect((await timeline(sources().readers)).datasetMissing).toBeUndefined();
   });
 
   it("dates the contract's creation only when the transaction that first minted the token created it", async () => {
