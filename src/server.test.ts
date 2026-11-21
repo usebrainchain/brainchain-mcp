@@ -18,6 +18,7 @@ import { resolveConfig } from "./config.js";
 import { CUSTODY_NAME } from "./custody.js";
 import { MAKERS_NAME } from "./makers.js";
 import { MARKET_CAP_NAME } from "./marketcap.js";
+import { CALL_NAME, CALLS_NAME } from "./calls.js";
 import { TRACE_OUTCOMES_NAME } from "./outcomes.js";
 import { gradeGuidance, guidance } from "./payments.js";
 import { hasGitHubToken } from "./github.js";
@@ -61,7 +62,7 @@ describe("the server", () => {
     expect(client.getServerVersion()).toMatchObject({ name: "brainchain", title: "BrainChain" });
     expect(client.getInstructions()).toBe(INSTRUCTIONS);
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, TIMELINE_NAME, MARKET_CAP_NAME, TRACE_OUTCOMES_NAME, CHANGES_NAME, WATCH_NAME, UNWATCH_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]);
+    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, TIMELINE_NAME, MARKET_CAP_NAME, TRACE_OUTCOMES_NAME, CALL_NAME, CALLS_NAME, CHANGES_NAME, WATCH_NAME, UNWATCH_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]);
 
     const post = await client.callTool({ name: POST_TASK_NAME, arguments: task });
     expect(post.isError).toBe(true);
@@ -89,7 +90,7 @@ describe("the server", () => {
       expect(logged[0]).toContain(problem);
 
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(17);
+      expect(tools).toHaveLength(19);
       const description = tools.find((tool) => tool.name === POST_TASK_NAME)!.description!;
       expect(description.startsWith(`Invalid setting: ${problem}`)).toBe(true);
       expect(description).not.toMatch(/USDG|USDC/);
@@ -103,6 +104,7 @@ describe("the server", () => {
         { name: GET_TASK_NAME, arguments: { order } },
         { name: GRADE_NAME, arguments: grade },
         { name: GET_GRADE_NAME, arguments: { grade: order } },
+        { name: CALL_NAME, arguments: { token: "0x020bfC650A365f8BB26819deAAbF3E21291018b4" } },
         { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } },
         { name: BOND_STATUS_NAME, arguments: { task: "12" } },
       ]) {

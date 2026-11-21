@@ -15,6 +15,7 @@ import { sightingsReader, tokenSightings } from "../sightings.js";
 import { bitGoLists, bitGoMerges, bitGoPullRequests, bitGoReleases } from "./bitgo.js";
 import { chainFirsts, chainKept, chainPoller } from "./chain.js";
 import { chainTurn, createdIn, eventContext, loadWorth, saveWorth, worthOf } from "./context.js";
+import { CallIndex } from "./calls.js";
 import { Deliveries } from "./deliver.js";
 import { EventLog, type WatchEvent } from "./events.js";
 import { marketPoller, universeFrom, VENUE_HOSTS, VENUE_LISTS, VENUE_PER_HOUR } from "./exchanges.js";
@@ -294,7 +295,8 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   const adminToken = env.BRAINCHAIN_WATCH_ADMIN_TOKEN?.trim() || undefined;
   if (adminToken && !/^[\w-]{32,100}$/.test(adminToken)) throw new Error("BRAINCHAIN_WATCH_ADMIN_TOKEN must be 32 to 100 letters, digits, - or _.");
   const names = () => (state.source("robinhood-names") as NamesState).names ?? {};
-  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, trustProxy: args.trustProxy }) : undefined;
+  const calls = new CallIndex({ dir, ...(env.BRAINCHAIN_WATCH_BRAIN ? { brain: env.BRAINCHAIN_WATCH_BRAIN } : {}), say });
+  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, calls, trustProxy: args.trustProxy }) : undefined;
   let ticking = false;
   const deliver = () => {
     if (ticking) return;
@@ -355,6 +357,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       github: { token, ...(requests.github ? { limit: requests.github.limit, remaining: requests.github.remaining, reset: new Date(requests.github.reset).toISOString() } : {}) },
       watches: deliveries.active,
       deliveries: deliveries.report(),
+      calls: calls.status(),
       waiting,
       sources,
       requests: stats,
@@ -370,6 +373,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   }
   watcher.start();
   deliveries.start();
+  calls.start();
   if (rpc) void poolIndex.fill(privateReader(fillRequests.fetchFor("pools"), rpc));
   else say("No private RPC is set, so the pool index is not filled and each token's pools are searched for as they are needed.");
 
@@ -380,6 +384,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     say("Stopping: finishing the reads in progress and saving the state.");
     served?.close();
     deliveries.stop();
+    calls.stop();
     await watcher.stop();
     clearTimeout(saving);
     poolIndex.close();

@@ -2,7 +2,8 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { getAddress, isAddress, type Address } from "viem";
 
 import type { Bonds } from "./bonds.js";
-import { CHANGES_NAME, CHANGES_TOOL, changesQuery, createWatch, HOSTED_WATCH_URL, readChanges, removeWatch, UNWATCH_NAME, UNWATCH_TOOL, unwatchArgs, WATCH_NAME, WATCH_TOOL, watchArgsOf, type ChangesQuery, type WatchRequest } from "./changes.js";
+import { CALL_NAME, CALL_TOOL, callArgs, callRecord, callRequest, CALLS_NAME, CALLS_TOOL, type IndexedCall } from "./calls.js";
+import { CHANGES_NAME, CHANGES_TOOL, changesQuery, createWatch, HOSTED_WATCH_URL, readCalls, readChanges, removeWatch, UNWATCH_NAME, UNWATCH_TOOL, unwatchArgs, WATCH_NAME, WATCH_TOOL, watchArgsOf, type ChangesQuery, type WatchRequest } from "./changes.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, within, type CustodyBoard, type CustodyToken } from "./custody.js";
 import type { SymbolRow } from "./dataset/format.js";
@@ -513,6 +514,8 @@ export interface Readers {
   cutOf(moment: Moment): Promise<{ at: number; block?: number }>;
   /** The tokens with a pool that call themselves `symbol`, from the published dataset. */
   symbols(symbol: string): Promise<SymbolRow[]>;
+  /** A wallet's calls, as the watcher read them from BrainChain's DecisionLog. */
+  calls(caller: string): Promise<IndexedCall[]>;
 }
 
 let published: ReturnType<typeof datasetReader> | undefined;
@@ -529,6 +532,7 @@ const READERS: Readers = {
   changes: (query) => readChanges(new URL(HOSTED_WATCH_URL), query),
   watch: (request) => createWatch(new URL(HOSTED_WATCH_URL), request),
   unwatch: (id, manageToken) => removeWatch(new URL(HOSTED_WATCH_URL), id, manageToken),
+  calls: (caller) => readCalls(new URL(HOSTED_WATCH_URL), caller),
   dataset: () => (published ??= datasetReader(undefined)).load(),
   symbols: (symbol) => (published ??= datasetReader(undefined)).symbol(symbol),
   cutOf: async (moment) =>
@@ -548,7 +552,7 @@ export async function callTool(
   refused: ReadonlyMap<string, string> = new Map(),
   readers: Partial<Readers> = {},
 ): Promise<CallToolResult> {
-  const { custody, makers, readiness, sightings, listed, timeline, marketCap, changes, watch, unwatch, dataset, cutOf, symbols } = { ...READERS, ...readers };
+  const { custody, makers, readiness, sightings, listed, timeline, marketCap, changes, watch, unwatch, dataset, cutOf, symbols, calls } = { ...READERS, ...readers };
   const input = (args ?? {}) as Record<string, unknown>;
   const refusal = refused.get(name);
   if (refusal !== undefined) return reply({ error: refusal }, true);
@@ -666,6 +670,29 @@ export async function callTool(
         when && cutOf(when),
       ]);
       return reply(traceOutcomes(read, query, cut));
+    }
+    if (name === CALL_NAME) {
+      refuseUnknownFields(input, CALL_TOOL.inputSchema);
+      const args = callArgs(input);
+      const read = await dataset().catch((error: unknown) => {
+        if (error instanceof DatasetError) throw error;
+        throw new Error(`The dataset could not be read just now, and a call is checked against it before anything is paid: ${brief(error)} Try again in a minute.`);
+      });
+      const { token, lookup } = await tokenOf(input.token, listed, dataset, symbols);
+      const { call, ...request } = callRequest(read, token, args);
+      return reply(withLookup({ call, graded: await desk.grade(request) }, lookup));
+    }
+    if (name === CALLS_NAME) {
+      refuseUnknownFields(input, CALLS_TOOL.inputSchema);
+      const caller = address("caller", text("caller", input.caller));
+      const [made, read] = await Promise.all([
+        calls(caller),
+        dataset().catch((error: unknown) => {
+          if (error instanceof DatasetError) throw error;
+          throw new Error(`The dataset that settles the calls could not be read just now: ${brief(error)} Try again in a minute.`);
+        }),
+      ]);
+      return reply(callRecord(caller, made, read));
     }
     if (name === CHANGES_NAME) {
       refuseUnknownFields(input, CHANGES_TOOL.inputSchema);

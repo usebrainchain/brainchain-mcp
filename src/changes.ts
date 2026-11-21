@@ -1,5 +1,6 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
+import type { IndexedCall } from "./calls.js";
 import { DEFAULT_LIMIT, knownKind, MAX_FILTERS, MAX_LIMIT } from "./watch/events.js";
 
 export const CHANGES_NAME = "brainchain_changes";
@@ -127,6 +128,13 @@ export async function readChanges(watcher: URL, query: ChangesQuery, fetchImpl: 
     throw new Error(`The watcher at ${watcher.origin} answered ${status} without a list of events. Check that BRAINCHAIN_WATCH_URL names a running \`brainchain-mcp watch --serve\`.`);
   }
   return { watcher: watcher.origin, readAt: body.readAt, events: body.events, next: body.next, more: body.more === true };
+}
+
+/** A wallet's calls as a watcher read them from BrainChain's DecisionLog, oldest first. */
+export async function readCalls(watcher: URL, caller: string, fetchImpl: typeof fetch = fetch): Promise<IndexedCall[]> {
+  const { status, body } = await ask(watcher, `calls?caller=${encodeURIComponent(caller)}`, {}, fetchImpl);
+  if (status !== 200 || !body || !Array.isArray(body.calls)) throw new Error(`The watcher at ${watcher.origin} answered ${status} without a list of calls. Check that BRAINCHAIN_WATCH_URL names a watcher on brainchain-mcp 0.18.0 or later.`);
+  return body.calls as IndexedCall[];
 }
 
 export interface WatchRequest {

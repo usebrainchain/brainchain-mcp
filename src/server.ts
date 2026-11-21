@@ -7,7 +7,8 @@ import { createPublicClient, defineChain, formatEther, http, maxUint256, WaitFor
 import { privateKeyToAccount } from "viem/accounts";
 
 import { bondsClosed, createBonds, type Bonds } from "./bonds.js";
-import { CHANGES_NAME, CHANGES_RESOURCE, CHANGES_TOOL, CHANGES_URI, createWatch, followChanges, HOSTED_WATCH_URL, readChanges, removeWatch, UNWATCH_NAME, UNWATCH_TOOL, WATCH_NAME, WATCH_TOOL, watchUrl } from "./changes.js";
+import { CALL_NAME, CALL_TOOL, CALLS_NAME, CALLS_TOOL } from "./calls.js";
+import { CHANGES_NAME, CHANGES_RESOURCE, CHANGES_TOOL, CHANGES_URI, createWatch, followChanges, HOSTED_WATCH_URL, readCalls, readChanges, removeWatch, UNWATCH_NAME, UNWATCH_TOOL, WATCH_NAME, WATCH_TOOL, watchUrl } from "./changes.js";
 import { expandHome, formatUnits, PRICE, resolveConfig, type Config } from "./config.js";
 import { CUSTODY_NAME, CUSTODY_TOOL } from "./custody.js";
 import { stateDirProblem } from "./daily.js";
@@ -57,7 +58,7 @@ export const INSTRUCTIONS =
 const KEY_HELP =
   `Keep the key in a file only your account can read (chmod 600) and add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config ` +
   `(in Claude Code, \`claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp\`), then restart the server. ` +
-  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME}, ${TIMELINE_NAME}, ${MARKET_CAP_NAME}, ${TRACE_OUTCOMES_NAME}, ${CHANGES_NAME}, ${WATCH_NAME} and ${UNWATCH_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
+  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME}, ${TIMELINE_NAME}, ${MARKET_CAP_NAME}, ${TRACE_OUTCOMES_NAME}, ${CALLS_NAME}, ${CHANGES_NAME}, ${WATCH_NAME} and ${UNWATCH_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -249,7 +250,7 @@ function unreadable(problem: string): Wiring {
     bonds: { bond: refuse, status: refuse },
     bondTools: bondTools({}, undefined, { invalid: { bond: problem, status: problem } }),
     gradeTool: gradeTool(problem),
-    refused: new Map([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, BOND_TASK_NAME, BOND_STATUS_NAME].map((name) => [name, problem])),
+    refused: new Map([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, CALL_NAME, BOND_TASK_NAME, BOND_STATUS_NAME].map((name) => [name, problem])),
   };
 }
 
@@ -301,7 +302,7 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
   // state folder, which could still take a write or hang on one. Reading a bond needs the key and no record,
   // so only a key problem stops that.
   const refused = new Map<string, string>();
-  if (problem) for (const name of [POST_TASK_NAME, GRADE_NAME, BOND_TASK_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);
+  if (problem) for (const name of [POST_TASK_NAME, GRADE_NAME, CALL_NAME, BOND_TASK_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);
   if (keyProblem) refused.set(BOND_STATUS_NAME, `${keyProblem} ${KEY_HELP}`);
   const terms = { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(problem ? { problem } : {}) };
   return {
@@ -385,7 +386,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
   } catch (error) {
     watchProblem = `${messageOf(error)} Fix it in this server's environment and restart the server.`;
     log(`brainchain-mcp has an invalid setting: ${watchProblem}`);
-    for (const name of [CHANGES_NAME, WATCH_NAME, UNWATCH_NAME]) refused.set(name, watchProblem);
+    for (const name of [CHANGES_NAME, WATCH_NAME, UNWATCH_NAME, CALLS_NAME]) refused.set(name, watchProblem);
   }
   // The dataset's setting is read only by the tools that read the dataset, so one it cannot use stops brainchain_trace_outcomes alone.
   let dataset: DatasetReader | undefined;
@@ -394,7 +395,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
   } catch (error) {
     const problem = `${messageOf(error)} Fix it in this server's environment and restart the server.`;
     log(`brainchain-mcp has an invalid setting: ${problem}`);
-    refused.set(TRACE_OUTCOMES_NAME, problem);
+    for (const name of [TRACE_OUTCOMES_NAME, CALL_NAME, CALLS_NAME]) refused.set(name, problem);
   }
   const readers: Partial<Readers> = {
     makers: (token, wallet, moment) => readMakerHoldings(token, wallet, moment, followed),
@@ -404,6 +405,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
     changes: (query) => readChanges(watcher, query, options.fetch),
     watch: (request) => createWatch(watcher, request, options.fetch),
     unwatch: (id, manageToken) => removeWatch(watcher, id, manageToken, options.fetch),
+    calls: (caller) => readCalls(watcher, caller, options.fetch),
     ...(dataset ? { dataset: () => dataset.load(), symbols: (symbol: string) => dataset.symbol(symbol) } : {}),
   };
   const leadWatch = (tool: Tool): Tool => (watchProblem ? { ...tool, description: invalidSetting(watchProblem) + tool.description } : tool);
@@ -420,6 +422,8 @@ export function createServer(env: Record<string, string | undefined>, version: s
     lead(TIMELINE_TOOL),
     MARKET_CAP_TOOL,
     TRACE_OUTCOMES_TOOL,
+    CALL_TOOL,
+    leadWatch(CALLS_TOOL),
     leadWatch(CHANGES_TOOL),
     leadWatch(WATCH_TOOL),
     leadWatch(UNWATCH_TOOL),
