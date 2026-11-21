@@ -1,30 +1,29 @@
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
 import { parseMandate, type Mandate } from "../src/mandate.ts";
-import { pretradeCheck, type Registry } from "../src/request.ts";
-import { runLocally } from "../src/sandbox.ts";
-import type { SignedQuote } from "../src/zerox.ts";
+import { checksFor, DELIVERY_FORM, deliveryCode, deliveryJson, pretradeCheck, type Registry } from "../src/request.ts";
+import { pythonBlocks, ruleLines, runLocally } from "../src/sandbox.ts";
+import { parseQuery, type SignedQuote } from "../src/zerox.ts";
 
-const read = (path: string) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
-const MANDATE = parseMandate(read("../fixtures/mandate.json"));
-const recorded = (name: string): { trade: string; quote: SignedQuote; registry: Registry } => read(`../fixtures/quotes/${name}.json`);
+import { forgedSignature, MANDATE, recorded, sha512Bypass, tamperRoute } from "./helpers.ts";
 
 async function check(name: string, change: { mandate?: Partial<Mandate>; quote?: Partial<SignedQuote>; registry?: Partial<Registry>; result?: (r: string) => string } = {}) {
   const { trade, quote, registry } = recorded(name);
   const request = pretradeCheck({ quote: { ...quote, ...change.quote }, registry: { ...registry, ...change.registry }, mandate: parseMandate({ ...MANDATE, ...change.mandate }), trade });
   const run = await runLocally({ ...request, result: change.result ? change.result(request.result) : request.result });
-  const lines = run.output.split("\n");
+  const lines = ruleLines(run.output);
   return { run, failed: lines.filter((l) => l.startsWith("FAIL")).map((l) => /^FAIL {2}([^:]+):/.exec(l)![1]), passed: lines.filter((l) => l.startsWith("pass")).length, output: run.output };
 }
+
+const block = (code: string) => (result: string) => result.replace(/```python\n[\s\S]*?\n```/, `\`\`\`python\n${code}\n\`\`\``);
+const b64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
 
 // Each recorded quote is 0x's response as bought on 2026-11-21, so these runs check real signatures and real calldata.
 describe("the checks, on 0x's recorded quotes, as BrainChain's sandbox runs them", { timeout: 60_000 }, () => {
   it.each(["inside", "native"])("pass every rule for the %s trade", async (name) => {
     const { run, failed, passed } = await check(name);
     expect(failed).toEqual([]);
-    expect(passed).toBe(12);
+    expect(passed).toBe(13);
     expect(run.outcome).toBe("passed");
   });
 
@@ -44,12 +43,6 @@ describe("the checks, on 0x's recorded quotes, as BrainChain's sandbox runs them
     const { output } = await check("inside");
     expect(output).toContain("Trade: sell 5 USDG for at least 0.003072049707352334 WETH (0x quoted 0.003087487143067672 WETH)");
     expect(output).toContain("pass  minimum out: the trade reverts unless it pays at least 0.003072049707352334 WETH, 50.0 bps under 0x's quote, within the mandate's 100");
-  });
-
-  it("fail a delivery that runs code of its own", async () => {
-    const { failed, output } = await check("inside", { result: (r) => r.replace("DELIVERY = {", "import hashlib\nDELIVERY = {") });
-    expect(failed).toEqual(["delivery"]);
-    expect(output).toContain("defines DELIVERY, hashlib, where only DELIVERY is allowed");
   });
 
   it("fail a quote received more than a minute after it was signed", async () => {
@@ -75,15 +68,103 @@ describe("the checks, on 0x's recorded quotes, as BrainChain's sandbox runs them
     expect(output).toContain("which is not the Settler 0x's registry named; the registry was read at block 119510000, not at the quote's block 119510614");
   });
 
-  it("fail a fee added to the request, which also breaks 0x's signature over it", async () => {
-    const { quote } = recorded("inside");
-    const query = `${quote.request.query}&swapFeeRecipient=0x000000000000000000000000000000000000dEaD&swapFeeBps=25`;
-    expect(await check("inside", { quote: { request: { ...quote.request, query } } }).then((c) => c.failed)).toEqual(["signature", "fees"]);
+  it("read a zero previous Settler as none, and never count the zero address as a Settler", async () => {
+    const { registry } = recorded("inside");
+    expect(await check("inside", { registry: { previous: "0x0000000000000000000000000000000000000000" } }).then((c) => c.failed)).toEqual([]);
+    expect(await check("inside", { registry: { settler: "0x0000000000000000000000000000000000000000", previous: registry.previous } }).then((c) => c.failed)).toEqual(["contract"]);
   });
 
-  it("refuse a delivery that is missing a field, with the field named", async () => {
-    const { output, run } = await check("inside", { result: (r) => r.replace(/ {8}"signature": "sig=:[^"]+",\n/, "") });
+  it("fail a fee added to the request by its name, which also breaks 0x's signature over it", async () => {
+    const { quote } = recorded("inside");
+    const query = `${quote.request.query}&swapFeeRecipient=0x000000000000000000000000000000000000dEaD&swapFeeBps=25`;
+    const { failed, output } = await check("inside", { quote: { request: { ...quote.request, query } } });
+    expect(failed).toEqual(["signature", "query", "fees"]);
+    expect(output).toContain("FAIL  query: it asks for swapFeeRecipient, which the checks do not allow; it asks for swapFeeBps, which the checks do not allow");
+  });
+});
+
+describe("the request's query, read strictly by both sides", { timeout: 60_000 }, () => {
+  const queries = [
+    recorded("inside").quote.request.query,
+    "?chainId=4663&chainId=8453&sellToken=0x1&buyToken=0x2&sellAmount=1&taker=0x3",
+    "?chainId=4663&sellToken=0x1&buyToken=0x2&sellAmount=1&taker=0x%33",
+    "?chainId=4663&sellToken=0x1&buyToken=0x2&sellAmount=1&taker=0x3&recipient=0x4",
+    "?chainId=4663&sellToken=0x1&buyToken=0x2&sellAmount=1",
+    "chainId=4663",
+    "?chainId=4663&&sellToken=0x1&buyToken=0x2&sellAmount=1&taker=0x3",
+  ];
+
+  it("gives the same values and problems in the client and in the checks", async () => {
+    const definitions = checksFor(MANDATE).split("\n_run(")[0];
+    const code = `${definitions}\nimport json as __j\nfor __q in ${JSON.stringify(queries)}:\n    __v, __n, __p = _query(__q)\n    print(__j.dumps({"values": __v, "problems": __p}))`;
+    const run = await runLocally({ result: "```python\nDELIVERY = \"\"\n```", checks: { language: "python", code } });
+    expect(run.outcome).toBe("passed");
+    const python = run.output.trim().split("\n").map((line) => JSON.parse(line));
+    expect(python).toEqual(queries.map((q) => ({ values: parseQuery(q).values, problems: parseQuery(q).problems })));
+    expect(python[1].problems).toEqual(["it names chainId twice"]);
+    expect(python[2].problems).toEqual(["'taker=0x%33' is not a name=value pair of letters and digits", "it has no taker"]);
+  });
+});
+
+describe("the delivery, which is data and nothing else", { timeout: 60_000 }, () => {
+  it("is one line assigning one base64 string to DELIVERY, holding the quote byte for byte", () => {
+    for (const name of ["inside", "native", "outside", "minimum", "size", "tampered"]) {
+      const { trade, quote, registry } = recorded(name);
+      const blocks = pythonBlocks(pretradeCheck({ quote, registry, mandate: MANDATE, trade }).result);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]).toMatch(DELIVERY_FORM);
+      const json = Buffer.from(/"(.*)"/.exec(blocks[0]!)![1]!, "base64").toString("utf8");
+      expect(JSON.parse(json).response.body).toBe(quote.response.body);
+    }
+  });
+
+  it.each([
+    ["a dict", 'DELIVERY = {"request": {}}', "DELIVERY is a dict, not a string"],
+    ["missing", "OTHER = 1", "DELIVERY is missing, not a string"],
+    ["not base64", 'DELIVERY = "not base64!"', "DELIVERY is not base64 of JSON"],
+    ["not JSON", `DELIVERY = "${b64("{")}"`, "DELIVERY is not base64 of JSON"],
+    ["a key twice", `DELIVERY = "${b64('{"request": 1, "request": 2}')}"`, "DELIVERY is not base64 of JSON: 'request' appears twice"],
+    ["NaN", `DELIVERY = "${b64('{"receivedAt": NaN}')}"`, "DELIVERY is not base64 of JSON: NaN is not JSON"],
+  ])("fails a DELIVERY that is %s", async (_case, code, why) => {
+    const { run, output } = await check("inside", { result: block(code) });
     expect(run.outcome).toBe("failed");
-    expect(output).toContain("FAIL  delivery: DELIVERY['response'] has no 'signature'");
+    expect(output).toContain(`FAIL  delivery: ${why}`);
+  });
+
+  it("fails a delivery with a field missing or one the checks do not read, naming it", async () => {
+    const { quote, registry } = recorded("inside");
+    const delivery = JSON.parse(deliveryJson(quote, registry));
+    const without = structuredClone(delivery);
+    delete without.response.signature;
+    expect((await check("inside", { result: block(`DELIVERY = "${b64(JSON.stringify(without))}"`) })).output).toContain("FAIL  delivery: DELIVERY['response'] has no 'signature'");
+    const extra = { ...delivery, note: "x" };
+    expect((await check("inside", { result: block(`DELIVERY = "${b64(JSON.stringify(extra))}"`) })).output).toContain("FAIL  delivery: DELIVERY has 'note', which the checks do not read");
+  });
+
+  // The review's first bypass served the signature check the genuine body and the rules a forged one from a dict
+  // subclass. The checks now read only a string, so no object of the delivery's is ever indexed.
+  it("fails the review's dict-subclass delivery before any of its reads", async () => {
+    const { quote, registry } = recorded("inside");
+    const code = [
+      "class Served(dict):",
+      "    def __getitem__(self, key):",
+      "        return dict.__getitem__(self, key)",
+      `DELIVERY = Served(__import__("json").loads(__import__("base64").b64decode("${b64(deliveryJson(quote, registry))}")))`,
+    ].join("\n");
+    const { run, output } = await check("inside", { result: block(code) });
+    expect(run.outcome).toBe("failed");
+    expect(output).toContain("FAIL  delivery: DELIVERY is a Served, not a string");
+  });
+
+  // The second patched hashlib through a dunder name, which the old namespace rule skipped. Code that runs first can
+  // do that to any module, so this run passes: the guarantee is verify's, which refuses the block for not being data.
+  it("passes the review's sha512 bypass in the run itself, which is why verify reads the block", async () => {
+    const { quote, registry } = recorded("inside");
+    const forged = forgedSignature(tamperRoute(quote));
+    const { run, failed } = await check("inside", { result: block(sha512Bypass(deliveryCode(forged, registry))) });
+    expect(failed).toEqual([]);
+    expect(run.outcome).toBe("passed");
+    const honest = await check("inside", { quote: forged });
+    expect(honest.failed).toEqual(["signature"]);
   });
 });

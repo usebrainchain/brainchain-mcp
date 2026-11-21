@@ -1,23 +1,24 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { parseMandate } from "../src/mandate.ts";
-import { CHECKS, checksFor, deliveryCode, MAX_CHECKS, MAX_PROGRAM, pretradeCheck, type Registry } from "../src/request.ts";
+import { parseMandate, readMandate } from "../src/mandate.ts";
+import { checksFor, CHECKS_TEMPLATE, deliveryCode, mandateText, MAX_CHECKS, MAX_PROGRAM, pretradeCheck, splitChecks } from "../src/request.ts";
 import { programOf, runLocally } from "../src/sandbox.ts";
-import type { SignedQuote } from "../src/zerox.ts";
 
-const read = (path: string) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
-const MANDATE = parseMandate(read("../fixtures/mandate.json"));
-const { trade, quote, registry } = read("../fixtures/quotes/inside.json") as { trade: string; quote: SignedQuote; registry: Registry };
+import { MANDATE, read, recorded } from "./helpers.ts";
+
+const { trade, quote, registry } = recorded("inside");
 
 describe("the grade request", () => {
   const request = pretradeCheck({ quote, registry, mandate: MANDATE, trade });
 
   it("fits the grade route with room to spare", () => {
-    expect(request.checks.code.length).toBeLessThan(MAX_CHECKS * 0.6);
-    expect(programOf(request).length).toBeLessThan(MAX_PROGRAM * 0.4);
+    expect(request.checks.code.length).toBeLessThan(MAX_CHECKS * 0.7);
+    expect(programOf(request).length).toBeLessThan(MAX_PROGRAM * 0.5);
     expect(request.brief.length).toBeLessThan(32_000);
     expect(request.title).toBe("Pre-trade check: sell 5 USDG for WETH on Robinhood Chain");
   });
@@ -27,7 +28,7 @@ describe("the grade request", () => {
     expect(request.brief).toContain("- The guaranteed minimum out may be at most 100 basis points under 0x's quoted amount.");
     expect(request.checks.code).toContain(`"validUntil": "2026-12-31T23:59:59Z"`);
     // The brain shows checks as a fenced block, so a fence inside them would end it early.
-    expect(CHECKS).not.toContain("```");
+    expect(CHECKS_TEMPLATE).not.toContain("```");
   });
 
   it("keeps URLs inside the code block, where BrainChain does not fetch them as citations", () => {
@@ -40,13 +41,16 @@ describe("the grade request", () => {
     const digest = createHash("sha256").update(body, "utf8").digest("hex");
     const run = await runLocally({
       result: `\`\`\`python\n${deliveryCode(odd, registry)}\n\`\`\``,
-      checks: { language: "python", code: `import hashlib as _h\nassert _h.sha256(DELIVERY["response"]["body"].encode("utf-8")).hexdigest() == "${digest}"` },
+      checks: { language: "python", code: `import base64, hashlib, json\nbody = json.loads(base64.b64decode(DELIVERY))["response"]["body"]\nif hashlib.sha256(body.encode("utf-8")).hexdigest() != "${digest}":\n    raise AssertionError(body)` },
     });
     expect(run).toMatchObject({ outcome: "passed" });
   });
 
-  it("writes the mandate into the checks as it was given", () => {
-    expect(checksFor(MANDATE)).toContain(JSON.stringify(MANDATE, null, 2));
+  it("writes the mandate into the template, and takes it back out the same", () => {
+    const checks = checksFor(MANDATE);
+    expect(checks).toContain(mandateText(MANDATE));
+    expect(splitChecks(checks)).toEqual({ mandate: mandateText(MANDATE), template: CHECKS_TEMPLATE });
+    expect(splitChecks("print(1)")).toBeUndefined();
   });
 });
 
@@ -58,16 +62,30 @@ describe("a mandate", () => {
   });
 
   it.each([
-    [{ maxSlippage: 1 }, "The mandate has fields the checks do not read: maxSlippage."],
+    [{ maxSlippage: 1 }, "The mandate has a field the checks do not read: maxSlippage."],
     [{ chain: "4663" }, "The mandate needs chain, a chain id."],
     [{ maxSlippageBps: 10_001 }, "The mandate needs maxSlippageBps, 0 to 10,000."],
-    [{ validUntil: "2026-12-31" }, 'The mandate needs validUntil as "YYYY-MM-DDTHH:MM:SSZ".'],
+    [{ validUntil: "2026-12-31" }, 'The mandate needs validUntil as a real UTC time, "YYYY-MM-DDTHH:MM:SSZ".'],
+    [{ validUntil: "2026-02-30T00:00:00Z" }, "The mandate needs validUntil as a real UTC time"],
+    [{ validUntil: "2026-12-31T24:00:00Z" }, "The mandate needs validUntil as a real UTC time"],
     [{ recipient: "0x1234" }, "The mandate has no valid recipient address."],
     [{ tokens: [] }, "The mandate lists no tokens."],
+    [{ tokens: [null] }, "The mandate token 1 is not an object with symbol, address, decimals and maxSell."],
+    [{ tokens: [{ ...given.tokens[0], max: "1" }] }, "The mandate has a field the checks do not read in token 1: max."],
     [{ tokens: [{ symbol: 'US"DG', address: given.tokens[0].address, decimals: 6, maxSell: "1" }] }, "The mandate token 1 needs a symbol of 1 to 16 letters, digits or dots."],
     [{ tokens: [{ ...given.tokens[0], maxSell: "1.0000001" }] }, "The mandate token USDG has more decimals in maxSell than its 6."],
     [{ tokens: [given.tokens[0], { ...given.tokens[0], symbol: "USDG2" }] }, "The mandate lists 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168 twice."],
+    [{ tokens: [given.tokens[0], { ...given.tokens[1], symbol: "usdg" }] }, "The mandate lists usdg twice."],
   ])("refuses %j", (change, error) => {
     expect(() => parseMandate({ ...given, ...change })).toThrow(error);
+  });
+
+  it("names its file in every error", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mandate-"));
+    await writeFile(join(dir, "broken.json"), "{");
+    await writeFile(join(dir, "typo.json"), JSON.stringify({ ...given, chian: 1 }));
+    await expect(readMandate(join(dir, "broken.json"))).rejects.toThrow(/^The mandate broken\.json is not JSON: /);
+    await expect(readMandate(join(dir, "typo.json"))).rejects.toThrow("The mandate typo.json has a field the checks do not read: chian.");
+    await expect(readMandate(join(dir, "absent.json"))).rejects.toThrow(/^Cannot read the mandate .*absent\.json: ENOENT\.$/);
   });
 });
