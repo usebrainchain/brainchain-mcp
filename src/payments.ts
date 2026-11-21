@@ -8,6 +8,7 @@ import { createLimits, type Hold, type Limits } from "./limits.js";
 import type { Desk, GradeRequest, TaskRequest } from "./tools.js";
 
 const BUDGET_REASON = "budget";
+const CANCELLED = "cancelled";
 const DAILY_REASON = "daily limit";
 /** A result longer than this is cut, with a link to the rest. */
 export const RESULT_LIMIT = 20_000;
@@ -185,13 +186,20 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
   }
 
+  /**
+   * Whether an authorization for these terms ends within the cap. The terms are decoded without a schema, and x402 adds
+   * the lifetime to the current time: a string "600" would pass a plain comparison and then be appended as digits.
+   */
+  const brief = (r: { maxTimeoutSeconds: unknown }): boolean =>
+    Number.isSafeInteger(r.maxTimeoutSeconds) && (r.maxTimeoutSeconds as number) > 0 && (r.maxTimeoutSeconds as number) <= MAX_TIMEOUT_SECONDS;
+
   /** What the desk asked that this server will not sign, named by the condition that failed. */
   function refusedTerms(requirements: readonly { payTo: string; maxTimeoutSeconds: number }[]): string {
     const payee = requirements.some((r) => sameAddress(r.payTo, config.payTo));
-    const brief = requirements.some((r) => r.maxTimeoutSeconds <= MAX_TIMEOUT_SECONDS);
+    const short = requirements.some(brief);
     const check = "Check BRAINCHAIN_NETWORK and BRAINCHAIN_PAY_ON, or set BRAINCHAIN_PAY_TO for a custom BRAINCHAIN_DESK_URL.";
-    if (!payee && brief) return `it named ${requirements[0]!.payTo} as the payee, and this server pays only ${config.payTo}. ${check}`;
-    if (payee && !brief) return `it asked for an authorization that lasts ${Math.min(...requirements.map((r) => r.maxTimeoutSeconds))} seconds, and this server signs none for longer than ${MAX_TIMEOUT_SECONDS}.`;
+    if (!payee && short) return `it named ${requirements[0]!.payTo} as the payee, and this server pays only ${config.payTo}. ${check}`;
+    if (payee && !short) return `it asked for an authorization that lasts ${requirements.map((r) => JSON.stringify(r.maxTimeoutSeconds)).join(" or ")} seconds, and this server signs none for longer than ${MAX_TIMEOUT_SECONDS}.`;
     return `the payee must be ${config.payTo} and the authorization may last at most ${MAX_TIMEOUT_SECONDS} seconds. ${check}`;
   }
 
@@ -284,19 +292,19 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   }
 
   /** An agent that retries a post it gave up waiting on gets the first order back instead of paying twice. */
-  function post(task: TaskRequest): Promise<unknown> {
+  function post(task: TaskRequest, signal?: AbortSignal): Promise<unknown> {
     const now = Date.now();
     for (const [key, entry] of recent) if (now - entry.at >= REPOST_AFTER_MINUTES * 60_000) recent.delete(key);
     const key = canonicalStringify({ network: config.network, title: task.title, brief: task.brief, levels: task.levels });
-    return once(key, now, () => pay("task", task), "task");
+    return once(key, now, () => pay("task", task, signal), "task");
   }
 
   /** As post, for a grade: an identical request within the window returns the first grade instead of paying again. */
-  function grade(request: GradeRequest): Promise<unknown> {
+  function grade(request: GradeRequest, signal?: AbortSignal): Promise<unknown> {
     const now = Date.now();
     for (const [key, entry] of recent) if (now - entry.at >= REPOST_AFTER_MINUTES * 60_000) recent.delete(key);
     const key = canonicalStringify({ kind: "grade", network: config.network, ...request });
-    return once(key, now, () => pay("grade", request), "grade");
+    return once(key, now, () => pay("grade", request, signal), "grade");
   }
 
   function once(key: string, now: number, send: () => Promise<unknown>, kind: Kind): Promise<unknown> {
@@ -317,8 +325,15 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     return entry.reply;
   }
 
-  async function pay(kind: Kind, body: TaskRequest | GradeRequest): Promise<unknown> {
+  /**
+   * `signal` is the caller's: once it aborts, nothing more is signed. A payment
+   * already signed is followed to its end, since stopping it then could leave it
+   * charged with no order to show for it.
+   */
+  async function pay(kind: Kind, body: TaskRequest | GradeRequest, signal?: AbortSignal): Promise<unknown> {
     const url = kind === "task" ? endpoint : gradesEndpoint;
+    const withdrawn = `The call was cancelled before any payment was signed, so nothing was ${kind === "task" ? "posted" : "graded"}. Nothing was charged.`;
+    if (signal?.aborted) throw new Error(withdrawn);
     let signed: { payload: unknown } | undefined;
     let hold: Hold | undefined;
     let refused: string | undefined;
@@ -340,7 +355,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       policies: [
         (_version, requirements) => {
           const kept = requirements.filter(
-            (r) => r.network === config.network && sameAddress(r.asset, config.asset) && sameAddress(r.payTo, config.payTo) && r.maxTimeoutSeconds <= MAX_TIMEOUT_SECONDS,
+            (r) => r.network === config.network && sameAddress(r.asset, config.asset) && sameAddress(r.payTo, config.payTo) && brief(r),
           );
           if (kept.length === 0) refused = refusedTerms(requirements);
           return kept;
@@ -351,6 +366,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     // signed, so parallel calls cannot overshoot either. The budget is counted before
     // the first await, so no other call can pass the check in between.
     client.onBeforePaymentCreation(async ({ selectedRequirements }) => {
+      if (signal?.aborted) return { abort: true, reason: CANCELLED };
       const taken = await limits.take(BigInt(selectedRequirements.amount));
       if (typeof taken === "string") return { abort: true, reason: taken };
       hold = taken;
@@ -369,6 +385,11 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const deadline = new AbortController();
     const timer = setTimeout(() => deadline.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError")), options.postTimeoutMs ?? 45_000);
     const timed: typeof fetch = (input, init) => fetchImpl(input, { ...init, signal: deadline.signal });
+    // A cancel before signing ends the wait for the desk's terms too.
+    const cancel = () => {
+      if (!signed && !hold) deadline.abort(signal?.reason);
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
     let response: Response;
     try {
       response = await wrapFetchWithPayment(timed, client)(url, {
@@ -378,9 +399,15 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       });
     } catch (error) {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
       if (signed) return possiblyCharged(kind, receipt(orderIdOf(signed)), `The desk did not confirm the ${kind === "task" ? "order" : "grade"} (${firstLine(error)}).`);
+      if (signal?.aborted) {
+        await unreserve();
+        throw new Error(withdrawn);
+      }
       throw new Error(await explainUnsigned(kind, error, refused));
     }
+    signal?.removeEventListener("abort", cancel);
     // A desk or proxy can send its headers and then stall, so the deadline holds until the body is read.
     const reply = (await until(deadline.signal, jsonObject(response)).catch(() => undefined)) ?? {};
     clearTimeout(timer);
