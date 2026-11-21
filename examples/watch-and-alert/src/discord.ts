@@ -31,7 +31,9 @@ async function watch(): Promise<void> {
 }
 
 async function remove(): Promise<void> {
-  const { id, manageToken } = JSON.parse(await readFile(SAVED, "utf8")) as Record<string, string>;
+  const saved = await readFile(SAVED, "utf8").catch(() => undefined);
+  if (!saved) throw new Error(`${SAVED} holds no watch, so there is none to remove.`);
+  const { id, manageToken } = JSON.parse(saved) as Record<string, string>;
   await call("brainchain_unwatch", { id, manageToken });
   await rm(SAVED);
   console.log(`Watch ${id} removed. Nothing more goes to the channel.`);
