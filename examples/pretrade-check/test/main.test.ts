@@ -3,16 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { beforeAll, describe, expect, it } from "vitest";
-import { createPublicClient, custom, encodeFunctionResult, numberToHex, parseAbi, type Hex } from "viem";
+import { encodeFunctionData, erc20Abi } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 import { DEFAULT_DESK, GRADE_PAYMENT, gradeId, type Verdict } from "../src/desk.ts";
-import { describeTrade, distrust, Refusal, report, run, toSign, tradeOf, unfillable, type Io } from "../src/main.ts";
+import { describeTrade, distrust, loadAccount, Refusal, report, run, toSign, tradeOf, unfillable, type Io } from "../src/main.ts";
 import { CHECKS_TEMPLATE, mandateText, pretradeCheck, sha256 } from "../src/request.ts";
 import { runLocally, type Run } from "../src/sandbox.ts";
 import { GATEWAY, quoteQuery, type SignedQuote } from "../src/zerox.ts";
 
-import { MANDATE, MANDATE_FILE, read, recorded, recordOf } from "./helpers.ts";
+import { USDC_BASE } from "../src/preflight.ts";
+
+import { MANDATE, MANDATE_FILE, node, read, recorded, recordOf } from "./helpers.ts";
 
 const { trade, quote, registry } = recorded("inside");
 const measured = read("../measured.json") as { runs: ({ case: string } & Verdict)[] };
@@ -76,23 +78,34 @@ describe("after the verdict", () => {
     return { ...quote, response: { ...quote.response, body: JSON.stringify(copy) } };
   };
 
-  it("gives the approval and the transaction 0x quoted, unchanged", () => {
-    expect(toSign(quote)).toEqual({
-      approve: { token: body.sellToken, spender: "0x0000000000001fF3684f28c67538d4D072C22734", amount: "5000000" },
-      transaction: { to: body.transaction.to, data: body.transaction.data, value: "0", gas: body.transaction.gas, gasPrice: body.transaction.gasPrice },
-    });
+  it("gives the approval for exactly the amount sold, and the transaction 0x quoted, each ready to sign on the mandate's chain", () => {
+    const { approve, transaction } = toSign(quote, 4663);
+    expect(approve).toEqual({ to: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: ["0x0000000000001fF3684f28c67538d4D072C22734", 5_000_000n] }), value: "0", chainId: 4663 });
+    expect(transaction).toEqual({ to: body.transaction.to, data: body.transaction.data, value: "0", gas: body.transaction.gas, gasPrice: body.transaction.gasPrice, chainId: 4663 });
+    expect(toSign(recorded("native").quote, 4663).approve).toBeUndefined();
   });
 
-  it("refuses an approval to anyone but AllowanceHolder, and gas over its cap", () => {
-    expect(() => toSign(withBody((b) => (b.issues.allowance.spender = "0x000000000000000000000000000000000000dEaD")))).toThrow("0x asks for an approval to 0x000000000000000000000000000000000000dEaD, not to AllowanceHolder");
-    expect(() => toSign(withBody((b) => (b.transaction.gasPrice = "1000000000000")))).toThrow("The transaction may cost 0.254397 ETH in gas, over this client's 0.0001. Ask for a new quote.");
+  it("refuses an approval to anyone but AllowanceHolder, and gas over its cap, as errors rather than refusals by the mandate", () => {
+    const spender = (() => {
+      try {
+        toSign(withBody((b) => (b.issues.allowance.spender = "0x000000000000000000000000000000000000dEaD")), 4663);
+      } catch (error) {
+        return error as Error;
+      }
+    })();
+    expect(spender?.message).toContain("0x asks for an approval to 0x000000000000000000000000000000000000dEaD, not to AllowanceHolder");
+    expect(spender).not.toBeInstanceOf(Refusal);
+    expect(() => toSign(withBody((b) => (b.transaction.gasPrice = "1000000000000")), 4663)).toThrow("The transaction may cost 0.254397 ETH in gas, over this client's 0.0001. Ask for a new quote.");
   });
 
-  it("names the rules a refused trade broke", () => {
+  it("shows the trade and every rule as BrainChain's run printed them", () => {
     const refused = measured.runs.find((r) => r.case === "outside")!;
     const lines = report({ ...refused, status: "" });
     expect(lines[0]).toMatch(/^Refused: pass probability 0%, bar 80%/);
-    expect(lines).toContain("FAIL  tokens: sells USDG; buys 0x42b96dbc55e79e930d866c1ee486a342366546bc, which the mandate does not list");
+    expect(lines[1]).toBe("Checks: failed (AssertionError: the trade breaks the mandate: tokens). BrainChain's run printed:");
+    expect(lines[2]).toMatch(/^ {2}Trade: sell 5 USDG for at least 12220843171422880017856 base units/);
+    expect(lines).toContain("  FAIL  tokens: sells USDG; buys 0x42b96dbc55e79e930d866c1ee486a342366546bc, which the mandate does not list");
+    expect(lines).toContain("  11 of 12 rules pass; failed: tokens.");
   });
 
   it("does not call checks unrun when only the record holds what they printed", () => {
@@ -135,16 +148,9 @@ describe("the command line's exit codes", { timeout: 90_000 }, () => {
   // The mandate's address, so 0x's recorded signature over the recorded query still verifies. Nothing here checks
   // the payments it signs.
   const account = { ...privateKeyToAccount(generatePrivateKey()), address: MANDATE.wallet };
-  const abi = parseAbi(["function ownerOf(uint256) view returns (address)", "function prev(uint128) view returns (address)"]);
-  const client = createPublicClient({
-    transport: custom({
-      async request({ method, params }: { method: string; params: unknown[] }) {
-        if (method === "eth_blockNumber") return numberToHex(registry.block);
-        const { data } = params[0] as { data: Hex };
-        return data.startsWith("0x6352211e") ? encodeFunctionResult({ abi, functionName: "ownerOf", result: registry.settler }) : encodeFunctionResult({ abi, functionName: "prev", result: registry.previous });
-      },
-    }),
-  });
+  const tokens = { "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168": { decimals: 6, symbol: "USDG", balanceOf: 21_639_954n }, "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73": { decimals: 18, symbol: "WETH" } };
+  const robinhood = node({ ...tokens, "0x00000000000004533Fe15556B1E086BB1A72cEae": { ownerOf: registry.settler, prev: registry.previous } }, { block: registry.block });
+  const base = (usdc: bigint) => node({ [USDC_BASE]: { balanceOf: usdc } });
   const challenge = (accepts: Record<string, unknown>[]) => ({ "payment-required": Buffer.from(JSON.stringify({ x402Version: 2, resource: { url: "https://x.test/" }, accepts })).toString("base64") });
   const usdc = { scheme: "exact", network: "eip155:8453", asset: GRADE_PAYMENT.asset, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
   let local: Run;
@@ -153,7 +159,7 @@ describe("the command line's exit codes", { timeout: 90_000 }, () => {
   }, 60_000);
 
   /** 0x's gateway answering with the recorded quote, and a desk answering the paid grade with `grade`. */
-  function setup(grade: (id: string) => Response, extra: Record<string, () => Response> = {}) {
+  function setup(grade: (id: string) => Response, options: { extra?: Record<string, () => Response>; usdc?: bigint; chain?: typeof robinhood } = {}) {
     const calls: string[] = [];
     const lines: string[] = [];
     const errors: string[] = [];
@@ -172,10 +178,19 @@ describe("the command line's exit codes", { timeout: 90_000 }, () => {
         const header = (init.headers as Record<string, string>)["PAYMENT-SIGNATURE"]!;
         return grade(gradeId(JSON.parse(Buffer.from(header, "base64").toString("utf8")).payload));
       }
-      const route = extra[url];
+      const route = options.extra?.[url];
       return route ? route() : new Response("{}", { status: 404 });
     }) as typeof fetch;
-    const io: Io = { log: (l) => lines.push(l), error: (l) => errors.push(l), fetch: fetchImpl, now: () => quote.receivedAt * 1000, env: {}, connect: async () => client, account: async () => account, pollMs: 1 };
+    const io: Io = {
+      log: (l) => lines.push(l),
+      error: (l) => errors.push(l),
+      fetch: fetchImpl,
+      now: () => quote.receivedAt * 1000,
+      env: {},
+      connect: async (chainId) => (chainId === 8453 ? base(options.usdc ?? 1_000_000n) : (options.chain ?? robinhood)),
+      account: async () => account,
+      pollMs: 1,
+    };
     return { io, calls, lines, errors, out: () => lines.join("\n") };
   }
   const paidArgs = ["--mandate", MANDATE_FILE, "--sell", "USDG", "--buy", "WETH", "--amount", "5", "--slippage-bps", "50"];
@@ -190,21 +205,31 @@ describe("the command line's exit codes", { timeout: 90_000 }, () => {
     decision: { id: "2001", record: `${DEFAULT_DESK}/records/0x${"0".repeat(64)}.json` },
     ...extra,
   });
+  const mandateFile = async (name: string, change: object) => {
+    const dir = await mkdtemp(join(tmpdir(), "mandate-"));
+    await writeFile(join(dir, name), JSON.stringify({ ...MANDATE, ...change }));
+    return join(dir, name);
+  };
 
-  it("exits 0 with the transaction for an acceptance it can trust", async () => {
+  it("exits 0 with the trade as BrainChain's run printed it, and both transactions ready to sign", async () => {
     const s = setup((id) => Response.json(view(id)));
     expect(await run(paidArgs, s.io)).toBe(0);
-    expect(s.out()).toContain(`Checks template SHA-256 ${sha256(CHECKS_TEMPLATE)}, mandate SHA-256 ${sha256(mandateText(MANDATE))}.`);
-    expect(s.out()).toContain("Checks: passed, 13 of 13 rules pass.");
-    expect(s.out()).toContain("First approve 0x0000000000001fF3684f28c67538d4D072C22734 (AllowanceHolder) to spend 5000000 base units");
-    expect(s.out()).toContain("The transaction to sign on Robinhood Chain");
+    expect(s.out()).toContain(`ok    checks: 19,818 characters of the grade route's 32,000; template SHA-256 ${sha256(CHECKS_TEMPLATE)}, mandate SHA-256 ${sha256(mandateText(MANDATE))}`);
+    expect(s.out()).toContain("ok    tokens: as on chain: USDG, 6 decimals; WETH, 18 decimals; ETH, the native token, 18 decimals");
+    expect(s.out()).toContain("ok    funds: 0xd937E50Ee21E66f7640F1a7887399e63055290fe holds 1 USDC on Base, enough for 3 checks");
+    expect(s.out()).toContain("Checks: passed. BrainChain's run printed:\n  Trade: sell 5 USDG for at least 0.003072049707352334 WETH (0x quoted 0.003087487143067672 WETH)");
+    expect(s.out()).toContain("  pass  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe\n  pass  fees: no fee but 0x's own\n");
+    expect(s.out()).toContain("  13 of 13 rules pass.");
+    expect(s.out()).toContain(`First sign this approval, which lets AllowanceHolder take exactly 5 USDG for this trade:\n${JSON.stringify(toSign(quote, 4663).approve, null, 2)}`);
+    expect(s.out()).toContain('Then sign the trade on Robinhood Chain, from 0xd937E50Ee21E66f7640F1a7887399e63055290fe.');
+    expect(s.out()).toContain('  "chainId": 4663\n}');
     expect(s.errors).toEqual([]);
   });
 
   it("exits 0 for an acceptance read later, with what the checks printed taken from the record", async () => {
     const request = pretradeCheck({ quote, registry, mandate: MANDATE, trade });
     const record = recordOf(request, local);
-    const s = setup((id) => Response.json({ grade: id, state: "paid", status: `${DEFAULT_DESK}/x402/grades/${id}` }, { status: 202 }), { [record.url]: () => new Response(record.bytes) });
+    const s = setup((id) => Response.json({ grade: id, state: "paid", status: `${DEFAULT_DESK}/x402/grades/${id}` }, { status: 202 }), { extra: { [record.url]: () => new Response(record.bytes) } });
     const status = `${DEFAULT_DESK}/x402/grades/`;
     const polled = s.io.fetch;
     s.io.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -213,55 +238,127 @@ describe("the command line's exit codes", { timeout: 90_000 }, () => {
       return polled(input, init);
     }) as typeof fetch;
     expect(await run(paidArgs, s.io)).toBe(0);
-    expect(s.out()).toContain("The transaction to sign");
+    expect(s.out()).toContain("Then sign the trade");
   });
 
   it("exits 2 for a refusal, and prints no transaction", async () => {
     const s = setup((id) => Response.json(view(id, { accepted: false, passProbability: 0.1 })));
     expect(await run(paidArgs, s.io)).toBe(2);
     expect(s.out()).toContain("Do not sign this trade. Nothing was sent.");
-    expect(s.out()).not.toContain("The transaction to sign");
+    expect(s.out()).not.toContain("sign the trade on");
   });
 
   it("exits 1 for an acceptance it cannot trust", async () => {
     const s = setup((id) => Response.json(view(id, { checks: { language: "python", outcome: "passed", output: local.output.replace("pass  size", "pass  size (forged)") } })));
     expect(await run(paidArgs, s.io)).toBe(1);
     expect(s.errors[0]).toBe("BrainChain's acceptance cannot be acted on: BrainChain's run printed other rule lines than the run here. Do not sign this trade.");
-    expect(s.out()).not.toContain("The transaction to sign");
   });
 
-  it("exits 2 before paying anyone for what the inputs decide", async () => {
+  it("exits 2 before paying anyone for a trade the mandate refuses", async () => {
     const s = setup(() => Response.json({}));
     expect(await run(paidArgs.map((a) => (a === "5" ? "30" : a)), s.io)).toBe(2);
     expect(s.errors).toEqual(["The mandate lets one trade sell at most 25 USDG, not 30."]);
     expect(s.calls).toEqual([]);
   });
 
-  it("exits 2 before paying BrainChain when the checks fail here", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "mandate-"));
-    const file = join(dir, "elsewhere.json");
-    await writeFile(file, JSON.stringify({ ...MANDATE, recipient: "0x000000000000000000000000000000000000dEaD" }));
+  it("exits 2 for a mandate that has run out, naming its file", async () => {
+    const file = await mandateFile("old.json", { validUntil: "2026-11-01T00:00:00Z" });
     const s = setup(() => Response.json({}));
     expect(await run(paidArgs.map((a) => (a === MANDATE_FILE ? file : a)), s.io)).toBe(2);
-    expect(s.errors[0]).toContain("The checks refuse this trade here, before BrainChain is paid:\nFAIL  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe, not the mandate's recipient 0x000000000000000000000000000000000000dead\n0x was paid 0.01 USDC for the quote; nothing was paid to BrainChain.");
+    expect(s.errors).toEqual(["The mandate old.json ran out at 2026-11-01T00:00:00Z."]);
+  });
+
+  it("exits 2 before paying BrainChain when the checks fail here, showing the trade they read", async () => {
+    const file = await mandateFile("elsewhere.json", { recipient: "0x000000000000000000000000000000000000dEaD" });
+    const s = setup(() => Response.json({}));
+    expect(await run(paidArgs.map((a) => (a === MANDATE_FILE ? file : a)), s.io)).toBe(2);
+    expect(s.errors[0]).toMatch(/^The checks refuse this trade here, before BrainChain is paid:\nTrade: sell 5 USDG for at least/);
+    expect(s.errors[0]).toContain("\nFAIL  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe, not the mandate's recipient 0x000000000000000000000000000000000000dead\n12 of 13 rules pass; failed: recipient.\n0x was paid 0.01 USDC for the quote; nothing was paid to BrainChain.");
     expect(s.calls.filter((c) => c.includes("/x402/grades"))).toEqual([]);
+  });
+
+  it("exits 1 before paying anyone when the wallet's USDC on Base is short, or the chain contradicts the mandate", async () => {
+    const poor = setup(() => Response.json({}), { usdc: 200_000n });
+    expect(await run(paidArgs, poor.io)).toBe(1);
+    expect(poor.errors[0]).toContain("holds 0.2 USDC on Base, and a check takes 0.26: 0.01 to 0x and 0.25 to BrainChain. Add 0.06 USDC on Base.");
+    const odd = setup(() => Response.json({}), { chain: node({ ...tokens, "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73": { decimals: 8, symbol: "WETH" } }) });
+    expect(await run(paidArgs, odd.io)).toBe(1);
+    expect(odd.errors[0]).toBe("The mandate mandate.json gives WETH 18 decimals; the token at 0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73 on chain 4663 has 8.");
+    expect([...poor.calls, ...odd.calls]).toEqual([]);
   });
 
   it.each([
     [["--sell", "USDG", "--buy", "WETH", "--amount", "5"], "--mandate names the mandate file. A paid check never falls back to the sample mandate."],
+    [["--mandate", MANDATE_FILE, "--sell", "USDG", "--buy", "WETH", "--amount", "0"], "--amount must be more than 0."],
+    [["--mandate", MANDATE_FILE, "--sell", "USDG", "--buy", "usdg", "--amount", "5"], "--sell and --buy are both USDG."],
+    [["--mandate", MANDATE_FILE, "--sell", "USDG", "--buy", "WETH", "--amount", "5.0000001"], "--amount has more decimals than USDG's 6."],
     [["--sample", "--amount", "5"], "--sample checks the recorded quotes against the sample mandate, so it takes no --amount."],
     [["--quote"], "--quote goes with --sample."],
     [["--frobnicate"], "Unknown option '--frobnicate'"],
-  ])("exits 1 for %j", async (argv, message) => {
+  ])("exits 1 for malformed input %j", async (argv, message) => {
     const s = setup(() => Response.json({}));
     expect(await run(argv, s.io)).toBe(1);
     expect(s.errors[0]).toContain(message);
     expect(s.calls).toEqual([]);
   });
 
-  it("exits 0 for --help", async () => {
+  it.each([["--help"], ["-h"]])("exits 0 for %s", async (flag) => {
     const s = setup(() => Response.json({}));
-    expect(await run(["--help"], s.io)).toBe(0);
-    expect(s.out()).toContain("Exit codes: 0 accepted, with the transaction to sign; 2 refused, do not sign; 1 the check did not finish.");
+    expect(await run([flag], s.io)).toBe(0);
+    expect(s.out()).toContain("Exit codes: 0 accepted, with the transactions to sign; 2 the mandate refuses the trade, here or on BrainChain;");
+  });
+
+  it("names the key's variable when its file is missing", async () => {
+    await expect(loadAccount("/nowhere/agent.key")).rejects.toThrow("BRAINCHAIN_PAYER_KEY_FILE names /nowhere/agent.key, which does not exist.");
+  });
+});
+
+describe("a dry run", { timeout: 90_000 }, () => {
+  const tokens = { "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168": { decimals: 6, symbol: "USDG", balanceOf: 21_639_954n }, "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73": { decimals: 18, symbol: "WETH" } };
+  const offer = Buffer.from(JSON.stringify({ x402Version: 2, accepts: [{ network: "eip155:8453", asset: GRADE_PAYMENT.asset, amount: "250000" }, { network: "eip155:4663", asset: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", amount: "250000" }, { network: "eip155:4663", asset: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", amount: "250000" }] })).toString("base64");
+  function setup(route: () => Response = () => new Response("{}", { status: 402, headers: { "payment-required": offer } })) {
+    const lines: string[] = [];
+    const errors: string[] = [];
+    const calls: string[] = [];
+    const io: Io = {
+      log: (l) => lines.push(l),
+      error: (l) => errors.push(l),
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        calls.push(`${init?.method ?? "GET"} ${String(input)}${Object.keys((init?.headers as Record<string, string>) ?? {}).includes("PAYMENT-SIGNATURE") ? " paid" : ""}`);
+        return route();
+      }) as typeof fetch,
+      now: () => quote.receivedAt * 1000,
+      env: {},
+      connect: async (chainId) => (chainId === 8453 ? node({ [USDC_BASE]: { balanceOf: 300_000n } }) : node(tokens)),
+      account: async () => {
+        throw new Error("a dry run reads no key");
+      },
+    };
+    return { io, lines, errors, calls, out: () => lines.join("\n") };
+  }
+
+  it("checks everything free, with no key, pays nothing and exits 0", async () => {
+    const s = setup();
+    expect(await run(["--dry", "--mandate", MANDATE_FILE, "--sell", "USDG", "--buy", "WETH", "--amount", "5"], s.io)).toBe(0);
+    for (const step of ["mandate", "trade", "checks", "node", "tokens", "holds", "funds", "route"]) expect(s.out()).toMatch(new RegExp(`^ {2}ok {4}${step}: `, "m"));
+    expect(s.out()).toContain("ok    route: BrainChain's grade route takes the request, unpaid, for 0.25 USDC on Base, 0.25 USDG on Robinhood Chain");
+    expect(s.out()).toContain("  13 of 13 rules pass.");
+    expect(s.out()).toContain("Nothing was paid.");
+    expect(s.calls).toEqual([`POST ${DEFAULT_DESK}/x402/grades`]);
+    expect(s.errors).toEqual([]);
+  });
+
+  it("checks the mandate alone when no trade is given", async () => {
+    const s = setup();
+    expect(await run(["--dry", "--mandate", MANDATE_FILE], s.io)).toBe(0);
+    expect(s.out()).toContain("skip  trade: give --sell, --buy and --amount to check a trade too");
+  });
+
+  it("exits 2 for a trade the mandate refuses, and 1 when the route would not take the request", async () => {
+    const s = setup();
+    expect(await run(["--dry", "--mandate", MANDATE_FILE, "--sell", "USDG", "--buy", "WETH", "--amount", "26"], s.io)).toBe(2);
+    const closed = setup(() => Response.json({ error: "brief must be 1 to 32,000 characters." }, { status: 400 }));
+    expect(await run(["--dry", "--mandate", MANDATE_FILE], closed.io)).toBe(1);
+    expect(closed.errors[0]).toContain("BrainChain's grade route answered 400");
   });
 });

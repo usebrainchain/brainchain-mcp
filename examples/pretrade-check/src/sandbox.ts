@@ -55,3 +55,6 @@ export async function runLocally(request: Pick<GradeRequest, "result" | "checks"
 
 /** The lines a run printed for its rules, pass or FAIL, in order. */
 export const ruleLines = (output: string): string[] => output.split("\n").filter((line) => line.startsWith("pass  ") || line.startsWith("FAIL  "));
+
+/** What a run printed about the trade: its Trade line, one line per rule and the count. */
+export const runLines = (output: string): string[] => output.split("\n").filter((line) => line.startsWith("Trade: ") || line.startsWith("pass  ") || line.startsWith("FAIL  ") || / of \d+ rules pass/.test(line));
