@@ -1,11 +1,11 @@
 // Confirms a published pre-trade decision from its record: the delivered block was data and nothing else, the checks
 // were this version's with the given mandate, and run again here they give the outcome BrainChain published.
-// Run: node src/verify.ts <grade id or record URL> --mandate <file>
+// Run: node src/verify.ts <decision id, decision page, grade id or record URL> --mandate <file>
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { keccak256, toHex } from "viem";
+import { createPublicClient, http, keccak256, parseAbiItem, toHex, type PublicClient } from "viem";
 
 import { deskUrl, readGrade, type Verdict } from "./desk.ts";
 import { readMandate } from "./mandate.ts";
@@ -43,7 +43,47 @@ export function recordState(record: Record<string, unknown>): State | undefined 
 
 type Mark = "ok" | "FAIL" | "skip";
 
-export async function verify(target: string, mandateFile: string, io: { fetch: typeof fetch; log: (line: string) => void; desk: string }): Promise<number> {
+/** BrainChain's chain and the public node `npx brainchain-verify mainnet` reads it from. */
+export const BRAINCHAIN = { chainId: 274663, rpc: "https://rpc.usebrainchain.com" } as const;
+const RECORDED = parseAbiItem("event Recorded(uint256 indexed id, uint8 indexed kind, bytes32 indexed subject, bytes32 inputHash, bytes32 answer, uint16 confidenceBps, bytes32 payloadHash, string payloadURI)");
+
+export interface VerifyIo {
+  fetch: typeof fetch;
+  log: (line: string) => void;
+  desk: string;
+  /** A client for BrainChain's chain, to read a decision by its id. */
+  brainchain?: PublicClient;
+}
+
+/** A decision's number, from its id or its page's URL. */
+function decisionId(target: string): bigint | undefined {
+  if (/^\d+$/.test(target)) return BigInt(target);
+  const page = URL.canParse(target) ? new URL(target) : undefined;
+  if (!page || page.protocol !== "https:" || !["usebrainchain.com", "www.usebrainchain.com"].includes(page.hostname) || page.pathname !== "/decision") return undefined;
+  if (page.searchParams.has("set")) throw new Error("A decision page of an earlier contract set is read by its record's URL, which the page links.");
+  const id = page.searchParams.get("id") ?? "";
+  if (!/^\d+$/.test(id)) throw new Error(`${target} names no decision id.`);
+  return BigInt(id);
+}
+
+/**
+ * The record a decision names on chain: the payloadURI of its Recorded event on the DecisionLog the desk's
+ * network.json names as active, read from BrainChain's public node, as brainchain-verify reads it.
+ */
+async function recordOfDecision(id: bigint, io: VerifyIo): Promise<string> {
+  const response = await io.fetch(`${io.desk}/network.json`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
+  const active = response.ok ? ((await response.json()) as { manifest?: { activeSet?: { fromBlock?: number; contracts?: { DecisionLog?: `0x${string}` } } } }).manifest?.activeSet : undefined;
+  const log = active?.contracts?.DecisionLog;
+  if (!log || !Number.isSafeInteger(active.fromBlock)) throw new Error(`${io.desk}/network.json names no active DecisionLog.`);
+  const client = io.brainchain ?? createPublicClient({ transport: http(BRAINCHAIN.rpc, { timeout: 20_000 }) });
+  const chainId = await client.getChainId();
+  if (chainId !== BRAINCHAIN.chainId) throw new Error(`BrainChain's node answers for chain ${chainId}, not ${BRAINCHAIN.chainId}.`);
+  const [recorded] = await client.getLogs({ address: log, event: RECORDED, args: { id }, fromBlock: BigInt(active.fromBlock!), strict: true });
+  if (!recorded) throw new Error(`DecisionLog ${log}, BrainChain's current one, has no decision ${id}.`);
+  return recorded.args.payloadURI;
+}
+
+export async function verify(target: string, mandateFile: string, io: VerifyIo): Promise<number> {
   const mandate = await readMandate(mandateFile);
   const lines: [Mark, string][] = [];
   const line = (mark: Mark, text: string) => {
@@ -51,7 +91,8 @@ export async function verify(target: string, mandateFile: string, io: { fetch: t
     io.log(`  ${mark.padEnd(5)} ${text}`);
   };
 
-  let url = target;
+  const decision = decisionId(target);
+  let url = decision === undefined ? target : await recordOfDecision(decision, io);
   let view: Verdict | undefined;
   if (/^0x[0-9a-fA-F]{64}$/.test(target)) {
     view = await readGrade(target.toLowerCase(), { desk: io.desk, fetch: io.fetch });
@@ -59,7 +100,7 @@ export async function verify(target: string, mandateFile: string, io: { fetch: t
     url = view.decision.record;
   }
   const name = new RegExp(`^${io.desk.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/records/(0x[0-9a-f]{64})\\.json(?:#evidence=0x[0-9a-f]{64})?$`).exec(url)?.[1];
-  if (!name) throw new Error(`${url} is not a decision record on ${io.desk}: give a grade id or ${io.desk}/records/<hash>.json.`);
+  if (!name) throw new Error(`${url} is not a decision record on ${io.desk}: give a decision id, its page, a grade id or ${io.desk}/records/<hash>.json.`);
   const { bytes, record } = await fetchRecord(url, io.fetch);
   const state = recordState(record);
   if (record.kind !== "grade" || !state) throw new Error("The record is not a grade's.");
@@ -101,7 +142,10 @@ export async function verify(target: string, mandateFile: string, io: { fetch: t
   else if (parts && parts.template === CHECKS_TEMPLATE) line("ok", `checks: this version's, template SHA-256 ${template}`);
   else line("FAIL", `checks: not this version's: their template's SHA-256 is ${parts ? sha256(parts.template) : "unknown, as they carry no mandate"}, this version's ${template}`);
   if (parts && parts.mandate === ours) line("ok", `mandate: the checks carry the mandate in ${basename(mandateFile)}, SHA-256 ${sha256(ours)}`);
-  else if (published !== undefined) line("FAIL", `mandate: the checks carry ${parts ? `a mandate with SHA-256 ${sha256(parts.mandate)}` : "no mandate"}, not the one in ${basename(mandateFile)}, SHA-256 ${sha256(ours)}`);
+  else if (published !== undefined) {
+    const wallet = parts && /"wallet": "(0x[0-9a-fA-F]{40})"/.exec(parts.mandate)?.[1];
+    line("FAIL", `mandate: the checks carry ${parts ? `a mandate${wallet ? ` for wallet ${wallet}` : ""} with SHA-256 ${sha256(parts.mandate)}` : "no mandate"}, not the one in ${basename(mandateFile)}, SHA-256 ${sha256(ours)}`);
+  }
 
   // Only a program that is this version's checks after a block of data is run on this machine: anything else is code from the record.
   if (!pure || !canonical) line("skip", "rerun: skipped, as this machine runs only a block of data followed by this version's checks");
@@ -139,18 +183,28 @@ export async function verify(target: string, mandateFile: string, io: { fetch: t
   return failed.length > 0 ? 2 : skipped ? 1 : 0;
 }
 
-async function main(): Promise<number> {
+const USAGE = `npm run verify -- <target> --mandate <file>
+
+The target is a decision id such as 1004, its page (https://usebrainchain.com/decision?id=1004), a grade id or a
+decision record's URL. The mandate is the file the decision's checks should carry.
+
+Exit codes: 0 the record matches; 2 it does not, or is of the earlier form; 1 it could not be checked.`;
+
+/** The command line, as an exit code. */
+export async function cli(argv: string[], io: Omit<VerifyIo, "desk"> & { desk?: string; error: (line: string) => void } = { fetch, log: console.log, error: console.error }): Promise<number> {
   try {
-    const { values, positionals } = parseArgs({ options: { mandate: { type: "string" }, help: { type: "boolean" } }, allowPositionals: true });
-    if (values.help || positionals.length !== 1 || !values.mandate) {
-      console.log("npm run verify -- <grade id or record URL> --mandate <file>\n\nExit codes: 0 the record matches; 2 it does not; 1 it could not be checked.");
-      return values.help ? 0 : 1;
+    const { values, positionals } = parseArgs({ args: argv, options: { mandate: { type: "string" }, help: { type: "boolean", short: "h" } }, allowPositionals: true });
+    if (values.help) {
+      io.log(USAGE);
+      return 0;
     }
-    return await verify(positionals[0]!, values.mandate, { fetch, log: console.log, desk: deskUrl() });
+    if (positionals.length !== 1) throw new Error(`verify takes one decision id, decision page, grade id or record URL. See --help.`);
+    if (!values.mandate) throw new Error("verify needs --mandate <file>: the mandate the decision's checks should carry.");
+    return await verify(positionals[0]!, values.mandate, { ...io, desk: io.desk ?? deskUrl() });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    io.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) process.exitCode = await main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) process.exitCode = await cli(process.argv.slice(2));

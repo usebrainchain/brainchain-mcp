@@ -5,7 +5,9 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { DEFAULT_DESK } from "../src/desk.ts";
 import { checksFor, CHECKS_TEMPLATE, deliveryCode, pretradeCheck, sha256, type GradeRequest } from "../src/request.ts";
 import { runLocally, type Run } from "../src/sandbox.ts";
-import { verify } from "../src/verify.ts";
+import { createPublicClient, custom, encodeAbiParameters, encodeEventTopics, numberToHex, parseAbiItem, zeroHash, type Hex } from "viem";
+
+import { cli, verify } from "../src/verify.ts";
 
 import { forgedSignature, MANDATE, MANDATE_FILE, recorded, recordOf, serve, sha512Bypass, tamperRoute } from "./helpers.ts";
 
@@ -70,6 +72,68 @@ describe("verify, on the records of this version's paid runs", { timeout: 60_000
     expect(marks).toEqual({ grade: "ok", record: "skip", delivery: "skip", checks: "ok", mandate: "ok", rerun: "skip" });
     expect(out).toContain("Verdict: not verified.");
     expect(code).toBe(1);
+  });
+});
+
+describe("verify, given a decision by its id or its page", { timeout: 60_000 }, () => {
+  const LOG = "0x2EF509bd9cA1e7C5FBe2C2FD7Ff25cE9F6f9cB68";
+  const uri = "https://brain.usebrainchain.com/records/0x3541119e6ad75b81b449ea321aa250f7b785a11691e3016edbe66d0742cefff5.json#evidence=0x5c915944f9920c7ac33b2a16c0e89530efb0c4946d28b6c2b6fe321922bcb116";
+  const grade = "0x6f81a236fa37a14e0733ffd479b5502119a80d8e2a8ddd35250989f6e05e1f11";
+  const recorded = parseAbiItem("event Recorded(uint256 indexed id, uint8 indexed kind, bytes32 indexed subject, bytes32 inputHash, bytes32 answer, uint16 confidenceBps, bytes32 payloadHash, string payloadURI)");
+  const asked: unknown[] = [];
+  // BrainChain's chain with one decision on its DecisionLog, 1004.
+  const brainchain = createPublicClient({
+    transport: custom({
+      async request({ method, params }: { method: string; params: { address: string; topics: (Hex | null)[] }[] }) {
+        if (method === "eth_chainId") return numberToHex(274663);
+        if (method !== "eth_getLogs") throw new Error(method);
+        asked.push(params[0]);
+        const topics = encodeEventTopics({ abi: [recorded], eventName: "Recorded", args: { id: 1004n, kind: 3, subject: zeroHash } });
+        if (params[0]!.topics[1] !== topics[1]) return [];
+        const data = encodeAbiParameters([{ type: "bytes32" }, { type: "bytes32" }, { type: "uint16" }, { type: "bytes32" }, { type: "string" }], [zeroHash, zeroHash, 9800, "0x3541119e6ad75b81b449ea321aa250f7b785a11691e3016edbe66d0742cefff5", uri]);
+        return [{ address: LOG.toLowerCase(), topics, data, blockNumber: "0x400", blockHash: zeroHash, transactionHash: zeroHash, transactionIndex: "0x0", logIndex: "0x0", removed: false }];
+      },
+    }),
+  });
+  const routes = {
+    [`${DEFAULT_DESK}/network.json`]: () => Response.json({ manifest: { chainId: 274663, activeSet: { fromBlock: 965, contracts: { DecisionLog: LOG } } } }),
+    [`${DEFAULT_DESK}/x402/grades/${grade}`]: () => Response.json({ grade, state: "graded", accepted: true, passProbability: 0.98, decision: { id: "1004", record: uri } }),
+    [uri.split("#")[0]!]: () => new Response(stored("1004")),
+  };
+  const run = async (target: string) => {
+    const lines: string[] = [];
+    const code = await verify(target, MANDATE_FILE, { fetch: serve(routes), log: (l) => lines.push(l), desk: DEFAULT_DESK, brainchain });
+    return { code, out: lines.join("\n") };
+  };
+
+  it.each(["1004", "https://usebrainchain.com/decision?id=1004"])("reads %s from its Recorded event, as brainchain-verify does", async (target) => {
+    const { code, out } = await run(target);
+    expect(out).toContain("Decision 1004, grade 0x6f81a236fa37a14e0733ffd479b5502119a80d8e2a8ddd35250989f6e05e1f11: accepted at a pass probability of 98%");
+    expect(out).toContain("Verdict: match.");
+    expect(code).toBe(0);
+    expect(asked.at(-1)).toMatchObject({ address: LOG, fromBlock: numberToHex(965) });
+  });
+
+  it("says when the current DecisionLog has no such decision, or the page is of an earlier set", async () => {
+    await expect(run("99999")).rejects.toThrow(`DecisionLog ${LOG}, BrainChain's current one, has no decision 99999.`);
+    await expect(run("https://usebrainchain.com/decision?id=22&set=v3-1")).rejects.toThrow("A decision page of an earlier contract set is read by its record's URL");
+  });
+});
+
+describe("verify's command line", () => {
+  const run = async (argv: string[]) => {
+    const lines: string[] = [];
+    const errors: string[] = [];
+    const code = await cli(argv, { fetch: serve({}), log: (l) => lines.push(l), error: (l) => errors.push(l), desk: DEFAULT_DESK });
+    return { code, out: lines.join("\n"), errors };
+  };
+
+  it("says what is missing, and helps on -h", async () => {
+    expect(await run(["1004"])).toMatchObject({ code: 1, errors: ["verify needs --mandate <file>: the mandate the decision's checks should carry."] });
+    expect(await run(["--mandate", MANDATE_FILE])).toMatchObject({ code: 1, errors: ["verify takes one decision id, decision page, grade id or record URL. See --help."] });
+    const help = await run(["-h"]);
+    expect(help.code).toBe(0);
+    expect(help.out).toContain("The target is a decision id such as 1004, its page (https://usebrainchain.com/decision?id=1004), a grade id or a");
   });
 });
 
