@@ -1,0 +1,476 @@
+{
+  "measured": "2026-11-21",
+  "gateway": "https://agent.api.0x.org/v1/x402/swap-allowance-holder-quote/",
+  "route": "https://brain.usebrainchain.com/x402/grades",
+  "price": "0.01 USDC to 0x per quote and 0.25 USDC to BrainChain per grade, both on Base",
+  "note": "Probabilities are each model's probability that the trade passes; BrainChain takes the lower. secondsToVerdict runs from the paid grade request to the verdict. Decisions 995 to 1002 were made with the earlier delivery, a Python dict, and twelve rules; npm run verify reports them as the earlier form. Decisions 1003 to 1005, 1007 and 1017 use this version's delivery, one base64 string, and thirteen rules.",
+  "sandbox": {
+    "what": "One grade whose checks were these checks with a probe of the runtime in front, on a quote bought the same hour. The probe's lines are as the sandbox printed them.",
+    "probe": [
+      "probe: python 3.14.2 on emscripten wasm32, names before the checks: DELIVERY, _pyodide_core",
+      "probe: js.fetch absent, js.WebSocket absent",
+      "probe: urlopen failed (RuntimeError)",
+      "probe: pyfetch failed (NameError)",
+      "probe: checks ran in 3.20 s"
+    ],
+    "accepted": true,
+    "passProbability": 0.96,
+    "second": {
+      "model": "deepseek/deepseek-v4.1-flash-1017",
+      "passProbability": 1
+    },
+    "decision": {
+      "id": "995",
+      "record": "https://brain.usebrainchain.com/records/0xadb58453cfcf96834449ee19d0b2782d8c59c4db63842b8ad5645209d1e78c78.json#evidence=0xb71bbbed3b321fca2eff304e669a0d83c2ebc63073f94458fa6877ed695629b8",
+      "page": "https://usebrainchain.com/decision?id=995"
+    },
+    "paymentTx": "0xebf885450c95b07eeac13c1fe6ff57e7590f3b41afa9108e165b090a61acae2b",
+    "secondsToVerdict": 42.3
+  },
+  "mandate": {
+    "chain": 4663,
+    "wallet": "0xd937E50Ee21E66f7640F1a7887399e63055290fe",
+    "recipient": "0xd937E50Ee21E66f7640F1a7887399e63055290fe",
+    "tokens": [
+      {
+        "symbol": "USDG",
+        "address": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+        "decimals": 6,
+        "maxSell": "25"
+      },
+      {
+        "symbol": "WETH",
+        "address": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+        "decimals": 18,
+        "maxSell": "0.01"
+      },
+      {
+        "symbol": "ETH",
+        "address": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+        "decimals": 18,
+        "maxSell": "0.01"
+      }
+    ],
+    "maxSlippageBps": 100,
+    "validUntil": "2026-12-31T23:59:59Z"
+  },
+  "runs": [
+    {
+      "at": "2026-11-21T01:37:55.161Z",
+      "case": "inside",
+      "what": "Sell 5 USDG for WETH at 50 bps slippage, inside every rule",
+      "expected": "accepted",
+      "trade": "sell 5 USDG for WETH on Robinhood Chain",
+      "quotePaymentTx": "0x594915444a001754fc88cfc546335d618bbbeb982f4e536ba8940e1a3e735162",
+      "cost": "0.26 USDC",
+      "grade": "0xe453df0eb113d6e83319d888967a241a7185ca93337c936e2490eceb38106df4",
+      "accepted": true,
+      "passProbability": 0.9,
+      "bar": 0.8,
+      "confidence": 0.9,
+      "levels": [
+        0.9,
+        0.1
+      ],
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 1
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "passed",
+        "output": "Trade: sell 5 USDG for at least 0.003072049707352334 WETH (0x quoted 0.003087487143067672 WETH), paid to 0xd937e50ee21e66f7640f1a7887399e63055290fe, on chain 4663, quoted at block 119510614\npass  delivery: the delivery's code defines DELIVERY and nothing else\npass  signature: 0x signed this response with 0x-signing-key-prod-24092026 at 2026-11-21T01:37:43Z, over its body and the request GET api.0x.org/swap/allowance-holder/quote\npass  fresh: the agent received the quote 0 seconds after the time its signature names, by the agent's clock; 0x allows 60\npass  chain: the quote is for chain 4663\npass  wallet: the quote is for wallet 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  contract: it calls AllowanceHolder, which lets Settler 0xe8852602f84e04e284286d8db01a41edd0ccefb0 take the sell amount for this one call; 0x's registry named that Settler at the quote's block\npass  tokens: sells USDG; buys WETH\npass  size: sells 5 USDG, within the mandate's most of 25 USDG\npass  minimum out: the trade reverts unless it pays at least 0.003072049707352334 WETH, 50.0 bps under 0x's quote, within the mandate's 100\npass  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  fees: no fee but 0x's own\npass  deadline: the signature is dated 2026-11-21T01:37:43Z, and the mandate runs until 2026-12-31T23:59:59Z\n12 of 12 rules pass.\n"
+      },
+      "decision": {
+        "id": "996",
+        "record": "https://brain.usebrainchain.com/records/0xa37e5f54353e6e93524424bfbacd42d684d01ad748f552183e23ca2f558a504f.json#evidence=0x5ebb6388346b6ecfd394a6504f1aa08325bf2d7bbc3940db508d92a4d0f5dba3",
+        "page": "https://usebrainchain.com/decision?id=996"
+      },
+      "paymentTx": "0x3796430ef74fb63e4c01debaae46945a0b8e56c1d62a710594659da00200702f",
+      "secondsToVerdict": 6.6
+    },
+    {
+      "at": "2026-11-21T01:38:21.541Z",
+      "case": "outside",
+      "what": "Sell 5 USDG for BRAIN, a token the mandate does not list",
+      "expected": "refused: tokens",
+      "trade": "sell 5 USDG for 0x42b96dbc55e79E930d866c1eE486A342366546BC on Robinhood Chain",
+      "quotePaymentTx": "0x039cf41e7c3898b41a1336721e3f4c3816c2dd60c316c16886604eeb8b6e35fc",
+      "cost": "0.26 USDC",
+      "grade": "0xd71e477068f5b62466e188a8aa0913f2637f0510a1052e371504c45966e10e5b",
+      "accepted": false,
+      "passProbability": 0,
+      "bar": 0.8,
+      "confidence": 1,
+      "levels": [
+        0,
+        1
+      ],
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 0
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "failed",
+        "error": "AssertionError: the trade breaks the mandate: tokens",
+        "output": "Trade: sell 5 USDG for at least 12220843171422880017856 base units (0x quoted 12282254443641085445081 base units), paid to 0xd937e50ee21e66f7640f1a7887399e63055290fe, on chain 4663, quoted at block 119510769\npass  delivery: the delivery's code defines DELIVERY and nothing else\npass  signature: 0x signed this response with 0x-signing-key-prod-24092026 at 2026-11-21T01:38:02Z, over its body and the request GET api.0x.org/swap/allowance-holder/quote\npass  fresh: the agent received the quote 0 seconds after the time its signature names, by the agent's clock; 0x allows 60\npass  chain: the quote is for chain 4663\npass  wallet: the quote is for wallet 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  contract: it calls AllowanceHolder, which lets Settler 0xe8852602f84e04e284286d8db01a41edd0ccefb0 take the sell amount for this one call; 0x's registry named that Settler at the quote's block\nFAIL  tokens: sells USDG; buys 0x42b96dbc55e79e930d866c1ee486a342366546bc, which the mandate does not list\npass  size: sells 5 USDG, within the mandate's most of 25 USDG\npass  minimum out: the trade reverts unless it pays at least 12220843171422880017856 base units, 50.0 bps under 0x's quote, within the mandate's 100\npass  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  fees: no fee but 0x's own\npass  deadline: the signature is dated 2026-11-21T01:38:02Z, and the mandate runs until 2026-12-31T23:59:59Z\n11 of 12 rules pass; failed: tokens.\nTraceback (most recent call last):\n  File \"/lib/python314.zip/_pyodide/_base.py\", line 619, in eval_code_async\n    await CodeRunner(\n    ...<10 lines>...\n    .run_async(globals, locals)\n  File \"/lib/python314.zip/_pyodide/_base.py\", line 420, in run_async\n    coroutine = eval(self.code, globals, locals)\n  File \"<exec>\", line 365, in <module>\n  File \"<exec>\", line 362, in _run\nAssertionError: the trade breaks the mandate: tokens"
+      },
+      "decision": {
+        "id": "997",
+        "record": "https://brain.usebrainchain.com/records/0xb9c1ef66decaeb5959b48a41d0c6ab85c11b6fc706c6eefe32e1aad4a47ec5b3.json#evidence=0x96ee1766ecaf535278020f5e60a58763dc35b61894a61a5d4067eba4536d6429",
+        "page": "https://usebrainchain.com/decision?id=997"
+      },
+      "paymentTx": "0x9865d3a077e73363d19bc17c528e179b087456a62ff9e0ad42b1afe4969a95af",
+      "secondsToVerdict": 14.6
+    },
+    {
+      "at": "2026-11-21T01:38:49.890Z",
+      "case": "minimum",
+      "what": "Sell 5 USDG for WETH at 300 bps slippage, a minimum out the mandate's 100 bps does not allow",
+      "expected": "refused: minimum out",
+      "trade": "sell 5 USDG for WETH on Robinhood Chain",
+      "quotePaymentTx": "0x6c0c551ee8a61839980948440d53dd22e16ee47b31fbe07dd9180932763f9fbb",
+      "cost": "0.26 USDC",
+      "grade": "0xbd8351ce0d2210da9ff2b4647956c03f946d59126c797e8025c49cbdac7ab73b",
+      "accepted": false,
+      "passProbability": 0,
+      "bar": 0.8,
+      "confidence": 1,
+      "levels": [
+        0,
+        1
+      ],
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 0.02
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "failed",
+        "error": "AssertionError: the trade breaks the mandate: minimum out",
+        "output": "Trade: sell 5 USDG for at least 0.002991374269159763 WETH (0x quoted 0.003083890999133776 WETH), paid to 0xd937e50ee21e66f7640f1a7887399e63055290fe, on chain 4663, quoted at block 119510957\npass  delivery: the delivery's code defines DELIVERY and nothing else\npass  signature: 0x signed this response with 0x-signing-key-prod-24092026 at 2026-11-21T01:38:24Z, over its body and the request GET api.0x.org/swap/allowance-holder/quote\npass  fresh: the agent received the quote 0 seconds after the time its signature names, by the agent's clock; 0x allows 60\npass  chain: the quote is for chain 4663\npass  wallet: the quote is for wallet 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  contract: it calls AllowanceHolder, which lets Settler 0xe8852602f84e04e284286d8db01a41edd0ccefb0 take the sell amount for this one call; 0x's registry named that Settler at the quote's block\npass  tokens: sells USDG; buys WETH\npass  size: sells 5 USDG, within the mandate's most of 25 USDG\nFAIL  minimum out: the trade reverts unless it pays at least 0.002991374269159763 WETH; that is 300.0 bps under 0x's quote, over the mandate's 100\npass  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  fees: no fee but 0x's own\npass  deadline: the signature is dated 2026-11-21T01:38:24Z, and the mandate runs until 2026-12-31T23:59:59Z\n11 of 12 rules pass; failed: minimum out.\nTraceback (most recent call last):\n  File \"/lib/python314.zip/_pyodide/_base.py\", line 619, in eval_code_async\n    await CodeRunner(\n    ...<10 lines>...\n    .run_async(globals, locals)\n  File \"/lib/python314.zip/_pyodide/_base.py\", line 420, in run_async\n    coroutine = eval(self.code, globals, locals)\n  File \"<exec>\", line 365, in <module>\n  File \"<exec>\", line 362, in _run\nAssertionError: the trade breaks the mandate: minimum out"
+      },
+      "decision": {
+        "id": "998",
+        "record": "https://brain.usebrainchain.com/records/0xf64061e5c49bbc8301ee5e40229e0d5cc99dfb305d7173ef1f4d663c861ab373.json#evidence=0xae5e469c368a33b95c4da38d9e777a83d82d798893ca91363f035ae576244ee7",
+        "page": "https://usebrainchain.com/decision?id=998"
+      },
+      "paymentTx": "0xf54ab06a2cbc20ed60ed9a0d56bb850ce06eef595a2166e33411cfa34d0eb818",
+      "secondsToVerdict": 21.1
+    },
+    {
+      "at": "2026-11-21T01:39:15.261Z",
+      "case": "tampered",
+      "what": "The inside quote with one byte of its route changed and its Content-Digest recomputed",
+      "expected": "refused: signature",
+      "trade": "sell 5 USDG for WETH on Robinhood Chain",
+      "cost": "0.25 USDC",
+      "grade": "0x06a7e8c9e91ed4a948ca5f96f355b8e486c3e63502c6dd67814e3b88dbb18c87",
+      "accepted": false,
+      "passProbability": 0,
+      "bar": 0.8,
+      "confidence": 1,
+      "levels": [
+        0,
+        1
+      ],
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 0.01
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "failed",
+        "error": "AssertionError: the trade breaks the mandate: signature",
+        "output": "Trade: sell 5 USDG for at least 0.003072049707352334 WETH (0x quoted 0.003087487143067672 WETH), paid to 0xd937e50ee21e66f7640f1a7887399e63055290fe, on chain 4663, quoted at block 119510614\npass  delivery: the delivery's code defines DELIVERY and nothing else\nFAIL  signature: 0x's Ed25519 signature does not verify over this response and request\npass  fresh: the agent received the quote 0 seconds after the time its signature names, by the agent's clock; 0x allows 60\npass  chain: the quote is for chain 4663\npass  wallet: the quote is for wallet 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  contract: it calls AllowanceHolder, which lets Settler 0xe8852602f84e04e284286d8db01a41edd0ccefb0 take the sell amount for this one call; 0x's registry named that Settler at the quote's block\npass  tokens: sells USDG; buys WETH\npass  size: sells 5 USDG, within the mandate's most of 25 USDG\npass  minimum out: the trade reverts unless it pays at least 0.003072049707352334 WETH, 50.0 bps under 0x's quote, within the mandate's 100\npass  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  fees: no fee but 0x's own\npass  deadline: the signature is dated 2026-11-21T01:37:43Z, and the mandate runs until 2026-12-31T23:59:59Z\n11 of 12 rules pass; failed: signature.\nTraceback (most recent call last):\n  File \"/lib/python314.zip/_pyodide/_base.py\", line 619, in eval_code_async\n    await CodeRunner(\n    ...<10 lines>...\n    .run_async(globals, locals)\n  File \"/lib/python314.zip/_pyodide/_base.py\", line 420, in run_async\n    coroutine = eval(self.code, globals, locals)\n  File \"<exec>\", line 365, in <module>\n  File \"<exec>\", line 362, in _run\nAssertionError: the trade breaks the mandate: signature"
+      },
+      "decision": {
+        "id": "999",
+        "record": "https://brain.usebrainchain.com/records/0xac4ed064c61cc6f1af0a88af23e833ddca60813996023e5e7a1ff0bc7279ef34.json#evidence=0x202c03c276b61ce50c4e4b800dd50ae5e38e628af1480960854a6d3bb0fe53a4",
+        "page": "https://usebrainchain.com/decision?id=999"
+      },
+      "paymentTx": "0x55225d6666bf57621fd622d3a1486b87895652ee9134c0c3f29fe01b2d374a7a",
+      "secondsToVerdict": 25.4
+    },
+    {
+      "at": "2026-11-21T01:40:16.980Z",
+      "case": "native",
+      "what": "Sell 0.001 ETH for USDG at 50 bps slippage, inside every rule",
+      "expected": "accepted",
+      "trade": "sell 0.001 ETH for USDG on Robinhood Chain",
+      "quotePaymentTx": "0x23f59c790479c9e98ec3ec0f6416c2efd619233984baf31844eb147ba2a37273",
+      "cost": "0.26 USDC",
+      "grade": "0x936b25cd3132eba6f586bb2a8b02aeba674b5febe4bb310607d88789a65c5c41",
+      "accepted": true,
+      "passProbability": 0.89,
+      "bar": 0.8,
+      "confidence": 0.89,
+      "levels": [
+        0.89,
+        0.11
+      ],
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 1
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "passed",
+        "output": "Trade: sell 0.001 ETH for at least 1.607557 USDG (0x quoted 1.615635 USDG), paid to 0xd937e50ee21e66f7640f1a7887399e63055290fe, on chain 4663, quoted at block 119511847\npass  delivery: the delivery's code defines DELIVERY and nothing else\npass  signature: 0x signed this response with 0x-signing-key-prod-24092026 at 2026-11-21T01:40:05Z, over its body and the request GET api.0x.org/swap/allowance-holder/quote\npass  fresh: the agent received the quote 0 seconds after the time its signature names, by the agent's clock; 0x allows 60\npass  chain: the quote is for chain 4663\npass  wallet: the quote is for wallet 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  contract: it calls AllowanceHolder, which lets Settler 0xe8852602f84e04e284286d8db01a41edd0ccefb0 take the sell amount for this one call; 0x's registry named that Settler at the quote's block\npass  tokens: sells ETH; buys USDG\npass  size: sells 0.001 ETH, within the mandate's most of 0.01 ETH\npass  minimum out: the trade reverts unless it pays at least 1.607557 USDG, 50.0 bps under 0x's quote, within the mandate's 100\npass  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  fees: no fee but 0x's own\npass  deadline: the signature is dated 2026-11-21T01:40:05Z, and the mandate runs until 2026-12-31T23:59:59Z\n12 of 12 rules pass.\n"
+      },
+      "decision": {
+        "id": "1000",
+        "record": "https://brain.usebrainchain.com/records/0x6f6b5c60bef1d63996c62f13d7306e3c3cb990fa2cdf526c3cc2d2f3b3a2f6f1.json#evidence=0xd2eeb6d18a9c9da52e6ab70b5edc93f1d55ea2a4ba60f76206581cc3b6c720d7",
+        "page": "https://usebrainchain.com/decision?id=1000"
+      },
+      "paymentTx": "0x55a8338b6a604da788592bda539cc5d05a0d4d55867bddd1640fcb6c716dd668",
+      "secondsToVerdict": 6.5
+    },
+    {
+      "at": "2026-11-21T01:40:42.372Z",
+      "case": "size",
+      "what": "Sell 30 USDG for WETH, over the mandate's 25 USDG",
+      "expected": "refused: size",
+      "trade": "sell 30 USDG for WETH on Robinhood Chain",
+      "quotePaymentTx": "0x43fad1d5dc1d2af14d8038e72306b157f6d4b904d7584460a6053358ac780223",
+      "cost": "0.26 USDC",
+      "grade": "0x89015bb9b739912e85c2f598a87ebb23f9ffbb0013a4e47daa89a619f9a77756",
+      "accepted": false,
+      "passProbability": 0,
+      "bar": 0.8,
+      "confidence": 1,
+      "levels": [
+        0,
+        1
+      ],
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 0.01
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "failed",
+        "error": "AssertionError: the trade breaks the mandate: size",
+        "output": "Trade: sell 30 USDG for at least 0.018421492412646439 WETH (0x quoted 0.018514062726277828 WETH), paid to 0xd937e50ee21e66f7640f1a7887399e63055290fe, on chain 4663, quoted at block 119512051\npass  delivery: the delivery's code defines DELIVERY and nothing else\npass  signature: 0x signed this response with 0x-signing-key-prod-24092026 at 2026-11-21T01:40:28Z, over its body and the request GET api.0x.org/swap/allowance-holder/quote\npass  fresh: the agent received the quote 0 seconds after the time its signature names, by the agent's clock; 0x allows 60\npass  chain: the quote is for chain 4663\npass  wallet: the quote is for wallet 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  contract: it calls AllowanceHolder, which lets Settler 0xe8852602f84e04e284286d8db01a41edd0ccefb0 take the sell amount for this one call; 0x's registry named that Settler at the quote's block\npass  tokens: sells USDG; buys WETH\nFAIL  size: sells 30 USDG; over the mandate's most of 25 USDG\npass  minimum out: the trade reverts unless it pays at least 0.018421492412646439 WETH, 50.0 bps under 0x's quote, within the mandate's 100\npass  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  fees: no fee but 0x's own\npass  deadline: the signature is dated 2026-11-21T01:40:28Z, and the mandate runs until 2026-12-31T23:59:59Z\n11 of 12 rules pass; failed: size.\nTraceback (most recent call last):\n  File \"/lib/python314.zip/_pyodide/_base.py\", line 619, in eval_code_async\n    await CodeRunner(\n    ...<10 lines>...\n    .run_async(globals, locals)\n  File \"/lib/python314.zip/_pyodide/_base.py\", line 420, in run_async\n    coroutine = eval(self.code, globals, locals)\n  File \"<exec>\", line 365, in <module>\n  File \"<exec>\", line 362, in _run\nAssertionError: the trade breaks the mandate: size"
+      },
+      "decision": {
+        "id": "1001",
+        "record": "https://brain.usebrainchain.com/records/0xee1900008bd3821161b5d44010c9c9f0e44fb4666eda1ee862a20c5a08e606a0.json#evidence=0x1f5fee51e99663d628024eae4a330ec6f1ef5392b1b31dfed23c9b9403f1d156",
+        "page": "https://usebrainchain.com/decision?id=1001"
+      },
+      "paymentTx": "0xabfdfa453587dbcc5c1773b5f407ce4900e64bffebbacac9ef7050a82ba90737",
+      "secondsToVerdict": 9
+    },
+    {
+      "at": "2026-11-21T01:46:00Z",
+      "case": "cli",
+      "what": "The inside trade again, through npm run check as an agent would run it",
+      "expected": "accepted",
+      "trade": "sell 5 USDG for WETH on Robinhood Chain",
+      "quotePaymentTx": "0x5e79fb4929a9a0646952e90c855f67208177507de7689592797137e7401108cd",
+      "cost": "0.26 USDC",
+      "grade": "0xa36901e985ae673b08861c8c661c7e3bd6b3643fcec94c28b96da83a2a3bf739",
+      "accepted": true,
+      "passProbability": 0.95,
+      "bar": 0.8,
+      "confidence": 0.95,
+      "levels": [
+        0.95,
+        0.05
+      ],
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 1
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "passed",
+        "output": "Trade: sell 5 USDG for at least 0.003069258597814962 WETH (0x quoted 0.003084682007854233 WETH), paid to 0xd937e50ee21e66f7640f1a7887399e63055290fe, on chain 4663, quoted at block 119513526\npass  delivery: the delivery's code defines DELIVERY and nothing else\npass  signature: 0x signed this response with 0x-signing-key-prod-24092026 at 2026-11-21T01:43:18Z, over its body and the request GET api.0x.org/swap/allowance-holder/quote\npass  fresh: the agent received the quote 0 seconds after the time its signature names, by the agent's clock; 0x allows 60\npass  chain: the quote is for chain 4663\npass  wallet: the quote is for wallet 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  contract: it calls AllowanceHolder, which lets Settler 0xe8852602f84e04e284286d8db01a41edd0ccefb0 take the sell amount for this one call; 0x's registry named that Settler at the quote's block\npass  tokens: sells USDG; buys WETH\npass  size: sells 5 USDG, within the mandate's most of 25 USDG\npass  minimum out: the trade reverts unless it pays at least 0.003069258597814962 WETH, 50.0 bps under 0x's quote, within the mandate's 100\npass  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  fees: no fee but 0x's own\npass  deadline: the signature is dated 2026-11-21T01:43:18Z, and the mandate runs until 2026-12-31T23:59:59Z\n12 of 12 rules pass.\n"
+      },
+      "decision": {
+        "id": "1002",
+        "record": "https://brain.usebrainchain.com/records/0x69629ebd6b86b4a13df28d94546c95960e8c3d33f31aad16f3b521d4bd8e4709.json#evidence=0x24d0ad107f6265a220cd920d5ef854df3cfae31c506418859faf910763f25457",
+        "page": "https://usebrainchain.com/decision?id=1002"
+      },
+      "paymentTx": "0xa80e50f38c0d29c0025d3d9aab4e7e728aff0a62285547db94015a4b8eb4c726",
+      "secondsToVerdict": 7.0
+    },
+    {
+      "at": "2026-11-21T02:34:06Z",
+      "case": "cli-levels",
+      "form": "base64 string",
+      "what": "The inside trade through npm run check, with levels that also asked the models to judge the delivered block's form",
+      "expected": "accepted",
+      "trade": "sell 5 USDG for WETH on Robinhood Chain",
+      "quotePaymentTx": "0xe583c8995397b96550f9eabc8cabcddde4c515cf1f8c6dcf2acdd28cbc876738",
+      "cost": "0.26 USDC",
+      "grade": "0x02b7f3bac6f59219266a48ab00dbfc8921d3b2e866a55e6d28a950a488d71649",
+      "accepted": false,
+      "passProbability": 0.55,
+      "bar": 0.8,
+      "confidence": 0.55,
+      "levels": [
+        0.55,
+        0.45
+      ],
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 1
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "passed",
+        "summary": "13 of 13 rules pass."
+      },
+      "decision": {
+        "id": "1003",
+        "record": "https://brain.usebrainchain.com/records/0xd2918c0b6866237e5c72c3116b4d4118326fca9afa1e26f239e2e4a67bd7b598.json#evidence=0xc5e8319cef0eed4ad520b250a171b5f7201ae99c1fe152269cce9c1bb7906c69",
+        "page": "https://usebrainchain.com/decision?id=1003"
+      },
+      "paymentTx": "0xeafd19021a80f1e14dd74233f1e5adf23223de52580bf13f8a332d84a277d1a8",
+      "secondsToVerdict": 8.0,
+      "finding": "Every rule passed, and Jev put 45% on the failing level, which then included a block that is more than one line assigning one string. The models cannot read a base64 line for code; verify can, so the levels now judge the run alone."
+    },
+    {
+      "at": "2026-11-21T02:35:40Z",
+      "case": "cli",
+      "form": "base64 string",
+      "what": "The inside trade through npm run check, as an agent would run it",
+      "expected": "accepted",
+      "trade": "sell 5 USDG for WETH on Robinhood Chain",
+      "quotePaymentTx": "0x18de1087bdd75c74e49be6db7fbe8c406182f618a841997bfe8957b32573b8fa",
+      "cost": "0.26 USDC",
+      "grade": "0x6f81a236fa37a14e0733ffd479b5502119a80d8e2a8ddd35250989f6e05e1f11",
+      "accepted": true,
+      "passProbability": 0.98,
+      "bar": 0.8,
+      "confidence": 0.98,
+      "levels": [
+        0.98,
+        0.02
+      ],
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 1
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "passed",
+        "output": "Trade: sell 5 USDG for at least 0.003071136127464364 WETH (0x quoted 0.003086568972325994 WETH), paid to 0xd937e50ee21e66f7640f1a7887399e63055290fe, on chain 4663, quoted at block 119541113\npass  delivery: DELIVERY is a string of 8332 base64 characters, JSON with exactly the fields these checks read\npass  signature: 0x signed this response with 0x-signing-key-prod-24092026 at 2026-11-21T02:35:30Z, over its body and the request GET api.0x.org/swap/allowance-holder/quote\npass  fresh: the agent received the quote 0 seconds after the time its signature names, by the agent's clock; 0x allows 60\npass  query: the request asks 0x for chainId, sellToken, buyToken, sellAmount, taker, slippageBps, each once, and nothing else\npass  chain: the quote is for chain 4663\npass  wallet: the quote is for wallet 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  contract: it calls AllowanceHolder, which lets Settler 0xe8852602f84e04e284286d8db01a41edd0ccefb0 take the sell amount for this one call; 0x's registry named that Settler at the quote's block\npass  tokens: sells USDG; buys WETH\npass  size: sells 5 USDG, within the mandate's most of 25 USDG\npass  minimum out: the trade reverts unless it pays at least 0.003071136127464364 WETH, 50.0 bps under 0x's quote, within the mandate's 100\npass  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  fees: no fee but 0x's own\npass  deadline: the signature is dated 2026-11-21T02:35:30Z, and the mandate runs until 2026-12-31T23:59:59Z\n13 of 13 rules pass.\n"
+      },
+      "decision": {
+        "id": "1004",
+        "record": "https://brain.usebrainchain.com/records/0x3541119e6ad75b81b449ea321aa250f7b785a11691e3016edbe66d0742cefff5.json#evidence=0x5c915944f9920c7ac33b2a16c0e89530efb0c4946d28b6c2b6fe321922bcb116",
+        "page": "https://usebrainchain.com/decision?id=1004"
+      },
+      "paymentTx": "0xcc998284629d33c621133f96284575987cb92602d8998afc8b9869057814b60c",
+      "secondsToVerdict": 8.8
+    },
+    {
+      "at": "2026-11-21T02:36:15Z",
+      "case": "tampered",
+      "form": "base64 string",
+      "what": "Decision 1004's quote with one byte of its route changed and its Content-Digest recomputed, graded without the client's local checks, which refuse it",
+      "expected": "refused: signature",
+      "trade": "sell 5 USDG for WETH on Robinhood Chain",
+      "cost": "0.25 USDC",
+      "grade": "0x4b9d3d432e3f92e4f77e623390defa25991a752695636031b0d220e4761374f3",
+      "accepted": false,
+      "passProbability": 0,
+      "bar": 0.8,
+      "confidence": 1,
+      "levels": [
+        0,
+        1
+      ],
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 0
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "failed",
+        "error": "AssertionError: the trade breaks the mandate: signature",
+        "summary": "FAIL  signature: 0x's Ed25519 signature does not verify over this response and request\n12 of 13 rules pass; failed: signature."
+      },
+      "decision": {
+        "id": "1005",
+        "record": "https://brain.usebrainchain.com/records/0xdb3407c57ef5ad2d6c573daaf53e2c6bf2e0d8479ce326572b5c32d2f9d9ab8f.json#evidence=0x320f537786d436052c132c21db91d2f0057f7a643fc50aee63862eb836bc9282",
+        "page": "https://usebrainchain.com/decision?id=1005"
+      },
+      "paymentTx": "0xd999ed59c9c27a90854f3ae32cbf4d4ae1195feb4c9ab192928edd921389f3c4",
+      "secondsToVerdict": 5.9
+    },
+    {
+      "at": "2026-11-21T03:05:35Z",
+      "case": "cli-output",
+      "form": "base64 string",
+      "what": "The inside trade through npm run check, printing the run's trade and rule lines and the approval as a transaction",
+      "expected": "accepted",
+      "trade": "sell 5 USDG for WETH on Robinhood Chain",
+      "quotePaymentTx": "0x3a2daa9cf990a55711679fc9e7c884683ea4d0d7cff3d978c690ccbb6d29c357",
+      "cost": "0.26 USDC",
+      "grade": "0x8549890944128f83646e02815d35d4eb7cf89eb6be9540fd96a0c21c961e0dfe",
+      "accepted": true,
+      "passProbability": 0.98,
+      "bar": 0.8,
+      "confidence": 0.98,
+      "levels": [
+        0.98,
+        0.02
+      ],
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 1
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "passed",
+        "output": "Trade: sell 5 USDG for at least 0.003077845917344091 WETH (0x quoted 0.003093312479742805 WETH), paid to 0xd937e50ee21e66f7640f1a7887399e63055290fe, on chain 4663, quoted at block 119557541\npass  delivery: DELIVERY is a string of 7820 base64 characters, JSON with exactly the fields these checks read\npass  signature: 0x signed this response with 0x-signing-key-prod-24092026 at 2026-11-21T03:04:53Z, over its body and the request GET api.0x.org/swap/allowance-holder/quote\npass  fresh: the agent received the quote 0 seconds after the time its signature names, by the agent's clock; 0x allows 60\npass  query: the request asks 0x for chainId, sellToken, buyToken, sellAmount, taker, slippageBps, each once, and nothing else\npass  chain: the quote is for chain 4663\npass  wallet: the quote is for wallet 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  contract: it calls AllowanceHolder, which lets Settler 0xe8852602f84e04e284286d8db01a41edd0ccefb0 take the sell amount for this one call; 0x's registry named that Settler at the quote's block\npass  tokens: sells USDG; buys WETH\npass  size: sells 5 USDG, within the mandate's most of 25 USDG\npass  minimum out: the trade reverts unless it pays at least 0.003077845917344091 WETH, 50.0 bps under 0x's quote, within the mandate's 100\npass  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  fees: no fee but 0x's own\npass  deadline: the signature is dated 2026-11-21T03:04:53Z, and the mandate runs until 2026-12-31T23:59:59Z\n13 of 13 rules pass.\n"
+      },
+      "decision": {
+        "id": "1007",
+        "record": "https://brain.usebrainchain.com/records/0xaeb1b45c40f14cecf15d3fec114cada277e69ff11d13033b032d6f112b79f905.json#evidence=0xdd2eb8556e9a682990197cd0ef1574a950915ef51056aa5ad14327dc40cfa9a1",
+        "page": "https://usebrainchain.com/decision?id=1007"
+      },
+      "paymentTx": "0x293b6686579effac7f4d2c2449eaf26d15ba4da33047c481593ac56fffb15187",
+      "secondsToVerdict": 40.1
+    },
+    {
+      "at": "2026-11-21T09:57:12Z",
+      "case": "at-maximum",
+      "form": "base64 string",
+      "what": "The inside trade through npm run check at 100 bps slippage, the mandate's maximum, after the minimum out's floor was made to round down",
+      "expected": "accepted",
+      "trade": "sell 5 USDG for WETH on Robinhood Chain",
+      "quotePaymentTx": "0x6f279f0884bc4c61cefdb678ca379e35656a47c65c44bb9167d5a8398906abbb",
+      "cost": "0.26 USDC",
+      "grade": "0x93f53f970be09d36119912fe3629b2082b2ba4af87eb339bdc9ffc1b21ed8ad2",
+      "accepted": true,
+      "passProbability": 0.98,
+      "bar": 0.8,
+      "confidence": 0.98,
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 1
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "passed",
+        "output": "Trade: sell 5 USDG for at least 0.003021204811586574 WETH (0x quoted 0.00305172203190563 WETH), paid to 0xd937e50ee21e66f7640f1a7887399e63055290fe, on chain 4663, quoted at block 119791254\npass  delivery: DELIVERY is a string of 9272 base64 characters, JSON with exactly the fields these checks read\npass  signature: 0x signed this response with 0x-signing-key-prod-24092026 at 2026-11-21T09:57:03Z, over its body and the request GET api.0x.org/swap/allowance-holder/quote\npass  fresh: the agent received the quote 0 seconds after the time its signature names, by the agent's clock; 0x allows 60\npass  query: the request asks 0x for chainId, sellToken, buyToken, sellAmount, taker, slippageBps, each once, and nothing else\npass  chain: the quote is for chain 4663\npass  wallet: the quote is for wallet 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  contract: it calls AllowanceHolder, which lets Settler 0xe8852602f84e04e284286d8db01a41edd0ccefb0 take the sell amount for this one call; 0x's registry named that Settler at the quote's block\npass  tokens: sells USDG; buys WETH\npass  size: sells 5 USDG, within the token's maxSell of 25 USDG\npass  minimum out: the trade reverts unless it pays at least 0.003021204811586574 WETH, 100.0 bps under 0x's quote, within the mandate's 100\npass  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  fees: no fee but 0x's own\npass  deadline: the signature is dated 2026-11-21T09:57:03Z, and the mandate runs until 2026-12-31T23:59:59Z\n13 of 13 rules pass.\n"
+      },
+      "decision": {
+        "id": "1017",
+        "record": "https://brain.usebrainchain.com/records/0x144aefa888adf2ce3239eb43133be60edae09f4c7cba09d4441d00f696491dc7.json#evidence=0xa40469bca1ed7b7e7074ff0606a833d86a0fcb127672e95894a6afee586b7e15",
+        "page": "https://usebrainchain.com/decision?id=1017"
+      },
+      "paymentTx": "0x42c391b1b267e44baa21566fa2afeff6736501c75e3d2d365af5af2f9df34e63",
+      "secondsToVerdict": 7.4,
+      "levels": [
+        0.98,
+        0.02
+      ]
+    }
+  ]
+}

@@ -23,11 +23,20 @@ npm run typecheck
 npm test
 ```
 
+So does the pre-trade check, whose tests run its Python checks in Pyodide:
+
+```bash
+cd examples/pretrade-check
+npm ci
+npm run typecheck
+npm test
+```
+
 ## Pull requests
 
 - One change per pull request, saying what it does and why.
 - A test for every change in behaviour. Several tests read the README, the tool descriptions and the manifests side by side, so a change to what a tool does or says updates all three.
-- CI must pass: the tests on Node 22 and 24, the reference seller, and the agent framework samples on Linux and Windows.
+- CI must pass: the tests on Node 22 and 24, the reference seller, the pre-trade check, and the agent framework samples on Linux and Windows.
 
 ## Releases
 

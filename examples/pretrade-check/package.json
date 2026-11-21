@@ -1,0 +1,27 @@
+{
+  "name": "brainchain-pretrade-check",
+  "private": true,
+  "description": "Check a 0x quote against an agent's trading mandate with BrainChain's grade, before the agent signs the trade.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "check": "node src/main.ts",
+    "verify": "node src/verify.ts",
+    "typecheck": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@x402/evm": "2.29.0",
+    "@x402/fetch": "2.29.0",
+    "pyodide": "314.0.7",
+    "viem": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  }
+}
