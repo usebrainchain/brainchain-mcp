@@ -24,7 +24,7 @@ import { PoolIndex } from "./pools.js";
 import { chainReader, privateReader, redactor, RPC_SETTING, rpcSetting } from "./rpc.js";
 import { serveEvents } from "./serve.js";
 import { lockStateDir, StateFile } from "./state.js";
-import { coingecko, gate, kucoin, lifi, robinhoodPages, robinhoodPairs } from "./venues.js";
+import { coingecko, gate, kucoin, lifi, robinhoodNames, robinhoodPages, robinhoodPairs, type NamesState } from "./venues.js";
 import { Watcher, type Poller } from "./watcher.js";
 import { indexedWorth, type EthKept } from "./worth.js";
 
@@ -45,7 +45,9 @@ records what is already public as a baseline and reports none of it as new.
                          GET /events/stream (server-sent events), POST /watches to have them sent to a webhook, Discord,
                          Slack or Telegram, GET and DELETE /watches/:id, GET /pools?token= (a token's Uniswap pools, with
                          a private RPC set), GET /pools?after= (the whole pool index a page at a time, which
-                         brainchain-mcp dataset reads), and GET /health. Point BRAINCHAIN_WATCH_URL at it.
+                         brainchain-mcp dataset reads), GET /robinhood/names (Robinhood's name for the asset on each
+                         crypto page, read from the US pages when the watcher runs in the US, which the dataset reads
+                         too), and GET /health. Point BRAINCHAIN_WATCH_URL at it.
   --print                Write each new event to stdout as one line of JSON.
   --trust-proxy          Behind Cloudflare and a proxy such as Render's, take a client's address from CF-Connecting-IP, or
                          else from the X-Forwarded-For entry before the proxy's own.
@@ -179,6 +181,17 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     return watched;
   };
 
+  // Every symbol the sitemap has given a page, for the names on those pages.
+  let pagedAt = -1;
+  let paged: string[] = [];
+  const pageSymbols = () => {
+    if (log.size !== pagedAt) {
+      paged = [...new Set(log.all().flatMap((event) => (event.kind === "robinhood.page_added" && event.token.symbol ? [event.token.symbol.toUpperCase()] : [])))];
+      pagedAt = log.size;
+    }
+    return paged;
+  };
+
   const pollers: Poller[] = [
     // With a private endpoint the chain is read every 10 s, so an event is out within about 20 s of its block.
     chainPoller({ reader, wallets, watched: tracked, firsts: chainFirsts(reader, kept), kept: kept.queued, ...(rpc ? { interval: 10_000 } : {}), onPools: (from, to, pools) => poolIndex.addLive(from, to, pools) }),
@@ -191,6 +204,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     listMerges(requests, METAMASK, github),
     robinhoodPairs(requests),
     robinhoodPages(requests),
+    robinhoodNames(pageSymbols, requests.fetchFor("robinhood-names")),
     kucoin(requests),
     gate(requests),
     lifi(requests),
@@ -259,7 +273,8 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   const deliveries = new Deliveries({ dir, log, post: pinnedPost(), check: async (url) => void (await publicTarget(url.hostname)), say });
   const adminToken = env.BRAINCHAIN_WATCH_ADMIN_TOKEN?.trim() || undefined;
   if (adminToken && !/^[\w-]{32,100}$/.test(adminToken)) throw new Error("BRAINCHAIN_WATCH_ADMIN_TOKEN must be 32 to 100 letters, digits, - or _.");
-  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), health: () => health(), adminToken, deliveries, trustProxy: args.trustProxy }) : undefined;
+  const names = () => (state.source("robinhood-names") as NamesState).names ?? {};
+  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, trustProxy: args.trustProxy }) : undefined;
   let ticking = false;
   const deliver = () => {
     if (ticking) return;

@@ -2,7 +2,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { isAddressEqual, type Address, type Hash } from "viem";
 
 import { BY_SYMBOL, readCustodyHistory, readListedTokens, TOKEN_INPUT, within, type CustodyBoard, type CustodyToken } from "./custody.js";
-import { DatasetError, type Dataset, type DatasetRef } from "./dataset/published.js";
+import { DatasetError, UnpublishedError, type Dataset, type DatasetRef } from "./dataset/published.js";
 import { blockOf, inTurn, type ChainHistory, type Moment } from "./history.js";
 import { firstApprovalsIn, MARKET_MAKERS, who, type Approval, type MakerWallet } from "./makers.js";
 import { firstQueued, otherSide, queuedKept, type QueuedPool } from "./queued.js";
@@ -164,8 +164,10 @@ export async function tokenTimeline(readers: TimelineReaders, token: Address, wa
     ? await within(DATASET_MS, readers.dataset(), new DatasetError(`The dataset was not read within ${DATASET_MS / 1000} seconds.`)).then(
         (dataset) => knownOf(dataset, token),
         (error: unknown) => {
-          // A dataset's own words are written for the reader; any other failure, such as a network error, is said plainly.
-          datasetMissing = `${error instanceof DatasetError ? error.message : "The dataset could not be read just now."} Every step was read live, from the chain's whole history.`;
+          // A dataset's own words are written for the reader, except that a timeline counts nothing; any other failure, such
+          // as a network error, is said plainly.
+          const why = error instanceof UnpublishedError ? error.fact : error instanceof DatasetError ? error.message : "The dataset could not be read just now.";
+          datasetMissing = `${why} Every step was read live, from the chain's whole history.`;
           return undefined;
         },
       )

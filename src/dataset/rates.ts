@@ -1,4 +1,4 @@
-import { confirmed, OUTCOMES, STEPS, WINDOWS, type Outcome, type OutcomeRow, type Step, type StepRow } from "./format.js";
+import { confirmed, OUTCOMES, STEPS, unsettled, WINDOWS, type Outcome, type OutcomeRow, type Step, type StepRow } from "./format.js";
 
 const DAY_MS = 86_400_000;
 /** A kind with more tokens than this names them by the file that holds them, not one by one. */
@@ -126,7 +126,7 @@ function anyOf(places: Place[]): Place {
  */
 export function baseRates({ steps, outcomes, pools, cut, windows = WINDOWS, venues = OUTCOMES, kinds = STEPS }: RatesInput): KindCounts[] {
   const counted = outcomes.filter(confirmed);
-  const left = outcomes.filter((row) => !confirmed(row) && venues.includes(row.outcome) && Date.parse(row.at ?? row.by ?? "") <= cut);
+  const left = unsettled(outcomes.filter((row) => Date.parse(row.at ?? row.by ?? "") <= cut)).filter((row) => venues.includes(row.outcome));
   const byOutcome = new Map(venues.map((venue) => [venue, earliest(counted.filter((row) => row.outcome === venue), cut)] as const));
   const results: KindCounts[] = [];
   for (const step of kinds) {

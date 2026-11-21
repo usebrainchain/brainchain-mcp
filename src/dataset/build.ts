@@ -13,10 +13,10 @@ import { BASES } from "../watch/chain.js";
 import type { WatchEvent } from "../watch/events.js";
 import { INDEX_FROM, poolOf, poolsIn, type IndexedPool, type PoolLog } from "../watch/pools.js";
 import { again, approvalsIn, blockTimes, confirmedBy, inOrder, namesOf, type FoundApproval } from "./chain.js";
-import { confirmed, csv, EVENT_COLUMNS, FILES, jsonl, OUTCOME_COLUMNS, OUTCOME_WORDS, outcomeKey, parseJsonl, poolShard, sha256, STEP_WORDS, stepKey, symbolBucket, type FileEntry, type Manifest, type OutcomeRow, type PoolRow, type StepRow, type SymbolRow, type TokenRow } from "./format.js";
+import { csv, EVENT_COLUMNS, FILES, jsonl, OUTCOME_COLUMNS, OUTCOME_WORDS, outcomeKey, parseJsonl, poolShard, sha256, STEP_WORDS, stepKey, symbolBucket, unsettled, type FileEntry, type Manifest, type OutcomeRow, type PoolRow, type StepRow, type SymbolRow, type TokenRow } from "./format.js";
 import { baseRates, type PoolPieces } from "./rates.js";
 import { outcomesFromEvents, stepsFromEvents, tracedIn, type Traced } from "./rows.js";
-import { gateStarts, kucoinStarts, robinhoodPageName, watcherEvents, type PoolSource } from "./sources.js";
+import { gateStarts, kucoinStarts, robinhoodPageName, watcherEvents, watcherNames, type PoolSource } from "./sources.js";
 import { TokenTable } from "./table.js";
 
 /** `base-rates.json` counts pools by stretches of this many blocks, each with the time its last block was made. */
@@ -424,8 +424,13 @@ export async function buildDataset(options: BuildOptions): Promise<BuildReport> 
   if (kucoin.status === "rejected") notes.push("KuCoin's pairs could not be read, so its listings are dated by when the watcher saw them.");
   if (gate.status === "rejected") notes.push("Gate's pairs could not be read, so its listings are dated by when the watcher saw them.");
   // A Robinhood page whose symbol a traced token goes by, with no name in the pair list to compare, is confirmed by the
-  // name on the page itself. A page with none is read again after a week.
+  // name on the page itself: as the watcher read it, since a watcher in the US reads the US pages that a build elsewhere is
+  // sent away from, or else as the build reads it. A page with no name either way is read again after a week.
   state.pages ??= {};
+  const served = await watcherNames(watcher, fetchImpl).catch((error: unknown) => {
+    notes.push(`The watcher's Robinhood page names could not be read (${error instanceof Error ? error.message : String(error)}), so the pages were read by the build.`);
+    return undefined;
+  });
   const pairNamed = new Set(events.filter((event) => event.kind === "robinhood.pair_added" && event.token.name).map((event) => event.token.symbol!.toUpperCase()));
   const symbols = new Set([...traced.values()].flatMap(({ symbols: named }) => [...named]));
   const pageSymbols = [...new Set(events.filter((event) => event.kind === "robinhood.page_added" && event.token.symbol).map((event) => event.token.symbol!.toUpperCase()))].filter((symbol) => symbols.has(symbol) && !pairNamed.has(symbol));
@@ -433,7 +438,13 @@ export async function buildDataset(options: BuildOptions): Promise<BuildReport> 
     const read = state.pages![symbol];
     return !read || (read.name === "" && Date.parse(readAt) - Date.parse(read.at) > 7 * 86_400_000);
   };
-  for (const symbol of pageSymbols.filter(stale)) {
+  for (const symbol of pageSymbols) {
+    const named = served?.names.get(symbol);
+    if (named?.name) {
+      state.pages[symbol] = named;
+      continue;
+    }
+    if (!stale(symbol)) continue;
     try {
       state.pages[symbol] = { name: await robinhoodPageName(symbol, fetchImpl), at: readAt };
     } catch {
@@ -537,7 +548,7 @@ export async function buildDataset(options: BuildOptions): Promise<BuildReport> 
   const date = readAt.slice(0, 10);
   writeWhole(join(out, "events.csv"), csv(EVENT_COLUMNS, steps));
   writeWhole(join(out, "outcomes.csv"), csv(OUTCOME_COLUMNS, outcomes));
-  writeWhole(join(out, "base-rates.json"), `${JSON.stringify({ readAt, headBlock, cut: new Date(Math.min(Date.parse(readAt), headAt)).toISOString(), through: { head, pools: poolsThrough, approvals: state.approvals ?? 0, wallets: wallets.map(({ wallet }) => wallet) }, unconfirmed: outcomes.filter((row) => !confirmed(row)).length, kinds: rates, pools: pieces }, null, 1)}\n`);
+  writeWhole(join(out, "base-rates.json"), `${JSON.stringify({ readAt, headBlock, cut: new Date(Math.min(Date.parse(readAt), headAt)).toISOString(), through: { head, pools: poolsThrough, approvals: state.approvals ?? 0, wallets: wallets.map(({ wallet }) => wallet) }, unconfirmed: unsettled(outcomes).length, kinds: rates, pools: pieces }, null, 1)}\n`);
   const items = feedItems(steps, outcomes, traced);
   writeWhole(join(out, "feed.json"), `${JSON.stringify(jsonFeed(items), null, 1)}\n`);
   writeWhole(join(out, "feed.xml"), rss(items));

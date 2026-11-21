@@ -10,8 +10,8 @@ import { MARKET_MAKERS } from "../makers.js";
 import type { WatchEvent } from "../watch/events.js";
 import type { IndexedPool } from "../watch/pools.js";
 import { buildDataset, PIECE, trimTail } from "./build.js";
-import { FILES, parseJsonl, sha256, type Manifest, type PoolRow, type StepRow } from "./format.js";
-import { poolDir, poolWatcher, watcherPace, type PoolSource } from "./sources.js";
+import { FILES, parseJsonl, sha256, type Manifest, type OutcomeRow, type PoolRow, type StepRow } from "./format.js";
+import { poolDir, poolWatcher, robinhoodPageName, titleName, watcherNames, watcherPace, type PoolSource } from "./sources.js";
 
 const CASHCAT = getAddress("0x020bfc650a365f8bb26819deaabf3e21291018b4");
 const MEME = getAddress("0x1111111111111111111111111111111111111111");
@@ -78,9 +78,13 @@ const watcherEvents = (extra: WatchEvent[] = []): WatchEvent[] => [
   ...extra,
 ];
 
-function web(events: () => WatchEvent[]): typeof fetch {
+function web(events: () => WatchEvent[], names: () => Record<string, { name: string; at: string }> | undefined = () => undefined): typeof fetch {
   return (async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
+    if (url.host === "watch.test" && url.pathname === "/robinhood/names") {
+      const read = names();
+      return read ? Response.json({ readAt: "2026-11-21T00:00:00.000Z", pages: Object.keys(read).length, names: read }) : Response.json({ error: "Not found." }, { status: 404 });
+    }
     if (url.host === "watch.test") return Response.json({ events: events(), next: events().length, more: false });
     if (url.host === "api.kucoin.com") return Response.json({ data: [{ baseCurrency: "CASHCAT", tradingStartTime: Date.parse("2026-07-15T10:00:00Z") }] });
     if (url.host === "api.gateio.ws") return Response.json([]);
@@ -164,6 +168,30 @@ describe("the dataset build", () => {
     expect(readFileSync(join(out, "events.jsonl"), "utf8")).toContain('"step":"approval"');
   });
 
+  it("confirms a Robinhood page by the name the watcher read, and settles the row an earlier build left unconfirmed", async () => {
+    const out = mkdtempSync(join(tmpdir(), "dataset-"));
+    const world = { head: 12_000, pools: [pool(4, CASHCAT, 9_500, 1)], approvals: [] };
+    const { reader } = chain(world);
+    const page: WatchEvent = { id: 3, kind: "robinhood.page_added", token: { address: null, symbol: "CASHCAT", name: null }, source: "Robinhood", ref: "https://robinhood.com/us/en/crypto/CASHCAT/", at: null, observedAt: baseline, detail: {}, context: {}, baseline: true };
+    let names: Record<string, { name: string; at: string }> | undefined;
+    const options = { out, watcher: new URL("https://watch.test"), pools: pools(() => world.pools, () => world.head), reader, span: 10_000, wallets: [WINTERMUTE], fetch: web(() => watcherEvents([page]), () => names) };
+    const rows = () => lines<OutcomeRow>(join(out, "outcomes.jsonl")).filter(({ outcome }) => outcome === "robinhood_page");
+    const unconfirmed = () => JSON.parse(readFileSync(join(out, "base-rates.json"), "utf8")).unconfirmed;
+
+    // A watcher older than 0.16.2 has no names, and the page read from outside the US has none.
+    await buildDataset(options);
+    expect(rows().map(({ match, unconfirmed }) => ({ match, unconfirmed }))).toEqual([{ match: "symbol", unconfirmed: true }]);
+    expect(unconfirmed()).toBe(1);
+
+    names = { CASHCAT: { name: "Cash Cat", at: "2026-11-21T00:00:00.000Z" } };
+    await buildDataset(options);
+    expect(rows().map(({ match, name, unconfirmed }) => ({ match, name, unconfirmed }))).toEqual([
+      { match: "symbol", name: undefined, unconfirmed: true },
+      { match: "name", name: "Cash Cat", unconfirmed: undefined },
+    ]);
+    expect(unconfirmed()).toBe(0);
+  });
+
   it("cuts a last line a killed build left half written, and leaves a whole file as it is", () => {
     const dir = mkdtempSync(join(tmpdir(), "dataset-"));
     const path = join(dir, "events.jsonl");
@@ -205,5 +233,46 @@ describe("the dataset build", () => {
     expect(await source.page(0)).toEqual({ pools: [pool(3, MEME, 12_000, 2)], next: Buffer.byteLength(kept), bytes: Buffer.byteLength(kept), through: 12_500 });
     expect(await source.page(Buffer.byteLength(kept))).toMatchObject({ pools: [] });
     expect(() => poolDir(join(dir, "nothing"))).toThrow(/holds no pool index/);
+  });
+});
+
+describe("Robinhood's page names", () => {
+  it("reads the name in each form Robinhood's pages title it, and nothing from any other title", () => {
+    expect(titleName("Buy and sell Cash Cat (CASHCAT) and 20+ other crypto on Robinhood", "CASHCAT")).toBe("Cash Cat");
+    expect(titleName("Pons - PONS Price Today, Live Charts and News - Robinhood", "PONS")).toBe("Pons");
+    expect(titleName("Orbio.so - ORBIO Price Today, Live Charts and News - Robinhood", "ORBIO")).toBe("Orbio.so");
+    expect(titleName("Cash Cat (CASHCAT) \u2014 Buy and sell commission-free on Robinhood", "CASHCAT")).toBe("Cash Cat");
+    expect(titleName("Buy and sell Cash Cat (CASHCAT) and 20+ other crypto on Robinhood", "CASH")).toBe("");
+    expect(titleName("Crypto prices today - Robinhood", "PONS")).toBe("");
+    expect(titleName("Robinhood: Pons (PONS)", "PONS")).toBe("");
+  });
+
+  it("reads a page's head for the name, and a page Robinhood does not have as none", async () => {
+    const head = (title: string) => `<html><head><meta content="${title}" property="og:title"/></head><body>${"x".repeat(1000)}</body></html>`;
+    const pages = (async (input: RequestInfo | URL) => {
+      const symbol = /crypto\/([A-Z]+)\//.exec(String(input))?.[1];
+      if (symbol === "PONS") return new Response(head("Pons - PONS Price Today, Live Charts and News - Robinhood"));
+      if (symbol === "CASHCAT") return new Response(head("Buy and sell Cash Cat (CASHCAT) and 20+ other crypto on Robinhood"));
+      return new Response("Not Found", { status: 404 });
+    }) as typeof fetch;
+    expect(await robinhoodPageName("PONS", pages)).toBe("Pons");
+    expect(await robinhoodPageName("CASHCAT", pages)).toBe("Cash Cat");
+    expect(await robinhoodPageName("ORE", pages)).toBe("");
+  });
+
+  it("takes a watcher's page names, and nothing from a watcher older than the route", async () => {
+    const names = { pons: { name: "Pons", at: "2026-11-21T10:00:00.000Z" }, ORE: { name: "", at: "2026-11-21T10:00:01.000Z" }, BAD: { name: 1 } };
+    const serving = (async () => Response.json({ readAt: "2026-11-21T10:05:00.000Z", pages: 3, names })) as unknown as typeof fetch;
+    const older = (async () => Response.json({ error: "Not found." }, { status: 404 })) as unknown as typeof fetch;
+    const quick = () => watcherPace(new URL("https://watch.names"), { gap: 0, sleep: async () => {} });
+    const read = await watcherNames(new URL("https://watch.names"), serving, quick());
+    expect(read?.readAt).toBe("2026-11-21T10:05:00.000Z");
+    expect([...read!.names]).toEqual([
+      ["PONS", { name: "Pons", at: "2026-11-21T10:00:00.000Z" }],
+      ["ORE", { name: "", at: "2026-11-21T10:00:01.000Z" }],
+    ]);
+    expect(await watcherNames(new URL("https://watch.names"), older, quick())).toBeUndefined();
+    const wrong = (async () => Response.json({ events: [] })) as unknown as typeof fetch;
+    await expect(watcherNames(new URL("https://watch.names"), wrong, quick())).rejects.toThrow(/did not answer with Robinhood's page names/);
   });
 });

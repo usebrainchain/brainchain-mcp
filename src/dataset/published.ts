@@ -18,6 +18,16 @@ const REQUEST_MS = 20_000;
 /** A failure whose message is written for the person asking. */
 export class DatasetError extends Error {}
 
+/** No dataset was published lately where the tools look. The message is for a tool that counts; `fact` says it alone. */
+export class UnpublishedError extends DatasetError {
+  readonly fact: string;
+  constructor(place: string) {
+    const fact = `No dataset was published in the last ${DAYS_BACK} days at ${place}.`;
+    super(`${fact.slice(0, -1)}, so there is nothing to count yet: counts appear once one is. ${DATASET_SETTING} points the tools at a directory or another address that holds one.`);
+    this.fact = fact;
+  }
+}
+
 /** Which dataset an answer read: the day, the block it reaches, when it was built, and the SHA-256 of its manifest. */
 export interface DatasetRef {
   source: string;
@@ -118,7 +128,7 @@ export function datasetReader(value: string | undefined, fetchImpl: typeof fetch
     if (latest && clock() < latest.until) return latest.manifest;
     const reading = (async () => {
       const path = await place.newest(clock());
-      if (!path) throw new DatasetError(`No dataset was published in the last ${DAYS_BACK} days at ${place.name}, so there is nothing to count yet: counts appear once one is. ${DATASET_SETTING} points the tools at a directory or another address that holds one.`);
+      if (!path) throw new UnpublishedError(place.name);
       const bytes = await place.read(path);
       if (!bytes) throw new DatasetError(`The dataset's ${path} could not be read at ${place.name}.`);
       return { path, manifest: JSON.parse(bytes.toString("utf8")) as Manifest, bytes };

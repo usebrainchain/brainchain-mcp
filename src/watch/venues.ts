@@ -1,5 +1,6 @@
 import { getAddress } from "viem";
 
+import { robinhoodPageName } from "../dataset/sources.js";
 import { label } from "../history.js";
 import { COINGECKO, GATE, KUCOIN, LIFI, ROBINHOOD_PAGES, ROBINHOOD_PAIRS, type Source } from "../sightings.js";
 import type { Found, Kind } from "./events.js";
@@ -90,6 +91,59 @@ export function robinhoodPairs(requests: Requests): Poller {
       // A pair missing from one answer keeps its last state, so a list that comes back short cannot hide a change.
       state.tradable = { ...before, ...Object.fromEntries([...got.value].map(([symbol, { tradable }]) => [symbol, tradable])) };
       got.commit();
+    },
+  };
+}
+
+/**
+ * How often a page's name is read again: a name rarely changes, and a page that gave none or could not be read is asked
+ * again sooner. A read takes at most `perPoll` pages, a second apart, and goes on at once while more are due.
+ */
+export const NAME_READS = { named: 24 * 3_600_000, unnamed: 3_600_000, perPoll: 20, gap: 1_000 };
+
+export interface NamesState {
+  /** Robinhood's name on each page, "" for a page that gave none, and when it was read. */
+  names?: Record<string, { name: string; at: string }>;
+  /** When a page last could not be read. */
+  failed?: Record<string, string>;
+}
+
+const nap = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Robinhood's own name for the asset on each page its crypto sitemap has listed, for `GET /robinhood/names`: the sitemap
+ * names no asset, and the name is what ties a page to one token among those that go by its symbol. Read on the sitemap's
+ * cadence. From outside the US, Robinhood sends a reader to its regional pages, which have no page for an asset listed
+ * only in the US, so those give "".
+ */
+export function robinhoodNames(symbols: () => readonly string[], fetchImpl: typeof fetch, { clock = Date.now, sleep = nap } = {}): Poller {
+  const name = "robinhood-names";
+  return {
+    name,
+    interval: INTERVALS["robinhood-pages"],
+    async poll(context) {
+      const state = context.state as NamesState;
+      const names = (state.names ??= {});
+      const failed = (state.failed ??= {});
+      const now = clock();
+      const since = (at: string | undefined) => (at ? now - Date.parse(at) : Infinity);
+      const due = symbols().filter((symbol) => since(failed[symbol]) >= NAME_READS.unnamed && since(names[symbol]?.at) >= (names[symbol]?.name ? NAME_READS.named : NAME_READS.unnamed));
+      // Pages never read go first, then the longest unread.
+      due.sort((a, b) => (names[a]?.at ?? "").localeCompare(names[b]?.at ?? ""));
+      const batch = due.slice(0, NAME_READS.perPoll);
+      let error: unknown;
+      for (const [i, symbol] of batch.entries()) {
+        if (i > 0) await sleep(NAME_READS.gap);
+        try {
+          names[symbol] = { name: await robinhoodPageName(symbol, fetchImpl), at: new Date(clock()).toISOString() };
+          delete failed[symbol];
+        } catch (cause) {
+          error = cause;
+          failed[symbol] = new Date(clock()).toISOString();
+        }
+      }
+      if (batch.length > 0 && batch.every((symbol) => symbol in failed)) throw error;
+      return due.length > batch.length;
     },
   };
 }

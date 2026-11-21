@@ -17,7 +17,7 @@ import { Deliveries } from "./deliver.js";
 import { EventLog, KINDS, type Found } from "./events.js";
 import type { Post } from "./net.js";
 import { INDEX_FROM, PoolIndex, type IndexedPool } from "./pools.js";
-import { clientOf, eventsQuery, keyOf, MAX_POOLS, SERVE_LIMITS, serveEvents, type PoolLookup } from "./serve.js";
+import { clientOf, eventsQuery, keyOf, MAX_POOLS, SERVE_LIMITS, serveEvents, type PageNames, type PoolLookup } from "./serve.js";
 
 const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
 const found = (kind: Found["kind"], ref: string, token: Found["token"] = { address: CASHCAT, symbol: "CASHCAT", name: "Cash Cat" }): Found => ({ kind, token, source: "x", ref, at: null, detail: {} });
@@ -39,7 +39,7 @@ function poster(status = 204) {
   return { posts, post };
 }
 
-async function serving({ healthy = true, trustProxy = false, limits = SERVE_LIMITS, post = poster().post, pools = undefined as PoolLookup | undefined } = {}) {
+async function serving({ healthy = true, trustProxy = false, limits = SERVE_LIMITS, post = poster().post, pools = undefined as PoolLookup | undefined, names = undefined as PageNames | undefined } = {}) {
   const where = dir();
   const log = new EventLog(where);
   settled(log, [{ ...found("bitgo.merged", "old"), observedAt: "2026-11-18T00:00:00.000Z", baseline: true }]);
@@ -47,7 +47,7 @@ async function serving({ healthy = true, trustProxy = false, limits = SERVE_LIMI
   settled(log, [{ ...found("pool.created", "0xabc"), observedAt: "2026-11-19T11:00:00.000Z" }]);
   settled(log, [{ ...found("robinhood.pair_added", "pairs#PONS", { address: null, symbol: "PONS", name: "Pons" }), observedAt: "2026-11-19T12:00:00.000Z" }]);
   const deliveries = new Deliveries({ dir: where, log, post, check: async () => {} });
-  const served = serveEvents({ log, ...(pools ? { pools } : {}), health: () => ({ ok: healthy, sources: {} }), deliveries, trustProxy, limits, clock: () => Date.parse("2026-11-19T13:00:00Z") });
+  const served = serveEvents({ log, ...(pools ? { pools } : {}), ...(names ? { names } : {}), health: () => ({ ok: healthy, sources: {} }), deliveries, trustProxy, limits, clock: () => Date.parse("2026-11-19T13:00:00Z") });
   await new Promise<void>((resolve) => served.server.listen(0, "127.0.0.1", resolve));
   close = () => served.close();
   return { base: new URL(`http://127.0.0.1:${(served.server.address() as AddressInfo).port}`), log, served, deliveries };
@@ -313,6 +313,20 @@ describe("watches", () => {
     for (let i = 0; i < 5; i++) expect((await post(base, { url: `https://hooks.example.com/${i}` })).status).toBe(201);
     expect(await post(base, { url: "https://hooks.example.com/6" })).toEqual({ status: 400, body: { error: "An address can have 5 watches at a time, switched-off ones included until they are removed. Remove one first." } });
     expect((await post(base, { url: "https://hooks.example.com/7" })).status).toBe(429);
+  });
+});
+
+describe("GET /robinhood/names", () => {
+  it("gives Robinhood's name on each crypto page read, by symbol, to any page, and 404 on a watcher that reads none", async () => {
+    const read = { PONS: { name: "Pons", at: "2026-11-21T10:00:00.000Z" }, ORE: { name: "", at: "2026-11-21T10:00:01.000Z" } };
+    const { base } = await serving({ names: () => read });
+    const answer = await fetch(new URL("/robinhood/names", base));
+    expect(answer.headers.get("access-control-allow-origin")).toBe("*");
+    expect(await answer.json()).toEqual({ readAt: "2026-11-19T13:00:00.000Z", pages: 2, names: { ORE: read.ORE, PONS: read.PONS } });
+    expect((await fetch(new URL("/robinhood/names", base), { method: "POST" })).status).toBe(405);
+    close?.();
+    const bare = await serving();
+    expect(await get(new URL("/robinhood/names", bare.base))).toEqual({ status: 404, body: { error: "This watcher does not read Robinhood's crypto pages." } });
   });
 });
 

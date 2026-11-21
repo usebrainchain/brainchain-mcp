@@ -212,3 +212,13 @@ export const outcomeKey = (row: OutcomeRow) => `${row.token.toLowerCase()}|${row
 
 /** Whether a row counts as an outcome: one tied by the symbol alone does not. */
 export const confirmed = (row: Pick<OutcomeRow, "match" | "unconfirmed">) => row.unconfirmed !== true && row.match !== "symbol";
+
+/**
+ * The rows tied by the symbol alone that nothing has confirmed since: the file keeps such a row when a later build
+ * confirms the match, and the confirmed row for the same token and outcome settles it.
+ */
+export function unsettled<T extends Pick<OutcomeRow, "token" | "outcome" | "match" | "unconfirmed">>(rows: readonly T[]): T[] {
+  const key = (row: T) => `${row.token.toLowerCase()}|${row.outcome}`;
+  const settled = new Set(rows.filter(confirmed).map(key));
+  return rows.filter((row) => !confirmed(row) && !settled.has(key(row)));
+}
