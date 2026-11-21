@@ -21,6 +21,9 @@ export const KINDS = [
   "gate.listed",
   "lifi.listed",
   "coingecko.listed",
+  "venue.listed",
+  "venue.status_changed",
+  "venue.announced",
 ] as const;
 export type Kind = (typeof KINDS)[number];
 

@@ -27,12 +27,15 @@ export const TRACE_OUTCOMES_TOOL: Tool = {
     `${OUTCOMES.map((outcome) => `\`${outcome}\` (${OUTCOME_WORDS[outcome]})`).join(", ")}. ` +
     "Each count gives `before`, the tokens the venue had listed before the step, which are left out; `eligible`, the rest; `unknown`, eligible tokens the venue lists without a date for it, which cannot be placed inside or outside the window; " +
     "`followed`, those listed within the window; `share`, `followed` over `eligible` less `unknown`; `medianLeadDays` from the step to the listing; and `tokens`, the contract addresses behind `followed`, `unknown` and `before`. " +
-    "KuCoin and Gate are matched by the contract they list on Robinhood Chain and dated by the trading start each publishes. Robinhood publishes no contract and no date: it is matched by symbol, confirmed by Robinhood's own name for the asset in its pair list or on its page, and dated by when BrainChain's watcher first saw it, so a listing already there when the watcher started on November 19, 2026 counts as `before` for a step after that day and as `unknown` for one before it. " +
-    "A Robinhood listing with nothing to confirm it but the symbol is left out of every count, since a token on Robinhood Chain can call itself by another asset's symbol: `unconfirmed` gives how many such rows the tokens with this step have, and `tokens`, which tokens. " +
+    "KuCoin and Gate are matched by the contract they list on Robinhood Chain and dated by the trading start each publishes. " +
+    "Binance Futures, Upbit, Bithumb and Bitget count from their first market for the token, read from the market lists each publishes: matched by the contract the exchange gives for the asset on Robinhood Chain, as Bitget does, or else by its own name for it, as Upbit and Bithumb give, and dated by the time the exchange gives the market, as Binance Futures and Bitget do, or else by when BrainChain's watcher first saw it. A market already there when the watcher first read the exchange is listed by that time when the exchange's contract ties it to the token, and is left out when only a symbol or a name does. " +
+    "Binance Futures gives neither a contract nor a name, so its markets rest on the symbol. Kraken counts from its blog post that the token is available for trading, dated by the post, which can come days after trading opened. " +
+    "Robinhood publishes no contract and no date: it is matched by symbol, confirmed by Robinhood's own name for the asset in its pair list or on its page, and dated by when BrainChain's watcher first saw it, so a listing already there when the watcher started on November 19, 2026 counts as `before` for a step after that day and as `unknown` for one before it. " +
+    "A listing with nothing to confirm it but the symbol is left out of every count, since a token on Robinhood Chain can call itself by another asset's symbol: `unconfirmed` gives how many such rows the tokens with this step have, and `tokens`, which tokens. " +
     "Bitstamp is not counted: its robots.txt closes its API to automated clients, so the daily build does not read it; brainchain_token_sightings still reads it when asked. " +
     "A pool counts once the stretch of 10,000 blocks it was created in had ended; every token with a pool is counted, those that were never listed too. " +
     "To count only what was public at a point in the past, pass `at`, a time in ISO 8601 such as 2026-09-01T00:00:00Z, or `atBlock`: each row counts from the time its source dates it. `cut` gives the time used. " +
-    "`venue` keeps one venue: robinhood (both of its sources), robinhood_page, robinhood_tradable, kucoin or gate. " +
+    `\`venue\` keeps one venue: robinhood (both of its sources), ${OUTCOMES.join(", ")}. ` +
     "`dataset` names what was read: its `date`, the `headBlock` it reaches, `readAt` and `manifest`, the SHA-256 of that day's manifest, which BrainChain inscribes on its chain; every file read is checked against the manifest first. " +
     "The dataset is built once a day by `brainchain-mcp dataset` and read from its public repository, or from the directory or address BRAINCHAIN_DATASET names. Counts appear once a dataset has been published there: until then, or while it cannot be read, the tool says so and counts nothing. Free, no key and no payment. Not advice.",
   annotations: { readOnlyHint: true, openWorldHint: true },
@@ -43,7 +46,7 @@ export const TRACE_OUTCOMES_TOOL: Tool = {
       within: { type: "integer", minimum: 1, maximum: MAX_WITHIN, description: "Optional: one window, in days, in place of 7, 30 and 90." },
       at: { type: "string", description: "Optional: a time in ISO 8601. Only rows public by then are counted." },
       atBlock: { type: "integer", minimum: 0, description: "Optional, in place of at: a block number. Only rows public by the end of that block are counted." },
-      venue: { type: "string", enum: VENUES, description: "Optional: one venue to count, in place of all four." },
+      venue: { type: "string", enum: VENUES, description: "Optional: one venue to count, in place of all of them." },
     },
     required: ["trace"],
     additionalProperties: false,

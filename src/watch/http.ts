@@ -56,6 +56,8 @@ export const FIRST_REFUSED_MS = 60_000;
 export const MAX_REFUSED_MS = HOUR_MS;
 /** A host that has not refused for this long starts again from `FIRST_REFUSED_MS`; one that refuses sooner waits twice as long as last time. */
 export const QUIET_MS = 15 * 60_000;
+/** A host that answers 451, which says it does not serve the address the watcher reads from, is left alone this long. */
+export const REGION_MS = 6 * HOUR_MS;
 /** GitHub requests the watcher leaves unused in each hour, for the MCP server and anything else on the same address or token. */
 export const GITHUB_RESERVE = { withToken: 500, withoutToken: 10 };
 
@@ -157,9 +159,17 @@ export class Requests {
     count.total++;
     const response = await this.fetchImpl(url, init);
     if (host === GITHUB_API) this.readGitHubLimit(response);
-    if (response.status === 403 || response.status === 429) {
+    // Binance answers 418 to an address that went on after a 429.
+    if (response.status === 403 || response.status === 429 || response.status === 418) {
       await response.body?.cancel().catch(() => {});
       throw this.refused(host, response);
+    }
+    if (response.status === 451) {
+      await response.body?.cancel().catch(() => {});
+      const until = now + REGION_MS;
+      const message = `${host} answered 451: it does not serve the region the watcher reads from, so the watcher leaves it alone until ${new Date(until).toISOString()}.`;
+      this.blocked.set(host, { until, message, refusals: 0, at: now });
+      throw new Backoff(message, until);
     }
     return response;
   }
@@ -175,7 +185,7 @@ export class Requests {
     }
   }
 
-  /** How long a host that answered 403 or 429 is left alone: as long as it said, or longer each time it does not say. */
+  /** How long a host that answered 403, 418 or 429 is left alone: as long as it said, or longer each time it does not say. */
   private refused(host: string, response: Response): Backoff {
     const now = this.clock();
     const retryAfter = Number(response.headers.get("retry-after"));
