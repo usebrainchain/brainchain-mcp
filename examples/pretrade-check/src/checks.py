@@ -16,9 +16,11 @@ _KEY_X = "19P3C981JsyQsqwVho8Tlabx51rslvdruSH59mGuWn0"
 _COVERED = ['"@status"', '"content-type"', '"content-digest"', '"@method";req', '"@authority";req', '"@path";req', '"@query";req']
 _SIGNED_REQUEST = {"method": "GET", "authority": "api.0x.org", "path": "/swap/allowance-holder/quote"}
 _FRESH_SECONDS = 60
+# The only parameters this client sends, slippageBps being optional. 0x reads others, fee and surplus recipients among
+# them, so any other is refused.
+_QUERY = ("chainId", "sellToken", "buyToken", "sellAmount", "taker")
+_QUERY_OPTIONAL = ("slippageBps",)
 _FEE_PARAMS = ("swapFeeRecipient", "swapFeeBps", "swapFeeToken", "tradeSurplusRecipient", "tradeSurplusMaxBps")
-# Pyodide puts its own core module in the namespace before any code runs.
-_INTERPRETER = ("_pyodide_core",)
 
 # Ed25519 verification as RFC 8032 section 5.1.7 gives it, on Python integers: the sandbox has hashlib but no curve.
 _P = 2**255 - 19
@@ -83,11 +85,12 @@ def _ed25519(public, message, signature):
 
 
 # RFC 8032 test 1: a verifier that cannot pass it says nothing about 0x's signature.
-assert _ed25519(
+if not _ed25519(
     bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"),
     b"",
     bytes.fromhex("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"),
-), "the Ed25519 verifier fails RFC 8032's first test vector"
+):
+    raise AssertionError("the Ed25519 verifier fails RFC 8032's first test vector")
 
 
 def _b64url(text):
@@ -184,8 +187,11 @@ _SHAPE = {
 def _misshapen(value, shape, at="DELIVERY"):
     if not isinstance(shape, dict):
         return None if type(value) is shape else at + " is not " + shape.__name__
-    if not isinstance(value, dict):
-        return at + " is not a dict"
+    if type(value) is not dict:
+        return at + " is not an object"
+    extra = sorted(set(value) - set(shape))
+    if extra:
+        return at + " has " + ", ".join(repr(k) for k in extra) + ", which the checks do not read"
     for key, inner in shape.items():
         problem = _misshapen(value[key], inner, at + "[" + repr(key) + "]") if key in value else at + " has no " + repr(key)
         if problem:
@@ -193,11 +199,63 @@ def _misshapen(value, shape, at="DELIVERY"):
     return None
 
 
-def _run(delivery, mandate, delivered):
-    misshapen = _misshapen(delivery, _SHAPE)
-    if misshapen:
-        print("FAIL  delivery: " + misshapen)
-        raise AssertionError("the delivery cannot be read: " + misshapen)
+def _unique(pairs):
+    found = {}
+    for key, value in pairs:
+        if key in found:
+            raise ValueError(repr(key) + " appears twice")
+        found[key] = value
+    return found
+
+
+def _not_json(name):
+    raise ValueError(name + " is not JSON")
+
+
+def _delivery(value):
+    """The delivery read from DELIVERY's string alone, with this module's own base64 and json."""
+    if type(value) is not str:
+        raise ValueError("DELIVERY is " + ("missing" if value is None else "a " + type(value).__name__) + ", not a string")
+    try:
+        text = _base64.b64decode(value, validate=True).decode("utf-8")
+        delivery = _json.loads(text, object_pairs_hook=_unique, parse_constant=_not_json)
+    except ValueError as error:
+        raise ValueError("DELIVERY is not base64 of JSON: " + str(error)) from None
+    problem = _misshapen(delivery, _SHAPE)
+    if problem:
+        raise ValueError(problem)
+    return delivery, len(value)
+
+
+def _query(text):
+    """
+    The request's query, read strictly: the names this client sends, each once, with values of letters and digits.
+    Nothing is percent-decoded, so 0x reads every value exactly as written here.
+    """
+    if not text.startswith("?"):
+        return {}, [], ["it does not start with ?"]
+    values, names, problems = {}, [], []
+    for part in text[1:].split("&"):
+        name, sep, value = part.partition("=")
+        names.append(name)
+        if not sep or not _re.fullmatch(r"[A-Za-z]+", name) or not _re.fullmatch(r"[A-Za-z0-9]+", value):
+            problems.append("'" + part + "' is not a name=value pair of letters and digits")
+        elif name not in _QUERY + _QUERY_OPTIONAL:
+            problems.append("it asks for " + name + ", which the checks do not allow")
+        elif name in values:
+            problems.append("it names " + name + " twice")
+        else:
+            values[name] = value
+    problems += ["it has no " + name for name in _QUERY if name not in values]
+    return values, names, problems
+
+
+def _run(given, mandate):
+    try:
+        delivery, length = _delivery(given)
+    except ValueError as error:
+        print("FAIL  delivery: " + str(error))
+        raise AssertionError("the delivery cannot be read: " + str(error)) from None
     outcomes = []
 
     def rule(name, ok, why):
@@ -207,17 +265,19 @@ def _run(delivery, mandate, delivered):
     tokens = {t["address"].lower(): t for t in mandate["tokens"]}
     wallet, recipient = mandate["wallet"].lower(), mandate["recipient"].lower()
     request, response = delivery["request"], delivery["response"]
-    query = dict(p.split("=", 1) for p in request["query"].lstrip("?").split("&") if "=" in p)
+    query, asked, malformed = _query(request["query"])
     try:
         quote = _json.loads(response["body"])
     except ValueError:
         quote = None
-    quote = quote if isinstance(quote, dict) else {}
-    tx = quote.get("transaction") or {}
+    quote = quote if type(quote) is dict else {}
+    tx = quote.get("transaction") if type(quote.get("transaction")) is dict else {}
+    data = tx.get("data") if type(tx.get("data")) is str else ""
     try:
-        call = _call(bytes.fromhex(tx.get("data", "0x")[2:]))
+        call = _call(bytes.fromhex(data[2:]) if data.startswith("0x") else b"")
     except ValueError as error:
         call, unread = None, str(error)
+    quoted = int(quote["buyAmount"]) if type(quote.get("buyAmount")) is str and _re.fullmatch(r"[0-9]+", quote["buyAmount"]) else 0
     native = call is not None and call["token"] == _ZERO
     sell = _NATIVE if native else (call or {}).get("token")
     buy = (call or {}).get("buyToken")
@@ -225,14 +285,13 @@ def _run(delivery, mandate, delivered):
     if call:
         print(
             "Trade: sell " + _shown(call["amount"], tokens.get(sell)) + " for at least " + _shown(call["minOut"], tokens.get(buy))
-            + (" (0x quoted " + _shown(int(quote["buyAmount"]), tokens.get(buy)) + ")" if "buyAmount" in quote else "")
+            + (" (0x quoted " + _shown(quoted, tokens.get(buy)) + ")" if quoted else "")
             + ", paid to " + call["recipient"] + ", on chain " + query.get("chainId", "?") + ", quoted at block " + str(quote.get("blockNumber", "?"))
         )
     else:
         print("Trade: the transaction could not be read: " + unread)
 
-    delivered = [n for n in delivered if not (n in _INTERPRETER and type(globals()[n]) is type(_json) and globals()[n].__name__ == n)]
-    rule("delivery", delivered == ["DELIVERY"], "the delivery's code " + ("defines DELIVERY and nothing else" if delivered == ["DELIVERY"] else "defines " + ", ".join(delivered) + ", where only DELIVERY is allowed"))
+    rule("delivery", True, "DELIVERY is a string of " + str(length) + " base64 characters, JSON with exactly the fields these checks read")
 
     ok, why, created = _signature(delivery)
     rule("signature", ok, why)
@@ -242,6 +301,8 @@ def _run(delivery, mandate, delivered):
     else:
         age = delivery["receivedAt"] - created
         rule("fresh", -5 <= age <= _FRESH_SECONDS, "the agent received the quote " + str(age) + (" second" if age == 1 else " seconds") + " after the time its signature names, by the agent's clock; 0x allows " + str(_FRESH_SECONDS))
+
+    rule("query", not malformed, "; ".join(malformed) or "the request asks 0x for " + ", ".join(n for n in _QUERY + _QUERY_OPTIONAL if n in query) + ", each once, and nothing else")
 
     chain = query.get("chainId")
     rule("chain", chain == str(mandate["chain"]), "the quote is for chain " + str(chain) + ("" if chain == str(mandate["chain"]) else ", the mandate allows " + str(mandate["chain"])))
@@ -254,8 +315,9 @@ def _run(delivery, mandate, delivered):
             rule(name, False, "the transaction could not be read: " + unread)
     else:
         registry = delivery["registry"]
-        settlers = {registry["settler"].lower(), registry["previous"].lower()}
-        to = tx.get("to", "").lower()
+        # A chain with one Settler has no previous one; the registry read gives it as the zero address, which never counts.
+        settlers = {a.lower() for a in (registry["settler"], registry["previous"])} - {_ZERO}
+        to = str(tx.get("to", "")).lower()
         problems = []
         if to != _ALLOWANCE_HOLDER:
             problems.append("it calls " + to + ", not AllowanceHolder " + _ALLOWANCE_HOLDER)
@@ -277,13 +339,12 @@ def _run(delivery, mandate, delivered):
             problems.append("over the mandate's most of " + _shown(cap, tokens[sell]))
         if str(call["amount"]) != query.get("sellAmount") or str(call["amount"]) != quote.get("sellAmount"):
             problems.append("the transaction sells a different amount from the one asked for")
-        if int(tx.get("value", "0")) != (call["amount"] if native else 0):
+        if str(tx.get("value", "0")) != str(call["amount"] if native else 0):
             problems.append("the transaction sends " + str(tx.get("value")) + " wei of ETH with it")
-        if sell != (quote.get("sellToken") or "").lower() or buy != (quote.get("buyToken") or "").lower():
+        if sell != str(quote.get("sellToken") or "").lower() or buy != str(quote.get("buyToken") or "").lower():
             problems.append("the transaction trades other tokens than the quote names")
         rule("size", not problems, "sells " + _shown(call["amount"], tokens.get(sell)) + ("; " + "; ".join(problems) if problems else ", within the mandate's most of " + _shown(cap, tokens[sell])))
 
-        quoted = int(quote.get("buyAmount", "0"))
         floor = -(-quoted * (10_000 - mandate["maxSlippageBps"]) // 10_000)
         slip = (quoted - call["minOut"]) * 10_000 / quoted if quoted else 0
         problems = []
@@ -296,15 +357,18 @@ def _run(delivery, mandate, delivered):
 
         rule("recipient", call["recipient"] == recipient, "pays " + call["recipient"] + ("" if call["recipient"] == recipient else ", not the mandate's recipient " + recipient))
 
-    fees = [p for p in _FEE_PARAMS if p in query] + (["an integrator fee in the quote"] if quote.get("fees", {}).get("integratorFee") or quote.get("fees", {}).get("integratorFees") else [])
-    rule("fees", not fees, "no fee but 0x's own" if not fees else "the quote adds " + ", ".join(fees))
+    # The request can name no fee or surplus recipient, and the minimum out is the recipient's whatever 0x keeps as its own fee.
+    fees = quote.get("fees") if type(quote.get("fees")) is dict else {}
+    added = [p for p in _FEE_PARAMS if p in asked] + (["an integrator fee in the quote"] if fees.get("integratorFee") or fees.get("integratorFees") else [])
+    rule("fees", not added, "no fee but 0x's own" if not added else "the quote adds " + ", ".join(added))
 
     until = _datetime.fromisoformat(mandate["validUntil"].replace("Z", "+00:00")).timestamp()
     rule("deadline", created is not None and created <= until, ("the signature is dated " + _iso(created) if created is not None else "the signature names no time") + ", and the mandate runs until " + mandate["validUntil"])
 
     failed = [name for name, ok in outcomes if not ok]
     print(str(len(outcomes) - len(failed)) + " of " + str(len(outcomes)) + " rules pass" + ("." if not failed else "; failed: " + ", ".join(failed) + "."))
-    assert not failed, "the trade breaks the mandate: " + ", ".join(failed)
+    if failed:
+        raise AssertionError("the trade breaks the mandate: " + ", ".join(failed))
 
 
-_run(DELIVERY, _json.loads(_MANDATE), _DELIVERED)
+_run(globals().get("DELIVERY"), _json.loads(_MANDATE))

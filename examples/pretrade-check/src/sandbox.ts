@@ -1,5 +1,5 @@
-// Runs a grade request's checks on this machine the way BrainChain's sandbox does, so a mandate and its checks can
-// be tried on a recorded quote before anything is paid.
+// Runs a grade request's checks on this machine the way BrainChain's sandbox does, so a trade is checked here before
+// anything is paid for its grade, and a published decision can be run again.
 import { Worker } from "node:worker_threads";
 
 import type { GradeRequest } from "./request.ts";
@@ -10,12 +10,19 @@ export interface Run {
   output: string;
 }
 
-// The fences BrainChain runs as Python. One marked checks has more on its first line, so it never matches.
-const PYTHON = /```(?:python|py|python3)[^\S\n]*\n([\s\S]*?)```/gi;
+// As BrainChain reads them: the result's fences it runs as Python, and the brief's fence that holds the checks. A
+// fence marked checks has more on its first line, so the first pattern never matches it.
+export const PYTHON_FENCE = /```(?:python|py|python3)[^\S\n]*\n([\s\S]*?)```/gi;
+export const CHECKS_FENCE = /```(?:python|py|python3)[^\S\n]+checks[^\S\n]*\n([\s\S]*?)```/gi;
+/** The first line of any checks fence, closed or not, in either language BrainChain runs. */
+export const CHECKS_OPENER = /```(?:python|py|python3|javascript|js|mjs|node)[^\S\n]+checks[^\S\n]*(?:\n|$)/gi;
+
+/** The result's Python blocks, trimmed, as BrainChain joins them into the program. */
+export const pythonBlocks = (result: string): string[] => [...result.matchAll(PYTHON_FENCE)].map((m) => m[1]!.trim()).filter(Boolean);
 
 /** The one program the sandbox runs: the result's Python blocks in order, then the checks. */
 export function programOf(request: Pick<GradeRequest, "result" | "checks">): string {
-  const blocks = [...request.result.matchAll(PYTHON)].map((m) => m[1]!.trim()).filter(Boolean);
+  const blocks = pythonBlocks(request.result);
   if (blocks.length === 0) throw new Error("The result has no Python block, so BrainChain would reject it without a run.");
   return `${blocks.join("\n\n")}\n\n${request.checks.code.trim()}`;
 }
@@ -45,3 +52,6 @@ export async function runLocally(request: Pick<GradeRequest, "result" | "checks"
     await worker.terminate();
   }
 }
+
+/** The lines a run printed for its rules, pass or FAIL, in order. */
+export const ruleLines = (output: string): string[] => output.split("\n").filter((line) => line.startsWith("pass  ") || line.startsWith("FAIL  "));
