@@ -206,11 +206,11 @@ export const WATCH_TOOL: Tool = {
   title: "Have new public changes about Robinhood Chain tokens sent to you",
   description:
     "Has each new public change about a Robinhood Chain token sent to an https address as the watcher sees it, so an agent or its user hears without asking. " +
-    "`url` can be a Discord or Slack incoming webhook, or a Telegram bot's sendMessage URL with ?chat_id=, which get one line per change: what changed, the token, what it is worth now and the link to check it, and a second short line with the worth when it was read after the change went out. " +
+    "`url` can be a Discord or Slack incoming webhook, or a Telegram bot's sendMessage URL with ?chat_id=, which get one line per change: what changed, the token, what it is worth now and the link to check it, and a second short line with the worth when it was read after the change went out. Changes that come up within 5 seconds of each other arrive as one message, a line each. " +
     "Any other https endpoint gets each event as JSON, the same as brainchain_changes returns it, and later a `{type: \"update\", id, context}` with the finished context when the event went out unfinished, each signed: X-BrainChain-Signature is v1= and the hex HMAC-SHA256, keyed with `secret`, of X-BrainChain-Timestamp, a full stop and the body. Refuse a delivery whose timestamp is more than 300 seconds off. " +
     "`kinds` and `tokens` keep only some changes, as in brainchain_changes. Only changes after the watch is made are sent, in order, each once. " +
     "The answer has `id`, `secret` and `manageToken`. Keep all three private: the watcher shows `manageToken` only this once, and it removes the watch with brainchain_unwatch. The watcher keeps the URL to send to and never shows it again. " +
-    "An endpoint that fails is tried again for about two hours, then the watch is switched off. The url must be https, on port 443, at a public address. One address can hold 5 watches and make 10 an hour. " +
+    "An endpoint that fails is tried again for about two hours, then the watch is switched off; an endpoint that asks the watcher to wait (429) is waited for, which does not count as failing. The url must be https, on port 443, at a public address. One address can hold 5 watches and make 10 an hour. " +
     `The watch is made on BrainChain's watcher at ${HOSTED_WATCH_URL}, or on the one BRAINCHAIN_WATCH_URL names. Free, no key and no payment.`,
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   inputSchema: {
