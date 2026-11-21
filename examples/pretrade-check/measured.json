@@ -3,7 +3,7 @@
   "gateway": "https://agent.api.0x.org/v1/x402/swap-allowance-holder-quote/",
   "route": "https://brain.usebrainchain.com/x402/grades",
   "price": "0.01 USDC to 0x per quote and 0.25 USDC to BrainChain per grade, both on Base",
-  "note": "Probabilities are each model's probability that the trade passes; BrainChain takes the lower. secondsToVerdict runs from the paid grade request to the verdict. Decisions 995 to 1002 were made with the earlier delivery, a Python dict, and twelve rules; npm run verify reports them as the earlier form. Decisions 1003 to 1005 use this version's delivery, one base64 string, and thirteen rules.",
+  "note": "Probabilities are each model's probability that the trade passes; BrainChain takes the lower. secondsToVerdict runs from the paid grade request to the verdict. Decisions 995 to 1002 were made with the earlier delivery, a Python dict, and twelve rules; npm run verify reports them as the earlier form. Decisions 1003 to 1005 and 1007 use this version's delivery, one base64 string, and thirteen rules.",
   "sandbox": {
     "what": "One grade whose checks were these checks with a probe of the runtime in front, on a quote bought the same hour. The probe's lines are as the sandbox printed them.",
     "probe": [
@@ -401,6 +401,41 @@
       },
       "paymentTx": "0xd999ed59c9c27a90854f3ae32cbf4d4ae1195feb4c9ab192928edd921389f3c4",
       "secondsToVerdict": 5.9
+    },
+    {
+      "at": "2026-11-21T03:05:35Z",
+      "case": "cli-output",
+      "form": "base64 string",
+      "what": "The inside trade through npm run check, printing the run's trade and rule lines and the approval as a transaction",
+      "expected": "accepted",
+      "trade": "sell 5 USDG for WETH on Robinhood Chain",
+      "quotePaymentTx": "0x3a2daa9cf990a55711679fc9e7c884683ea4d0d7cff3d978c690ccbb6d29c357",
+      "cost": "0.26 USDC",
+      "grade": "0x8549890944128f83646e02815d35d4eb7cf89eb6be9540fd96a0c21c961e0dfe",
+      "accepted": true,
+      "passProbability": 0.98,
+      "bar": 0.8,
+      "confidence": 0.98,
+      "levels": [
+        0.98,
+        0.02
+      ],
+      "second": {
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "passProbability": 1
+      },
+      "checks": {
+        "language": "python",
+        "outcome": "passed",
+        "output": "Trade: sell 5 USDG for at least 0.003077845917344091 WETH (0x quoted 0.003093312479742805 WETH), paid to 0xd937e50ee21e66f7640f1a7887399e63055290fe, on chain 4663, quoted at block 119557541\npass  delivery: DELIVERY is a string of 7820 base64 characters, JSON with exactly the fields these checks read\npass  signature: 0x signed this response with 0x-signing-key-prod-24092026 at 2026-11-21T03:04:53Z, over its body and the request GET api.0x.org/swap/allowance-holder/quote\npass  fresh: the agent received the quote 0 seconds after the time its signature names, by the agent's clock; 0x allows 60\npass  query: the request asks 0x for chainId, sellToken, buyToken, sellAmount, taker, slippageBps, each once, and nothing else\npass  chain: the quote is for chain 4663\npass  wallet: the quote is for wallet 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  contract: it calls AllowanceHolder, which lets Settler 0xe8852602f84e04e284286d8db01a41edd0ccefb0 take the sell amount for this one call; 0x's registry named that Settler at the quote's block\npass  tokens: sells USDG; buys WETH\npass  size: sells 5 USDG, within the mandate's most of 25 USDG\npass  minimum out: the trade reverts unless it pays at least 0.003077845917344091 WETH, 50.0 bps under 0x's quote, within the mandate's 100\npass  recipient: pays 0xd937e50ee21e66f7640f1a7887399e63055290fe\npass  fees: no fee but 0x's own\npass  deadline: the signature is dated 2026-11-21T03:04:53Z, and the mandate runs until 2026-12-31T23:59:59Z\n13 of 13 rules pass.\n"
+      },
+      "decision": {
+        "id": "1007",
+        "record": "https://brain.usebrainchain.com/records/0xaeb1b45c40f14cecf15d3fec114cada277e69ff11d13033b032d6f112b79f905.json#evidence=0xdd2eb8556e9a682990197cd0ef1574a950915ef51056aa5ad14327dc40cfa9a1",
+        "page": "https://usebrainchain.com/decision?id=1007"
+      },
+      "paymentTx": "0x293b6686579effac7f4d2c2449eaf26d15ba4da33047c481593ac56fffb15187",
+      "secondsToVerdict": 40.1
     }
   ]
 }

@@ -1,6 +1,6 @@
 # Check a trade against its mandate before signing
 
-An agent that trades through 0x can now have each trade checked against its written mandate before it signs. The agent buys a signed quote from 0x's keyless gateway for 0.01 USDC and pays BrainChain 0.25 USDC to grade it, both from the same wallet on Base. BrainChain's sandbox verifies 0x's signature on the quote and tests the transaction against each rule of the mandate. Two models then read the run, and BrainChain records the decision with a public page. The script prints the transaction to sign only when BrainChain accepts the trade. It never sends one.
+An agent that trades through 0x can now have each trade checked against its written mandate before it signs. The agent buys a signed quote from 0x's keyless gateway for 0.01 USDC and pays BrainChain 0.25 USDC to grade it, both from the same wallet on Base. BrainChain's sandbox verifies 0x's signature on the quote and tests the transaction against each rule of the mandate. Two models then read the run, and BrainChain records the decision with a public page. The script prints the transactions to sign only when BrainChain accepts the trade. It never sends one.
 
 This example is for anyone who runs an agent with a wallet: an owner who wants a record that every trade stayed inside its limits, or a framework that wants a gate in front of the signer. The sample mandate trades USDG, WETH and ETH on Robinhood Chain.
 
@@ -26,15 +26,11 @@ The mandate is a short JSON file. Each rule below prints one line in the run, pa
 
 The checks read the trade from the calldata, the part the wallet signs: AllowanceHolder's `exec` call and the Settler `execute` call inside it, whose recipient, buy token and minimum Settler enforces on chain. The quote's own summary fields are compared with it and never trusted alone. The Settler's actions, the route itself, are covered by 0x's signature and not decoded. 0x's own fee and any surplus are paid inside them, and the recipient is guaranteed the minimum whatever they pay.
 
-The grade has two levels: every rule passes, or one does not. A run that fails is refused at full confidence, whatever the models say. A run that passes is read by Jev and a second model, and BrainChain accepts the trade when the lower of their two probabilities reaches its bar, 80% today.
+The grade has two levels: every rule passes, or one does not. A run that fails is refused at full confidence, whatever the models say. A run that passes is read by two models: Jev, the model BrainChain grades with, and a second one. BrainChain accepts the trade when the lower of their two probabilities reaches its bar, 80% today.
 
 ## What a decision means
 
-An accepted decision means the published block passed the published checks in BrainChain's sandbox.
-
-The sandbox runs the delivered block first and the checks after it, in the same interpreter. So the block carries only data: one line, `DELIVERY = "<base64>"`, a single string literal that runs no code. The checks decode that string with their own imports and read nothing else the block made. A block holding code could change what the checks see before they start, and nothing written after it could tell, so the guarantee comes from the block's form, read from the public record.
-
-`npm run verify` reads it there. It confirms the block is that one line, the checks are this version's with your mandate, and that run again on your machine they print exactly what BrainChain's run printed. The client builds no other form, and a later version of BrainChain's grade route will read the delivery as data without running it. Until then, `verify` is the guarantee.
+An accepted decision means the published block passed the published checks in BrainChain's sandbox. The client sends that block as one string of data, `DELIVERY = "<base64>"`, so no code runs before the checks. `npm run verify` confirms this from the public record, and is the guarantee until BrainChain's grade route reads deliveries as data without running them.
 
 ## What it cannot check
 
@@ -48,54 +44,61 @@ The sandbox runs the delivered block first and the checks after it, in the same 
 
 ## Run it
 
-Node 22.18 or later runs the TypeScript as it is.
+Node 22.18 or later runs the TypeScript as it is. Start with `--dry` on your own mandate: it runs every check that costs nothing, needs no key and pays nothing.
 
 ```sh
 cd examples/pretrade-check
 npm ci
-npm run check -- --sample            # the recorded quotes, checked here as the sandbox checks them
-npm run check -- --sample --quote    # also ask the grade route for its price, without paying
+npm run check -- --dry --mandate my-mandate.json --sell USDG --buy WETH --amount 5 --slippage-bps 50
 BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/agent.key \
   npm run check -- --mandate my-mandate.json --sell USDG --buy WETH --amount 5 --slippage-bps 50
-npm run verify -- <grade id or record URL> --mandate my-mandate.json
+npm run verify -- <decision id> --mandate my-mandate.json
+npm run check -- --sample            # the recorded quotes, checked here as the sandbox checks them
+npm run check -- --sample --quote    # also ask the grade route for its price, without paying
 ```
 
-`--sample` needs no wallet and pays nothing. It runs the checks in Pyodide, the interpreter BrainChain's sandbox uses, on the six recorded quotes in [`fixtures/quotes`](fixtures/quotes), one of them tampered, against the sample mandate. It takes no other flag but `--quote`.
+`--dry` reads the mandate and the trade as a paid check would, the tokens' decimals and symbols on chain, what the wallet holds of the sell token and of USDC on Base, and the size of the checks. It asks the grade route its price without paying, then runs the checks with your mandate on a quote recorded for the sample wallet, since a fresh quote costs 0.01 USDC. Rules about another wallet, chain or token fail on that quote, as they should.
+
+`--sample` needs no wallet and pays nothing. It runs the checks in Pyodide, the interpreter BrainChain's sandbox uses, on the six recorded quotes in [`fixtures/quotes`](fixtures/quotes) against the sample mandate, and exits 0 because it shows six expected verdicts, four of them refusals. It takes no other flag but `--quote`.
 
 | Flag | Meaning |
 | --- | --- |
-| `--mandate <file>` | The mandate. A paid check requires it and never falls back to the sample. |
+| `--mandate <file>` | The mandate. `--dry` and a paid check require it, and never fall back to the sample. |
 | `--sell <token>` | A token the mandate lists and lets be sold, by symbol or address. |
 | `--buy <token>` | A token the mandate lists, by symbol or address. |
 | `--amount <n>` | How much to sell, in whole tokens, such as `5` or `0.5`, with no more decimals than the token has. |
 | `--slippage-bps <n>` | 0x's slippage tolerance, at most the mandate's `maxSlippageBps`. Without it 0x uses 100, which must also be within the mandate. |
-| `--help` | The usage. |
+| `--dry` | Every check that costs nothing, with no key. The trade flags are optional with it. |
+| `-h`, `--help` | The usage. |
 
-A paid check spends nothing on a trade it can refuse first. Before paying 0x, it refuses a token the mandate does not list, an amount over the mandate's most or of zero, the same token on both sides, and a slippage over the mandate's. It also checks that the checks fit the grade route and that the chain's node answers with the mandate's chain id. Once the quote arrives, it checks 0x's signature and the 60 seconds, refuses a quote 0x has no liquidity for or the wallet cannot cover, reads the registry at the quote's block, and runs the checks itself. Only a trade that passes every rule here is sent to BrainChain for its 0.25 USDC grade.
+The wallet needs the sell token and some ETH for gas on chain 4663, and USDC on Base to pay for the check.
 
-The paid run prints the SHA-256 of the checks' template and of the mandate, which `verify` prints too. It prints the transaction to sign only when the verdict is an acceptance of the grade it paid for, read from BrainChain's desk, on a run whose rule lines match the run on this machine. With it comes the approval the wallet still needs, if any, which must be to AllowanceHolder. A transaction whose gas at 0x's price could cost more than 0.0001 ETH is refused.
+A paid check spends nothing on a trade it can refuse first. Before paying 0x, it refuses a token the mandate does not list, an amount over the mandate's most, and a slippage over the mandate's. It reads each token's `decimals()` and `symbol()` on chain and refuses a mandate that says otherwise, naming its file. It checks that the wallet holds the amount it sells and at least 0.26 USDC on Base, and says how much is missing. It also checks that the checks fit the grade route and that the chain's node answers with the mandate's chain id. Once the quote arrives, it checks 0x's signature and the 60 seconds, refuses a quote 0x has no liquidity for, reads the registry at the quote's block, and runs the checks itself. Only a trade that passes every rule here is sent to BrainChain for its 0.25 USDC grade.
+
+The paid run prints the SHA-256 of the checks' template and of the mandate, which `verify` prints too. After the verdict it prints the trade and every rule line as BrainChain's run printed them. The transactions to sign come only for an acceptance of the grade it paid for, read from BrainChain's desk, on a run whose rule lines match the run on this machine. When the wallet has not yet approved the sell token, the first is the approval, to AllowanceHolder for exactly the amount sold. The second is the trade. Each is printed as JSON with `to`, `data`, `value` and `chainId`, ready to sign. A trade whose gas at 0x's price could cost more than 0.0001 ETH is not printed.
 
 | Exit code | `npm run check` | `npm run verify` |
 | --- | --- | --- |
-| 0 | Accepted: the transaction to sign is printed. | The record matches. |
-| 1 | The check did not finish. Nothing says the trade is safe to sign. | The record could not be checked, or its delivery is withheld. |
-| 2 | Refused, here or by BrainChain: do not sign. | The record does not match, or is of the earlier form. |
+| 0 | Accepted: the transactions to sign are printed. `--sample`, `--dry` and `--help` exit 0 too. | The record matches. |
+| 1 | Malformed input, such as an amount of 0, the same token on both sides, more decimals than the token has, or an unknown flag; or a check that did not finish, such as for a wallet short of funds. | The record could not be checked, or its delivery is withheld. |
+| 2 | The mandate refuses the trade, here or in BrainChain's grade: do not sign. | The record does not match, or is of the earlier form. |
 
 | Variable | Meaning |
 | --- | --- |
 | `BRAINCHAIN_PAYER_KEY_FILE` | The file holding the paying wallet's private key, readable by its owner alone. A paid check requires it. The key is never printed. |
 | `CHAIN_RPC` | A node for the mandate's chain, in place of the public one. Its URL is never printed. |
+| `BASE_RPC` | A node for Base, where the wallet's USDC is read, in place of the public one. Its URL is never printed. |
 | `BRAINCHAIN_DESK_URL` | BrainChain's desk, `https://brain.usebrainchain.com` by default. Another must be an https origin, or http on localhost or 127.0.0.1, and take payment at the same address on Base. |
 
-Both payments are capped in the client: it signs at most 0.01 USDC to 0x's payee and 0.25 USDC to BrainChain's, on Base, as EIP-3009 transfer authorizations. The wallet needs USDC on Base and no gas there. Once a payment is signed, every error says what may have been charged. When BrainChain's answer is lost or unclear, the client reads the grade by its id, which is free, and waits for its verdict. If no grade turns up, it prints where to read it and says not to run the check again, since that would pay again.
+Both payments are capped in the client: it signs at most 0.01 USDC to 0x's payee and 0.25 USDC to BrainChain's, on Base, as EIP-3009 transfer authorizations. The wallet needs no gas on Base. Once a payment is signed, every error says what may have been charged. When a payment processor turns a payment down for want of funds, the client says so, and that nothing was charged. When BrainChain's answer is lost or unclear, the client reads the grade by its id, which is free, and waits for its verdict. If no grade turns up, it prints where to read it and says not to run the check again, since that would pay again.
 
 ## Verify a decision
 
 ```sh
-npm run verify -- 0x6f81a236fa37a14e0733ffd479b5502119a80d8e2a8ddd35250989f6e05e1f11 --mandate fixtures/mandate.json
+npm run verify -- 1004 --mandate fixtures/mandate.json
 ```
 
-`verify` takes a grade id, as the paid run prints it, or a decision record's URL on BrainChain's desk, and the mandate file. It reads the grade and its record, which is free, and prints one line per step:
+`verify` takes a decision id, as the paid run prints it, the decision's page (`https://usebrainchain.com/decision?id=1004`), a grade id, or a decision record's URL on BrainChain's desk, and the mandate file. A decision id is read from its `Recorded` event on BrainChain's chain, through the public node `npx brainchain-verify` uses. `verify` then reads the grade and its record, which is free, and prints one line per step:
 
 ```text
 Decision 1004, grade 0x6f81a236fa37a14e0733ffd479b5502119a80d8e2a8ddd35250989f6e05e1f11: accepted at a pass probability of 98%, checks passed, from https://brain.usebrainchain.com/records/0x3541119e6ad75b81b449ea321aa250f7b785a11691e3016edbe66d0742cefff5.json
@@ -140,6 +143,8 @@ Decisions 995 to 1002 were made with the earlier delivery, a Python dict. `verif
 | `maxSlippageBps` | How far under 0x's quoted amount the guaranteed minimum may be, in basis points. |
 | `validUntil` | The last moment 0x may have signed a quote under this mandate, in UTC, as a real date and time. |
 
+Each token's `decimals` and `symbol` must be what the token's contract returns on chain, which `--dry` and every paid check read before anything is paid.
+
 The checks read this JSON as it is written into them, and [`src/mandate.ts`](src/mandate.ts) refuses a mandate with a field they would not read, at any level, so a typo cannot drop a rule. Its errors name the file.
 
 ## The request
@@ -163,13 +168,14 @@ Every check is recorded on BrainChain with a public decision page. The brief and
 
 ## Measured
 
-On 2026-11-21 we ran eleven checks through the grade route and paid for each: 0.25 USDC to BrainChain per grade and 0.01 USDC to 0x for each quote bought, all on Base. Every quote was bought through 0x's gateway minutes before it was graded. The requests, the full replies and what the checks printed are in [`measured.json`](measured.json), six of the earlier deliveries in [`fixtures/quotes`](fixtures/quotes), and four records in [`fixtures/records`](fixtures/records).
+On 2026-11-21 we ran twelve checks through the grade route and paid for each: 0.25 USDC to BrainChain per grade and 0.01 USDC to 0x for each quote bought, all on Base. Every quote was bought through 0x's gateway minutes before it was graded. The requests, the full replies and what the checks printed are in [`measured.json`](measured.json), six of the earlier deliveries in [`fixtures/quotes`](fixtures/quotes), and four records in [`fixtures/records`](fixtures/records).
 
-This version's delivery, one base64 string, through `npm run check` and a tampered copy of its quote:
+This version's delivery, one base64 string, through `npm run check` and a tampered copy of a quote:
 
 | Case | Trade | Expected | Verdict | Jev | Second model | Verdict in | Record |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Command line | Sell 5 USDG for WETH at 50 bps slippage | Accepted | Accepted, 98% | 98% | 100% | 8.8 s | [1004](https://usebrainchain.com/decision?id=1004) |
+| Command line | The same trade again, with the run's rule lines and the approval printed | Accepted | Accepted, 98% | 98% | 100% | 40.1 s | [1007](https://usebrainchain.com/decision?id=1007) |
 | Tampered | 1004's quote with one byte of its route changed and its body digest recomputed, sent without the client's own checks, which refuse it | Refused on signature | Refused on signature | 0% | 0% | 5.9 s | [1005](https://usebrainchain.com/decision?id=1005) |
 
 Decision [1003](https://usebrainchain.com/decision?id=1003), the same trade as 1004, passed every rule and was refused at 55% from Jev. Its levels also asked the models whether the block was one line assigning one string, which a model cannot read off a line of base64. They now judge the run alone, and `verify` reads the block.
@@ -197,4 +203,4 @@ The probe ran the same checks with a few lines in front, which printed Python 3.
 
 `npm test` runs without paying anything or reaching the network. It runs this version's checks in Pyodide 314.0.7, the version BrainChain's sandbox runs, on the six recorded quotes: the inside and native trades pass every rule, and the outside, minimum, size and tampered trades each fail on their one rule. The inside quote is then changed to break each other rule in turn, the delivery is changed in every way the checks must refuse, and both bypasses from the review are run: a dict subclass, which the checks now refuse, and a patched `hashlib`, which passes the run itself and which `verify` refuses. The client's query parser is held to the checks' on the same queries.
 
-`verify` is tested on the four recorded records, 996, 997, 1004 and 1005, and on records built from the recorded quotes with each kind of mismatch. The rest covers the mandate parser, the request's limits, the arrival check, the Settler registry read, both payment clients and every answer BrainChain can give a paid request, the rules for trusting a verdict, and the command line's exit codes, all against stubs.
+`verify` is tested on the four recorded records, 996, 997, 1004 and 1005, reached by decision id, page, grade id and URL, and on records built from the recorded quotes with each kind of mismatch. The rest covers the mandate parser, the token and balance reads, the request's limits, the arrival check, the Settler registry read, both payment clients and every answer BrainChain can give a paid request, the rules for trusting a verdict, the dry run, and the command line's exit codes, all against stubs.
