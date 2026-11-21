@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { keccak256 } from "viem";
+import { createPublicClient, custom, decodeFunctionData, encodeFunctionResult, erc20Abi, keccak256, numberToHex, parseAbi, type Abi, type Hex, type PublicClient } from "viem";
 
 import { DEFAULT_DESK } from "../src/desk.ts";
 import { parseMandate } from "../src/mandate.ts";
@@ -81,4 +81,28 @@ export function serve(routes: Record<string, () => Response | Promise<Response>>
     return (routes[url.split("#")[0]!] ?? (() => new Response("{}", { status: 404 })))();
   };
   return Object.assign(handler as typeof fetch, { urls });
+}
+
+const CALLS: Abi = [...erc20Abi, ...parseAbi(["function ownerOf(uint256) view returns (address)", "function prev(uint128) view returns (address)"])];
+
+/**
+ * A node that answers eth_call from a table of contract address, then function name, then result; any other call
+ * reverts. `balance` is every address's native balance.
+ */
+export function node(answers: Record<string, Record<string, unknown>>, options: { block?: number; balance?: bigint } = {}): PublicClient {
+  const table = Object.fromEntries(Object.entries(answers).map(([address, results]) => [address.toLowerCase(), results]));
+  return createPublicClient({
+    transport: custom({
+      async request({ method, params }: { method: string; params: unknown[] }) {
+        if (method === "eth_blockNumber") return numberToHex(options.block ?? 1);
+        if (method === "eth_getBalance") return numberToHex(options.balance ?? 0n);
+        if (method !== "eth_call") throw new Error(`no ${method} here`);
+        const { to, data } = params[0] as { to: string; data: Hex };
+        const { functionName } = decodeFunctionData({ abi: CALLS, data });
+        const result = table[to.toLowerCase()]?.[functionName];
+        if (result === undefined) throw Object.assign(new Error("execution reverted"), { code: 3, data: "0x" });
+        return encodeFunctionResult({ abi: CALLS, functionName, result } as never);
+      },
+    }),
+  });
 }
