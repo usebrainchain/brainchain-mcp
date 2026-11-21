@@ -54,6 +54,14 @@ export interface VerifyIo {
   brainchain?: PublicClient;
 }
 
+/** The hash a record on the desk is published under, read from its URL. */
+function recordName(url: string, desk: string): string | undefined {
+  const record = URL.canParse(url) ? new URL(url) : undefined;
+  if (!record || record.origin !== new URL(desk).origin || record.search) return undefined;
+  if (record.hash && !/^#evidence=0x[0-9a-f]{64}$/.test(record.hash)) return undefined;
+  return /^\/records\/(0x[0-9a-f]{64})\.json$/.exec(record.pathname)?.[1];
+}
+
 /** A decision's number, from its id or its page's URL. */
 function decisionId(target: string): bigint | undefined {
   if (/^\d+$/.test(target)) return BigInt(target);
@@ -98,7 +106,7 @@ export async function verify(target: string, mandateFile: string, io: VerifyIo):
     if (view.state !== "graded" || !view.decision?.record) throw new Error(`Grade ${target} is ${view.state}, with no decision yet. Reading it again is free.`);
     url = view.decision.record;
   }
-  const name = new RegExp(`^${io.desk.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/records/(0x[0-9a-f]{64})\\.json(?:#evidence=0x[0-9a-f]{64})?$`).exec(url)?.[1];
+  const name = recordName(url, io.desk);
   if (!name) throw new Error(`${url} is not a decision record on ${io.desk}: give a decision id, its page, a grade id or ${io.desk}/records/<hash>.json.`);
   const { bytes, record } = await fetchRecord(url, io.fetch);
   const state = recordState(record);
