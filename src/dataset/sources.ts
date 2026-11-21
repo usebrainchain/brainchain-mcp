@@ -7,20 +7,56 @@ import { CHECKPOINT_FILE, POOLS_FILE, type IndexedPool, type PoolCheckpoint } fr
 const REQUEST_MS = 60_000;
 const HEADERS = { Accept: "application/json", "User-Agent": "brainchain-mcp" };
 
-async function getJson(url: URL | string, fetchImpl: typeof fetch): Promise<unknown> {
-  const response = await fetchImpl(url, { headers: HEADERS, redirect: "error", signal: AbortSignal.timeout(REQUEST_MS) });
-  const body = await response.text();
-  if (response.status !== 200) throw new Error(`${new URL(url).host} answered ${response.status}${response.status < 500 ? `: ${body.slice(0, 200)}` : ""}.`);
-  return JSON.parse(body) as unknown;
+/**
+ * A watcher answers one address 120 requests a minute, so the build asks it at most once each `WATCHER_GAP_MS`, which
+ * leaves room for the tools on the same address, and a reader of the whole pool index stays under the limit.
+ */
+export const WATCHER_GAP_MS = 600;
+/** How many times a request a host turned away with 429 is sent again, after the wait it asks for or a minute. */
+export const REFUSED_TRIES = 5;
+
+export interface Pacing {
+  gap: number;
+  sleep: (ms: number) => Promise<void>;
+  clock: () => number;
+}
+
+const nap = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function getJson(url: URL | string, fetchImpl: typeof fetch, pace?: Pacing & { next: number }): Promise<unknown> {
+  const sleep = pace?.sleep ?? nap;
+  for (let tries = 1; ; tries++) {
+    if (pace) {
+      const wait = pace.next - pace.clock();
+      if (wait > 0) await sleep(wait);
+      pace.next = pace.clock() + pace.gap;
+    }
+    const response = await fetchImpl(url, { headers: HEADERS, redirect: "error", signal: AbortSignal.timeout(REQUEST_MS) });
+    const body = await response.text();
+    if (response.status === 429 && tries < REFUSED_TRIES) {
+      const asked = Number(response.headers.get("retry-after"));
+      await sleep(asked > 0 ? asked * 1000 : 60_000);
+      continue;
+    }
+    if (response.status !== 200) throw new Error(`${new URL(url).host} answered ${response.status}${response.status < 500 ? `: ${body.slice(0, 200)}` : ""}.`);
+    return JSON.parse(body) as unknown;
+  }
+}
+
+/** One pace for every request to one watcher, so its events and its pool index together keep under its limit. */
+const paces = new Map<string, Pacing & { next: number }>();
+export function watcherPace(watcher: URL, pacing: Partial<Pacing> = {}): Pacing & { next: number } {
+  if (!paces.has(watcher.origin) || Object.keys(pacing).length) paces.set(watcher.origin, { gap: WATCHER_GAP_MS, sleep: nap, clock: Date.now, ...pacing, next: 0 });
+  return paces.get(watcher.origin)!;
 }
 
 const at = (watcher: URL, path: string) => new URL(path, watcher.href.endsWith("/") ? watcher : `${watcher.href}/`);
 
 /** Every event the watcher has published, its baseline included, oldest first. */
-export async function watcherEvents(watcher: URL, fetchImpl: typeof fetch = fetch): Promise<WatchEvent[]> {
+export async function watcherEvents(watcher: URL, fetchImpl: typeof fetch = fetch, pace = watcherPace(watcher)): Promise<WatchEvent[]> {
   const events: WatchEvent[] = [];
   for (let since = 0; ; ) {
-    const page = (await getJson(at(watcher, `events?since=${since}&limit=1000&baseline=1`), fetchImpl)) as { events?: WatchEvent[]; next?: number; more?: boolean };
+    const page = (await getJson(at(watcher, `events?since=${since}&limit=1000&baseline=1`), fetchImpl, pace)) as { events?: WatchEvent[]; next?: number; more?: boolean };
     if (!Array.isArray(page.events) || typeof page.next !== "number") throw new Error(`The watcher at ${watcher.origin} did not answer with a page of events.`);
     events.push(...page.events);
     if (!page.more || page.next <= since) return events;
@@ -78,11 +114,11 @@ export function poolDir(dir: string): PoolSource {
 }
 
 /** The watcher's pool index, read through `GET /pools?after=`. */
-export function poolWatcher(watcher: URL, fetchImpl: typeof fetch = fetch): PoolSource {
+export function poolWatcher(watcher: URL, fetchImpl: typeof fetch = fetch, pace = watcherPace(watcher)): PoolSource {
   return {
     name: watcher.origin,
     async page(after) {
-      const page = (await getJson(at(watcher, `pools?after=${after}&limit=5000`), fetchImpl)) as Partial<PoolPage> & { ready?: boolean };
+      const page = (await getJson(at(watcher, `pools?after=${after}&limit=5000`), fetchImpl, pace)) as Partial<PoolPage> & { ready?: boolean };
       if (!Array.isArray(page.pools) || typeof page.next !== "number" || typeof page.bytes !== "number" || typeof page.through !== "number") {
         throw new Error(`The watcher at ${watcher.origin} did not answer with a page of its pool index. It needs brainchain-mcp 0.16.0 or later and a private RPC.`);
       }

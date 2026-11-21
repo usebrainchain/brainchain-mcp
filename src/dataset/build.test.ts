@@ -11,7 +11,7 @@ import type { WatchEvent } from "../watch/events.js";
 import type { IndexedPool } from "../watch/pools.js";
 import { buildDataset, PIECE, trimTail } from "./build.js";
 import { FILES, parseJsonl, sha256, type Manifest, type PoolRow, type StepRow } from "./format.js";
-import { poolDir, type PoolSource } from "./sources.js";
+import { poolDir, poolWatcher, watcherPace, type PoolSource } from "./sources.js";
 
 const CASHCAT = getAddress("0x020bfc650a365f8bb26819deaabf3e21291018b4");
 const MEME = getAddress("0x1111111111111111111111111111111111111111");
@@ -175,6 +175,24 @@ describe("the dataset build", () => {
     writeFileSync(path, '{"only":');
     trimTail(path);
     expect(readFileSync(path, "utf8")).toBe("");
+  });
+
+  it("asks a watcher at most once a gap, under its 120 a minute, and waits out a 429 for as long as it says", async () => {
+    let now = 0;
+    const slept: number[] = [];
+    const pace = watcherPace(new URL("https://watch.pace"), { gap: 600, clock: () => now, sleep: async (ms) => void (slept.push(ms), (now += ms)) });
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      if (calls === 2) return new Response('{"error":"An address can make 120 requests a minute."}', { status: 429, headers: { "retry-after": "7" } });
+      return Response.json({ pools: [], next: calls * 10, bytes: 30, through: 1, ready: true });
+    }) as unknown as typeof fetch;
+    const source = poolWatcher(new URL("https://watch.pace"), fetchImpl, pace);
+    expect((await source.page(0)).next).toBe(10);
+    expect((await source.page(10)).next).toBe(30);
+    expect(slept).toEqual([600, 7_000]);
+    const refusing = (async () => new Response("{}", { status: 429 })) as unknown as typeof fetch;
+    await expect(poolWatcher(new URL("https://watch.pace"), refusing, watcherPace(new URL("https://watch.pace"), { gap: 0, sleep: async () => {} })).page(0)).rejects.toThrow(/answered 429/);
   });
 
   it("reads a watcher's pool index on this machine without writing to it, only as far as its checkpoint", async () => {
