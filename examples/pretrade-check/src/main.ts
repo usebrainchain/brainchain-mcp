@@ -1,35 +1,76 @@
 // Checks a trade through 0x against the agent's mandate before the agent signs it, and prints the transaction to
 // sign only if BrainChain accepts it. Nothing here sends a transaction.
-// Run: node src/main.ts --sell USDG --buy WETH --amount 5 [--slippage-bps 50] [--mandate mandate.json]
-//      node src/main.ts --sample [--quote]
 import { readdir, readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { formatUnits, getAddress, isAddress, parseUnits, type Address, type PrivateKeyAccount } from "viem";
+import { formatEther, formatUnits, getAddress, isAddress, parseUnits, type PrivateKeyAccount, type PublicClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-import { payGrade, priceOf, type Verdict } from "./desk.ts";
-import { parseMandate, tokenOf, type Mandate } from "./mandate.ts";
-import { pretradeCheck, type GradeRequest, type Registry } from "./request.ts";
-import { runLocally } from "./sandbox.ts";
-import { buyQuote, checkQuote, readSettlers, zeroxPayer, type SignedQuote, type Trade } from "./zerox.ts";
+import { deskUrl, payGrade, priceOf, type Paid, type Verdict } from "./desk.ts";
+import { parseMandate, readMandate, tokenOf, type Mandate } from "./mandate.ts";
+import { checksFor, CHECKS_TEMPLATE, mandateText, MAX_CHECKS, pretradeCheck, sha256, type GradeRequest, type Registry } from "./request.ts";
+import { ruleLines, runLocally, type Run } from "./sandbox.ts";
+import { fetchRecord, recordState } from "./verify.ts";
+import { ALLOWANCE_HOLDER, buyQuote, checkQuote, connect, readSettlers, zeroxPayer, type SignedQuote, type Trade } from "./zerox.ts";
 
 const CHAINS: Record<number, string> = { 4663: "Robinhood Chain", 8453: "Base" };
 export const SAMPLE_MANDATE = fileURLToPath(new URL("../fixtures/mandate.json", import.meta.url));
 const SAMPLES = fileURLToPath(new URL("../fixtures/quotes/", import.meta.url));
+/** The most gas a transaction printed here may cost, at 0x's gas price: about 15 times what the measured quotes cost. */
+export const MAX_GAS_COST = 100_000_000_000_000n;
+
+export const USAGE = `Checks a trade through 0x against a mandate before the wallet signs it.
+
+  npm run check -- --mandate <file> --sell <token> --buy <token> --amount <n> [--slippage-bps <n>]
+  npm run check -- --sample [--quote]
+  npm run verify -- <grade id or record URL> --mandate <file>
+
+  --mandate <file>      the mandate, a JSON file; required for a paid check
+  --sell <token>        a token the mandate lists and lets be sold, by symbol or address
+  --buy <token>         a token the mandate lists, by symbol or address
+  --amount <n>          how much to sell, in whole tokens, such as 5 or 0.5
+  --slippage-bps <n>    0x's slippage tolerance, at most the mandate's maxSlippageBps; 0x's default is 100
+  --sample              check the recorded quotes here: no wallet, nothing paid
+  --quote               with --sample, also ask the grade route its price, without paying
+  --help                this text
+
+A paid check reads the wallet's key from the file BRAINCHAIN_PAYER_KEY_FILE names. CHAIN_RPC replaces the public
+node for the mandate's chain, and BRAINCHAIN_DESK_URL BrainChain's desk.
+
+Exit codes: 0 accepted, with the transaction to sign; 2 refused, do not sign; 1 the check did not finish.`;
+
+/** A trade the client turns down: it breaks the mandate or cannot be filled. The process exits 2. */
+export class Refusal extends Error {}
+
+export interface Io {
+  log: (line: string) => void;
+  error: (line: string) => void;
+  fetch: typeof fetch;
+  /** Milliseconds, as Date.now. */
+  now: () => number;
+  env: Record<string, string | undefined>;
+  connect: (chainId: number, rpc?: string) => Promise<PublicClient>;
+  account: (file: string | undefined) => Promise<PrivateKeyAccount>;
+  /** Between reads of a grade still being decided. */
+  pollMs?: number;
+}
+
+const defaultIo: Io = { log: console.log, error: console.error, fetch: (...args) => fetch(...args), now: Date.now, env: process.env, connect, account: (file) => loadAccount(file) };
 
 export interface Checked {
   quote: SignedQuote;
   registry: Registry;
   request: GradeRequest;
-  verdict: Verdict;
+  /** The checks as run here before BrainChain was paid. */
+  local: Run;
+  paid: Paid;
   /** From sending the paid grade to reading its verdict. */
   ms: number;
 }
 
 /** The key that signs both payments. It is read from a file and never printed. */
-export async function loadAccount(file = process.env.BRAINCHAIN_PAYER_KEY_FILE): Promise<PrivateKeyAccount> {
+export async function loadAccount(file: string | undefined): Promise<PrivateKeyAccount> {
   if (!file) throw new Error("Set BRAINCHAIN_PAYER_KEY_FILE to a file holding the paying wallet's private key. It pays 0.01 USDC to 0x and 0.25 USDC to BrainChain on Base.");
   // As brainchain-mcp does: a key other accounts on the machine can read is a key they can spend.
   if (process.platform !== "win32" && ((await stat(file)).mode & 0o077) !== 0) throw new Error(`Other accounts can read ${file}. Run chmod 600 on it first.`);
@@ -38,39 +79,126 @@ export async function loadAccount(file = process.env.BRAINCHAIN_PAYER_KEY_FILE):
   return privateKeyToAccount(`0x${key}`);
 }
 
+const chainName = (id: number) => CHAINS[id] ?? `chain ${id}`;
+
 export const describeTrade = (mandate: Mandate, trade: Trade): string => {
   const sell = tokenOf(mandate, trade.sellToken)!;
   const buy = tokenOf(mandate, trade.buyToken)?.symbol ?? trade.buyToken;
-  return `sell ${formatUnits(trade.sellAmount, sell.decimals)} ${sell.symbol} for ${buy} on ${CHAINS[trade.chainId] ?? `chain ${trade.chainId}`}`;
+  return `sell ${formatUnits(trade.sellAmount, sell.decimals)} ${sell.symbol} for ${buy} on ${chainName(trade.chainId)}`;
 };
 
-/** The trade from the command line. The sell token must be one the mandate lists, so the amount can be read in whole tokens. */
-export function tradeOf(mandate: Mandate, wallet: Address, args: { sell?: string; buy?: string; amount?: string; slippage?: string }): Trade {
-  const sell = args.sell && tokenOf(mandate, args.sell);
-  if (!sell) throw new Error(`--sell names a token the mandate lists: ${mandate.tokens.map((t) => t.symbol).join(", ")}.`);
-  const buy = args.buy && (tokenOf(mandate, args.buy)?.address ?? (isAddress(args.buy, { strict: false }) ? getAddress(args.buy) : undefined));
-  if (!buy) throw new Error("--buy names a token the mandate lists, or any token by its address.");
-  if (!args.amount || !/^\d+(\.\d+)?$/.test(args.amount)) throw new Error(`--amount is how much ${sell.symbol} to sell, such as 5 or 0.5.`);
+/**
+ * The trade from the command line. Whatever the inputs alone decide is refused here, before 0x is paid: a token the
+ * mandate does not list, an amount over its most, a slippage over its maximum.
+ */
+export function tradeOf(mandate: Mandate, wallet: `0x${string}`, args: { sell?: string; buy?: string; amount?: string; slippage?: string }): Trade {
+  const listed = mandate.tokens.map((t) => t.symbol).join(", ");
+  if (!args.sell || !args.buy || !args.amount) throw new Error("A paid check needs --sell, --buy and --amount. See --help.");
+  const sell = tokenOf(mandate, args.sell);
+  if (!sell) throw new Refusal(`The mandate does not list ${args.sell}, so it cannot be sold. It lists ${listed}.`);
+  const buy = tokenOf(mandate, args.buy);
+  if (!buy) throw new Refusal(`The mandate does not list ${isAddress(args.buy, { strict: false }) ? getAddress(args.buy) : args.buy}, so it cannot be bought. It lists ${listed}.`);
+  if (sell.address === buy.address) throw new Error(`--sell and --buy are both ${sell.symbol}.`);
+  if (!/^\d+(\.\d+)?$/.test(args.amount)) throw new Error(`--amount is how much ${sell.symbol} to sell, such as 5 or 0.5.`);
+  // parseUnits rounds away extra decimals, which would sell an amount nobody typed.
+  if ((args.amount.split(".")[1]?.length ?? 0) > sell.decimals) throw new Error(`--amount has more decimals than ${sell.symbol}'s ${sell.decimals}.`);
+  const sellAmount = parseUnits(args.amount, sell.decimals);
+  if (sellAmount === 0n) throw new Error("--amount must be more than 0.");
+  const most = parseUnits(sell.maxSell, sell.decimals);
+  if (most === 0n) throw new Refusal(`The mandate lets ${sell.symbol} be bought, never sold.`);
+  if (sellAmount > most) throw new Refusal(`The mandate lets one trade sell at most ${sell.maxSell} ${sell.symbol}, not ${args.amount}.`);
+  if (args.slippage !== undefined && !/^\d+$/.test(args.slippage)) throw new Error("--slippage-bps is a whole number of basis points, 0 to 10,000.");
   const slippageBps = args.slippage === undefined ? undefined : Number(args.slippage);
-  if (slippageBps !== undefined && (!Number.isInteger(slippageBps) || slippageBps < 0 || slippageBps > 10_000)) throw new Error("--slippage-bps is 0 to 10,000.");
-  return { chainId: mandate.chain, sellToken: sell.address, buyToken: buy, sellAmount: parseUnits(args.amount, sell.decimals), taker: wallet, ...(slippageBps !== undefined ? { slippageBps } : {}) };
+  if (slippageBps !== undefined && slippageBps > 10_000) throw new Error("--slippage-bps is 0 to 10,000.");
+  if ((slippageBps ?? 100) > mandate.maxSlippageBps) {
+    throw new Refusal(`${slippageBps === undefined ? "0x's default slippage of 100" : `A slippage of ${slippageBps}`} basis points is over the mandate's ${mandate.maxSlippageBps}. Pass --slippage-bps ${mandate.maxSlippageBps} or less.`);
+  }
+  return { chainId: mandate.chain, sellToken: sell.address, buyToken: buy.address, sellAmount, taker: wallet, ...(slippageBps !== undefined ? { slippageBps } : {}) };
 }
 
-/** Buys the quote, checks it on arrival, reads the registry at its block, and pays BrainChain to grade it. */
-export async function checkTrade(mandate: Mandate, trade: Trade, account: PrivateKeyAccount, log: (line: string) => void = console.log): Promise<Checked> {
-  if (account.address.toLowerCase() !== mandate.wallet.toLowerCase()) throw new Error(`The mandate is for wallet ${mandate.wallet}, but the key is for ${account.address}.`);
-  const quote = await buyQuote(trade, zeroxPayer(account));
-  log(`0x quote bought for 0.01 USDC${quote.paymentTx ? ` (${quote.paymentTx})` : ""}.`);
-  // A quote that is unsigned, signed by another key or already stale is never worth a grade.
-  checkQuote(quote);
-  const registry = await readSettlers(quote);
-  const request = pretradeCheck({ quote, registry, mandate, trade: describeTrade(mandate, trade) });
-  const started = Date.now();
-  const verdict = await payGrade(request, account, { log });
-  return { quote, registry, request, verdict, ms: Date.now() - started };
+/** What a quote that passed the checks can still fail on: 0x has no route for it, or the wallet cannot cover it. */
+export function unfillable(quote: SignedQuote): string | undefined {
+  const body = JSON.parse(quote.response.body) as { liquidityAvailable?: boolean; issues?: { balance?: { token: string; actual: string; expected: string } | null } };
+  if (body.liquidityAvailable === false) return "0x found no liquidity for this trade.";
+  const short = body.issues?.balance;
+  if (short) return `The wallet holds ${short.actual} base units of ${short.token}, and the trade needs ${short.expected}. The transaction would revert.`;
+  return undefined;
 }
 
-/** The transaction the agent may now sign, and the approval it needs first. */
+/** Buys the quote, checks it on arrival and here, and pays BrainChain to grade it only if the checks pass here. */
+export async function checkTrade(mandate: Mandate, trade: Trade, account: PrivateKeyAccount, client: PublicClient, desk: string, io: Io): Promise<Checked> {
+  const quote = await buyQuote(trade, zeroxPayer(account), { fetch: io.fetch, now: io.now });
+  const spent = `0x was paid 0.01 USDC for the quote${quote.paymentTx ? ` (${quote.paymentTx})` : ""}; nothing was paid to BrainChain.`;
+  io.log(`0x quote bought for 0.01 USDC${quote.paymentTx ? ` (${quote.paymentTx})` : ""}.`);
+  let registry: Registry;
+  let request: GradeRequest;
+  let local: Run;
+  try {
+    // A quote that is unsigned, signed by another key or already stale is never worth a grade.
+    checkQuote(quote);
+    const why = unfillable(quote);
+    if (why) throw new Refusal(why);
+    registry = await readSettlers(quote, client);
+    request = pretradeCheck({ quote, registry, mandate, trade: describeTrade(mandate, trade) });
+    local = await runLocally(request);
+  } catch (error) {
+    const message = `${(error as Error).message} ${spent}`;
+    throw error instanceof Refusal ? new Refusal(message, { cause: error }) : new Error(message, { cause: error });
+  }
+  if (local.outcome !== "passed") {
+    const failed = ruleLines(local.output).filter((line) => line.startsWith("FAIL"));
+    throw new Refusal(`The checks refuse this trade here, before BrainChain is paid:\n${(failed.length ? failed : [local.error ?? local.outcome]).join("\n")}\n${spent}`);
+  }
+  io.log(`The checks pass here: ${ruleLines(local.output).length} rules. Paying BrainChain to grade the trade.`);
+  const started = io.now();
+  const paid = await payGrade(request, account, { desk, fetch: io.fetch, log: io.log, ...(io.pollMs !== undefined ? { pollMs: io.pollMs } : {}) });
+  return { quote, registry, request, local, paid, ms: io.now() - started };
+}
+
+/** What BrainChain's run printed: in the paid reply, or for a verdict read later, in the decision record. */
+async function outputOf(verdict: Verdict, desk: string, fetchImpl: typeof fetch): Promise<string | undefined> {
+  if (verdict.checks?.output !== undefined) return verdict.checks.output;
+  const record = verdict.decision?.record;
+  if (!record?.startsWith(`${desk}/records/`)) return undefined;
+  const fetched = await fetchRecord(record, fetchImpl).catch(() => undefined);
+  return fetched && recordState(fetched.record)?.execution?.output;
+}
+
+/**
+ * Why a verdict cannot be acted on, if it cannot. It must be the grade this client paid for, read from the desk, and
+ * accepted on a run that printed the same passing rules as the run here.
+ */
+export function distrust(paid: Paid, local: Run, desk: string, output: string | undefined): string[] {
+  const { verdict } = paid;
+  const problems: string[] = [];
+  if (verdict.accepted !== true) problems.push("BrainChain did not accept the trade");
+  if (verdict.grade !== paid.id) problems.push(`the verdict is for grade ${verdict.grade}, not ${paid.id}, the one paid for`);
+  if (!paid.status.startsWith(`${desk}/x402/grades/`) || verdict.status !== paid.status) problems.push(`the verdict names ${verdict.status} as its status, not ${paid.status} on the desk`);
+  if (verdict.checks?.outcome !== "passed") problems.push(`BrainChain's run of the checks ${verdict.checks?.outcome ?? "is not in the verdict"}`);
+  const here = ruleLines(local.output);
+  if (local.outcome !== "passed" || here.length === 0 || here.some((line) => !line.startsWith("pass"))) problems.push("the checks did not pass here");
+  if (output === undefined) problems.push("what BrainChain's run printed is in neither its reply nor its record");
+  else if (ruleLines(output).join("\n") !== here.join("\n")) problems.push("BrainChain's run printed other rule lines than the run here");
+  return problems;
+}
+
+/** The verdict in a few lines, with the rules the checks failed. */
+export function report(verdict: Verdict, output = verdict.checks?.output): string[] {
+  const percent = (p?: number) => (p === undefined ? "?" : `${Math.round(p * 1000) / 10}%`);
+  const rules = output === undefined ? [] : ruleLines(output);
+  const failed = rules.filter((line) => line.startsWith("FAIL"));
+  const checks = verdict.checks
+    ? `${verdict.checks.outcome}${verdict.checks.error ? ` (${verdict.checks.error})` : ""}${rules.length ? `, ${rules.length - failed.length} of ${rules.length} rules pass` : output === undefined ? "; what they printed is not in this reply" : ""}`
+    : "not in BrainChain's reply";
+  return [
+    `${verdict.accepted ? "Accepted" : "Refused"}: pass probability ${percent(verdict.passProbability)}, bar ${percent(verdict.bar)}${verdict.second ? `; second model ${verdict.second.model} at ${percent(verdict.second.passProbability)}` : ""}.`,
+    `Checks: ${checks}.`,
+    ...failed,
+    `Decision ${verdict.decision?.id ?? "?"}: ${verdict.decision?.page ?? verdict.decision?.record ?? verdict.status}`,
+  ];
+}
+
+/** The transaction the agent may now sign, and the approval it needs first. Refused if either reaches past AllowanceHolder or the gas is out of bounds. */
 export function toSign(quote: SignedQuote): { approve?: { token: string; spender: string; amount: string }; transaction: Record<string, string> } {
   const body = JSON.parse(quote.response.body) as {
     sellToken: string;
@@ -78,72 +206,98 @@ export function toSign(quote: SignedQuote): { approve?: { token: string; spender
     issues?: { allowance?: { actual: string; spender: string } | null };
     transaction: { to: string; data: string; value: string; gas: string; gasPrice: string };
   };
-  const allowance = body.issues?.allowance;
-  const short = allowance && BigInt(allowance.actual) < BigInt(body.sellAmount);
   const { to, data, value, gas, gasPrice } = body.transaction;
-  return { ...(short ? { approve: { token: body.sellToken, spender: allowance.spender, amount: body.sellAmount } } : {}), transaction: { to, data, value, gas, gasPrice } };
-}
-
-/** The verdict in a few lines, with the rules the checks failed. */
-export function report(verdict: Verdict): string[] {
-  const percent = (p?: number) => (p === undefined ? "?" : `${Math.round(p * 1000) / 10}%`);
-  const failed = (verdict.checks?.output ?? "").split("\n").filter((line) => line.startsWith("FAIL"));
-  return [
-    `${verdict.accepted ? "Accepted" : "Refused"}: pass probability ${percent(verdict.passProbability)}, bar ${percent(verdict.bar)}${verdict.second ? `; second model ${verdict.second.model} at ${percent(verdict.second.passProbability)}` : ""}.`,
-    `Checks: ${verdict.checks?.outcome ?? "not run"}${verdict.checks?.error ? ` (${verdict.checks.error})` : ""}.`,
-    ...failed,
-    `Decision ${verdict.decision?.id ?? "?"}: ${verdict.decision?.page ?? verdict.decision?.record ?? verdict.status}`,
-  ];
+  if (to.toLowerCase() !== ALLOWANCE_HOLDER.toLowerCase()) throw new Refusal(`The transaction calls ${to}, not AllowanceHolder ${ALLOWANCE_HOLDER}. Do not sign it.`);
+  const allowance = body.issues?.allowance;
+  if (allowance && allowance.spender.toLowerCase() !== ALLOWANCE_HOLDER.toLowerCase()) {
+    throw new Refusal(`0x asks for an approval to ${allowance.spender}, not to AllowanceHolder ${ALLOWANCE_HOLDER}, which the transaction calls. Approve nothing and do not sign it.`);
+  }
+  if (!/^\d+$/.test(gas) || !/^\d+$/.test(gasPrice) || BigInt(gas) * BigInt(gasPrice) > MAX_GAS_COST) {
+    throw new Refusal(`The transaction may cost ${/^\d+$/.test(gas) && /^\d+$/.test(gasPrice) ? formatEther(BigInt(gas) * BigInt(gasPrice)) : "an unknown amount of"} ETH in gas, over this client's ${formatEther(MAX_GAS_COST)}. Ask for a new quote.`);
+  }
+  const short = allowance && BigInt(allowance.actual) < BigInt(body.sellAmount);
+  return { ...(short ? { approve: { token: body.sellToken, spender: ALLOWANCE_HOLDER, amount: body.sellAmount } } : {}), transaction: { to, data, value, gas, gasPrice } };
 }
 
 /** The recorded quotes, checked on this machine as BrainChain's sandbox would: no wallet, nothing paid. */
-async function samples(withPrice: boolean): Promise<void> {
+async function samples(withPrice: boolean, io: Io): Promise<void> {
   const mandate = parseMandate(JSON.parse(await readFile(SAMPLE_MANDATE, "utf8")));
   let priced = !withPrice;
   for (const name of (await readdir(SAMPLES)).filter((f) => f.endsWith(".json")).sort()) {
     const { trade, quote, registry } = JSON.parse(await readFile(`${SAMPLES}${name}`, "utf8")) as { trade: string; quote: SignedQuote; registry: Registry };
     const request = pretradeCheck({ quote, registry, mandate, trade });
     const run = await runLocally(request);
-    console.log(`${name}: ${trade}\n${run.output.split("\nTraceback")[0]!.trim()}\n`);
-    if (!priced) console.log(`The grade route ${await priceOf(request)}\n`);
+    io.log(`${name}: ${trade}\n${run.output.split("\nTraceback")[0]!.trim()}\n`);
+    if (!priced) io.log(`The grade route ${await priceOf(request, { desk: deskUrl(io.env.BRAINCHAIN_DESK_URL), fetch: io.fetch })}\n`);
     priced = true;
   }
 }
 
-async function main(): Promise<void> {
-  const { values } = parseArgs({
-    options: {
-      sell: { type: "string" },
-      buy: { type: "string" },
-      amount: { type: "string" },
-      "slippage-bps": { type: "string" },
-      mandate: { type: "string", default: SAMPLE_MANDATE },
-      sample: { type: "boolean", default: false },
-      quote: { type: "boolean", default: false },
-    },
-  });
-  if (values.sample) return samples(values.quote);
-  const mandate = parseMandate(JSON.parse(await readFile(values.mandate, "utf8")));
-  if (Date.now() > Date.parse(mandate.validUntil)) throw new Error(`The mandate ran out at ${mandate.validUntil}.`);
-  const account = await loadAccount();
-  const trade = tradeOf(mandate, account.address, { sell: values.sell, buy: values.buy, amount: values.amount, slippage: values["slippage-bps"] });
-  console.log(`Checking: ${describeTrade(mandate, trade)}, from ${account.address}.`);
-  const { quote, verdict, ms } = await checkTrade(mandate, trade, account);
-  console.log([...report(verdict), `Verdict in ${(ms / 1000).toFixed(1)} s.`].join("\n"));
-  if (!verdict.accepted) {
-    console.log("\nDo not sign this trade. Nothing was sent.");
-    process.exitCode = 2;
-    return;
+async function paidCheck(values: Record<string, string | boolean | undefined>, io: Io): Promise<number> {
+  const file = values.mandate as string | undefined;
+  if (!file) throw new Error("--mandate names the mandate file. A paid check never falls back to the sample mandate.");
+  const mandate = await readMandate(file);
+  if (io.now() > Date.parse(mandate.validUntil)) throw new Refusal(`The mandate ran out at ${mandate.validUntil}.`);
+  const desk = deskUrl(io.env.BRAINCHAIN_DESK_URL);
+  const account = await io.account(io.env.BRAINCHAIN_PAYER_KEY_FILE);
+  if (account.address.toLowerCase() !== mandate.wallet.toLowerCase()) throw new Error(`The mandate is for wallet ${mandate.wallet}, but the key is for ${account.address}.`);
+  const trade = tradeOf(mandate, account.address, { sell: values.sell as string | undefined, buy: values.buy as string | undefined, amount: values.amount as string | undefined, slippage: values["slippage-bps"] as string | undefined });
+  // Nothing is bought until the checks fit the grade route and a node answers on the mandate's chain.
+  const checks = checksFor(mandate);
+  if (checks.length > MAX_CHECKS) throw new Error(`With this mandate the checks are ${checks.length.toLocaleString("en-US")} characters; the grade route takes ${MAX_CHECKS.toLocaleString("en-US")}.`);
+  const client = await io.connect(mandate.chain, io.env.CHAIN_RPC);
+  io.log(`Checking: ${describeTrade(mandate, trade)}, from ${account.address}.`);
+  io.log(`Checks template SHA-256 ${sha256(CHECKS_TEMPLATE)}, mandate SHA-256 ${sha256(mandateText(mandate))}.`);
+
+  const { quote, local, paid, ms } = await checkTrade(mandate, trade, account, client, desk, io);
+  const output = await outputOf(paid.verdict, desk, io.fetch);
+  io.log([...report(paid.verdict, output), `Verdict in ${(ms / 1000).toFixed(1)} s.`].join("\n"));
+  io.log(`To check the record later: npm run verify -- ${paid.id} --mandate ${file}`);
+  if (paid.verdict.accepted !== true) {
+    io.log("\nDo not sign this trade. Nothing was sent.");
+    return 2;
   }
-  if (Date.now() > Date.parse(mandate.validUntil)) throw new Error(`The mandate ran out at ${mandate.validUntil}, while the trade was graded. Do not sign it.`);
+  const problems = distrust(paid, local, desk, output);
+  if (problems.length > 0) throw new Error(`BrainChain's acceptance cannot be acted on: ${problems.join("; ")}. Do not sign this trade.`);
+  if (io.now() > Date.parse(mandate.validUntil)) throw new Refusal(`The mandate ran out at ${mandate.validUntil}, while the trade was graded. Do not sign it.`);
   const { approve, transaction } = toSign(quote);
-  if (approve) console.log(`\nFirst approve ${approve.spender} (AllowanceHolder) to spend ${approve.amount} base units of ${approve.token}.`);
-  console.log(`\nThe transaction to sign on ${CHAINS[mandate.chain] ?? `chain ${mandate.chain}`}, from ${mandate.wallet}. It reverts rather than pay out less than the checked minimum:\n${JSON.stringify(transaction, null, 2)}`);
+  if (approve) io.log(`\nFirst approve ${approve.spender} (AllowanceHolder) to spend ${approve.amount} base units of ${approve.token}.`);
+  io.log(`\nThe transaction to sign on ${chainName(mandate.chain)}, from ${mandate.wallet}. It reverts rather than pay out less than the checked minimum:\n${JSON.stringify(transaction, null, 2)}`);
+  return 0;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  });
+/** The command line, as an exit code. */
+export async function run(argv: string[], io: Io = defaultIo): Promise<number> {
+  try {
+    const { values } = parseArgs({
+      args: argv,
+      options: {
+        sell: { type: "string" },
+        buy: { type: "string" },
+        amount: { type: "string" },
+        "slippage-bps": { type: "string" },
+        mandate: { type: "string" },
+        sample: { type: "boolean" },
+        quote: { type: "boolean" },
+        help: { type: "boolean" },
+      },
+    });
+    if (values.help) {
+      io.log(USAGE);
+      return 0;
+    }
+    if (values.sample) {
+      const ignored = ["sell", "buy", "amount", "slippage-bps", "mandate"].filter((name) => values[name as keyof typeof values] !== undefined);
+      if (ignored.length > 0) throw new Error(`--sample checks the recorded quotes against the sample mandate, so it takes no ${ignored.map((n) => `--${n}`).join(", ")}.`);
+      await samples(values.quote === true, io);
+      return 0;
+    }
+    if (values.quote) throw new Error("--quote goes with --sample.");
+    return await paidCheck(values, io);
+  } catch (error) {
+    io.error(error instanceof Error ? error.message : String(error));
+    return error instanceof Refusal ? 2 : 1;
+  }
 }
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) process.exitCode = await run(process.argv.slice(2));
