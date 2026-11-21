@@ -20,7 +20,7 @@ import { EventLog, type WatchEvent } from "./events.js";
 import { marketPoller, universeFrom, VENUE_HOSTS, VENUE_LISTS, VENUE_PER_HOUR } from "./exchanges.js";
 import { Requests } from "./http.js";
 import { listMerges, listPullRequests, METAMASK, TRUST_WALLET } from "./lists.js";
-import { pinnedPost, publicTarget } from "./net.js";
+import { pinnedPost, publicTarget, relayed, webhookUrl, type Relay } from "./net.js";
 import { PoolIndex } from "./pools.js";
 import { chainReader, privateReader, redactor, RPC_SETTING, rpcSetting } from "./rpc.js";
 import { serveEvents } from "./serve.js";
@@ -61,7 +61,17 @@ minute; without one each GitHub source is read every ten minutes, inside the 60 
 address. BRAINCHAIN_WATCH_RPC reads Robinhood Chain from another RPC, with the public endpoint as the fallback.
 BRAINCHAIN_MAKER_WALLETS adds wallets to follow. BRAINCHAIN_DATASET reads the dataset from a directory or another address
 in place of BrainChain's published copy. GET /health shows anyone whether each source is reading, and its full
-detail to a request with BRAINCHAIN_WATCH_ADMIN_TOKEN as a Bearer token.`;
+detail to a request with BRAINCHAIN_WATCH_ADMIN_TOKEN as a Bearer token. BRAINCHAIN_WATCH_DISCORD_RELAY sends Discord
+deliveries through a relay, signed with BRAINCHAIN_WATCH_DISCORD_RELAY_KEY, for an address Discord refuses.`;
+
+/** The relay Discord deliveries go through, from BRAINCHAIN_WATCH_DISCORD_RELAY and its key, or none. */
+export function discordRelay(env: Record<string, string | undefined>): Relay | undefined {
+  const given = env.BRAINCHAIN_WATCH_DISCORD_RELAY?.trim();
+  if (!given) return undefined;
+  const key = env.BRAINCHAIN_WATCH_DISCORD_RELAY_KEY?.trim() ?? "";
+  if (key.length < 32) throw new Error("BRAINCHAIN_WATCH_DISCORD_RELAY_KEY must hold the relay's key, 32 characters or more, when BRAINCHAIN_WATCH_DISCORD_RELAY is set.");
+  return { url: webhookUrl(given), key };
+}
 
 /** An argument the command cannot take: the usage goes out with it. */
 export class UsageError extends Error {}
@@ -279,7 +289,8 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     say: (line) => say(line),
   });
 
-  const deliveries = new Deliveries({ dir, log, post: pinnedPost(), check: async (url) => void (await publicTarget(url.hostname)), say });
+  const relay = discordRelay(env);
+  const deliveries = new Deliveries({ dir, log, post: relay ? relayed(pinnedPost(), relay) : pinnedPost(), check: async (url) => void (await publicTarget(url.hostname)), say });
   const adminToken = env.BRAINCHAIN_WATCH_ADMIN_TOKEN?.trim() || undefined;
   if (adminToken && !/^[\w-]{32,100}$/.test(adminToken)) throw new Error("BRAINCHAIN_WATCH_ADMIN_TOKEN must be 32 to 100 letters, digits, - or _.");
   const names = () => (state.source("robinhood-names") as NamesState).names ?? {};
@@ -321,6 +332,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       : "No GitHub token is set, so GitHub is read without a key: each GitHub source every 10 minutes, to stay inside the 60 requests an hour GitHub allows one IP address. Set GITHUB_TOKEN or GITHUB_TOKEN_FILE to read it about once a minute.",
   );
   say(rpc ? `Robinhood Chain is read through the RPC in ${RPC_SETTING}, with the public endpoint as the fallback.` : "Robinhood Chain is read through its public endpoint.");
+  if (relay) say(`Discord deliveries go through the relay at ${relay.url.hostname}.`);
   const pending = pollers.filter(({ name }) => state.source(name).baselined !== true).map(({ name }) => name);
   if (pending.length) say(`Recording the baseline for ${pending.join(", ")}: what is public now is kept and none of it is reported as new.`);
 
@@ -342,6 +354,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       memoryMb: Math.round(process.memoryUsage().rss / 2 ** 20),
       github: { token, ...(requests.github ? { limit: requests.github.limit, remaining: requests.github.remaining, reset: new Date(requests.github.reset).toISOString() } : {}) },
       watches: deliveries.active,
+      deliveries: deliveries.report(),
       waiting,
       sources,
       requests: stats,

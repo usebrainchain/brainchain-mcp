@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { DeliveryError, pinnedPost, publicAddress, publicTarget, webhookUrl, type Resolve } from "./net.js";
+import { createHmac } from "node:crypto";
+
+import { answerHeaders, DeliveryError, pinnedPost, publicAddress, publicTarget, relayed, webhookUrl, type Post, type Resolve } from "./net.js";
 
 describe("an address a webhook may reach", () => {
   it("is public, never private, loopback, link-local, metadata, shared, reserved or multicast", () => {
@@ -53,5 +55,31 @@ describe("a webhook's host", () => {
   it("is checked again at each delivery, so a name that now resolves somewhere private is not posted to", async () => {
     const post = pinnedPost(resolving({ "hooks.example.com": ["127.0.0.1"] }));
     await expect(post(new URL("https://hooks.example.com/x"), "{}", {})).rejects.toThrow("hooks.example.com resolves to a private, loopback or reserved address.");
+  });
+});
+
+describe("an answer's headers", () => {
+  it("keep the rate limit and where the answer came from, and nothing else", () => {
+    expect(answerHeaders({ "Retry-After": "2", "X-RateLimit-Reset-After": "1.5", "x-ratelimit-global": "true", "set-cookie": ["a=b"], "cf-ray": "a5e1-CMH", authorization: "x" })).toEqual({ "retry-after": "2", "x-ratelimit-reset-after": "1.5", "x-ratelimit-global": "true", "cf-ray": "a5e1-CMH" });
+  });
+});
+
+describe("a Discord relay", () => {
+  const key = "k".repeat(40);
+  const sent: { url: string; headers: Record<string, string> }[] = [];
+  const post: Post = async (url, _body, headers) => (sent.push({ url: url.href, headers }), { status: 204, body: "" });
+  const via = relayed(post, { url: new URL("https://relay.example.workers.dev/"), key }, () => 1_795_000_000_000);
+
+  it("takes Discord posts, signed, with the webhook's path in a header and never in the relay's URL", async () => {
+    await via(new URL("https://discord.com/api/webhooks/123/abc?thread_id=9"), '{"content":"x"}', { "Content-Type": "application/json" });
+    const [one] = sent.splice(0);
+    expect(one!.url).toBe("https://relay.example.workers.dev/");
+    expect(one!.headers).toMatchObject({ "Content-Type": "application/json", "X-Relay-Target": "/api/webhooks/123/abc?thread_id=9", "X-Relay-Timestamp": "1795000000" });
+    expect(one!.headers["X-Relay-Signature"]).toBe(`v1=${createHmac("sha256", key).update('1795000000./api/webhooks/123/abc?thread_id=9.{"content":"x"}').digest("hex")}`);
+  });
+
+  it("leaves every other post alone", async () => {
+    await via(new URL("https://hooks.slack.com/services/T/B/X"), "{}", {});
+    expect(sent.splice(0)).toEqual([{ url: "https://hooks.slack.com/services/T/B/X", headers: {} }]);
   });
 });

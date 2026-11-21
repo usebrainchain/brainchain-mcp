@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { compact, Deliveries, followUp, formatOf, line, MAX_FAILURES, message, RETRY_MS } from "./deliver.js";
+import { chat, compact, Deliveries, followUp, formatOf, GATHER_MS, limitOf, line, LIMITED_OFF_MS, MAX_FAILURES, message, paceOf, RETRY_MS, scrub } from "./deliver.js";
 import { EventLog, KINDS, type Found, type WatchEvent } from "./events.js";
 import { DeliveryError, type Post } from "./net.js";
 
@@ -122,11 +122,11 @@ describe("a delivery", () => {
 
 const found = (kind: Found["kind"], ref: string): Found => ({ kind, token: { address: CASHCAT, symbol: "CASHCAT", name: "Cash Cat" }, source: "x", ref, at: null, detail: {} });
 
-function harness(post: Post, now = { at: 1_000_000 }) {
+function harness(post: Post, now = { at: 1_000_000 }, limits = { perOwner: 2, total: 3 }) {
   const where = dir();
   const log = new EventLog(where);
   const said: string[] = [];
-  const deliveries = new Deliveries({ dir: where, log, post, clock: () => now.at, say: (text) => said.push(text), limits: { perOwner: 2, total: 3 } });
+  const deliveries = new Deliveries({ dir: where, log, post, clock: () => now.at, say: (text) => said.push(text), limits });
   const publish = (...rows: Found[]) => {
     const { written } = log.append(rows.map((row) => ({ ...row, observedAt: "2026-11-19T12:00:00Z" })));
     for (const one of written) log.settle(one.id, {});
@@ -302,5 +302,168 @@ describe("a finished context", () => {
     await deliveries.tick();
     await deliveries.tick();
     expect(sent).toEqual(["event 1", "update 1"]);
+  });
+});
+
+const HOOK = "https://discord.com/api/webhooks/123456789/sEcReTtOkEn-0123456789";
+
+describe("a rate limit", () => {
+  it("is read the way each service gives it", () => {
+    const at = 1_795_000_000_000;
+    expect(limitOf("discord", { status: 429, body: '{"message": "You are being rate limited.", "retry_after": 1.5, "global": false}', headers: { "retry-after": "2" } }, at)).toEqual({ ms: 1500, global: false });
+    expect(limitOf("discord", { status: 429, body: '{"message": "You are being rate limited.", "retry_after": 30, "global": true}' }, at)).toEqual({ ms: 30_000, global: true });
+    // Not Discord's JSON: the network in front of it is limiting the watcher's address, so every Discord delivery waits.
+    expect(limitOf("discord", { status: 429, body: "<!DOCTYPE html><title>Access denied | error code: 1015</title>", headers: { "retry-after": "600" } }, at)).toEqual({ ms: 600_000, global: true });
+    expect(limitOf("discord", { status: 429, body: "error code: 1015" }, at)).toEqual({ global: true });
+    expect(limitOf("telegram", { status: 429, body: '{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 35","parameters":{"retry_after":35}}' }, at)).toEqual({ ms: 35_000, global: false });
+    expect(limitOf("slack", { status: 429, body: "rate_limited", headers: { "retry-after": "3" } }, at)).toEqual({ ms: 3000, global: false });
+    expect(limitOf("webhook", { status: 429, body: "", headers: { "retry-after": new Date(at + 90_000).toUTCString() } }, at)).toEqual({ ms: 90_000, global: false });
+    expect(limitOf("discord", { status: 429, body: '{"message": "x", "global": false}', headers: { "x-ratelimit-reset-after": "0.75" } }, at)).toEqual({ ms: 750, global: false });
+  });
+
+  it("is kept ahead of: a success that used the last of its bucket holds the next post until the bucket resets", () => {
+    expect(paceOf({ status: 204, body: "", headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset-after": "1.25" } })).toBe(1250);
+    expect(paceOf({ status: 204, body: "", headers: { "x-ratelimit-remaining": "3", "x-ratelimit-reset-after": "1.25" } })).toBeUndefined();
+  });
+
+  it("never counts toward switching a watch off, and the watch delivers once the wait is over", async () => {
+    let limited = true;
+    const sent: string[] = [];
+    const { deliveries, publish, now } = harness(async (_url, body) => {
+      if (limited) return { status: 429, body: '{"message": "You are being rate limited.", "retry_after": 12.5, "global": false}', headers: { "retry-after": "13", "x-ratelimit-scope": "user", "x-ratelimit-bucket": "abc" } };
+      sent.push(JSON.parse(body).content);
+      return { status: 204, body: "" };
+    });
+    const { id, manageToken } = await deliveries.create({ url: HOOK }, "1.2.3.4");
+    publish(found("bitgo.merged", "m"));
+    for (let tries = 0; tries < MAX_FAILURES + 3; tries++) {
+      await deliveries.tick();
+      now.at += 13_000;
+    }
+    const status = deliveries.status(id, manageToken)!;
+    expect(status).toMatchObject({ failures: 0, delivered: 0, limited: { tries: MAX_FAILURES + 3, since: new Date(1_000_000).toISOString() } });
+    expect(status.off).toBeUndefined();
+    // The maker sees that it waits, never what the endpoint answered.
+    expect(status.lastAnswer).toBeUndefined();
+    limited = false;
+    await deliveries.tick();
+    expect(sent).toHaveLength(1);
+    expect(deliveries.status(id, manageToken)).toMatchObject({ failures: 0, delivered: 1 });
+    expect(deliveries.status(id, manageToken)!.limited).toBeUndefined();
+  });
+
+  it("waits as long as the endpoint asked, and no longer", async () => {
+    const times: number[] = [];
+    const { deliveries, publish, now } = harness(async () => (times.push(now.at), times.length === 1 ? { status: 429, body: '{"retry_after": 7.5, "global": false}' } : { status: 204, body: "" }));
+    await deliveries.create({ url: HOOK }, "1.2.3.4");
+    publish(found("bitgo.merged", "m"));
+    await deliveries.tick();
+    now.at += 7_700;
+    await deliveries.tick();
+    expect(times).toEqual([1_000_000]);
+    now.at += 100;
+    await deliveries.tick();
+    expect(times).toEqual([1_000_000, 1_007_800]);
+  });
+
+  it("on Discord's whole address holds every Discord watch, and no other", async () => {
+    const posts: string[] = [];
+    const { deliveries, publish, now } = harness(
+      async (url) => {
+        posts.push(url.hostname);
+        return url.hostname === "discord.com" ? { status: 429, body: "<html>error code: 1015</html>", headers: { "retry-after": "60", "cf-ray": "a5e1-CMH" } } : { status: 200, body: "" };
+      },
+      undefined,
+      { perOwner: 5, total: 10 },
+    );
+    await deliveries.create({ url: HOOK }, "1.2.3.4");
+    await deliveries.create({ url: "https://discord.com/api/webhooks/987654321/another-token-abcdef" }, "1.2.3.4");
+    await deliveries.create({ url: "https://hooks.example.com/x" }, "1.2.3.4");
+    publish(found("bitgo.merged", "m"));
+    // Both Discord watches are due at once; the first answer holds the second before it is sent, from the next try on.
+    await deliveries.tick();
+    const first = posts.filter((host) => host === "discord.com").length;
+    now.at += 30_000;
+    await deliveries.tick();
+    expect(posts.filter((host) => host === "discord.com")).toHaveLength(first);
+    expect(posts.filter((host) => host === "hooks.example.com")).toHaveLength(1);
+    expect(deliveries.report().holding).toEqual({ discord: new Date(1_000_000 + 60_250).toISOString() });
+    // What Discord's network answered is kept for the operator, with the webhook's token cut out.
+    const answers = deliveries.report().watches.map((watch) => watch.lastAnswer).filter(Boolean) as { status: number; body: string; headers: Record<string, string> }[];
+    expect(answers[0]).toMatchObject({ status: 429, body: "<html>error code: 1015</html>", headers: { "retry-after": "60", "cf-ray": "a5e1-CMH" } });
+    expect(JSON.stringify(deliveries.report())).not.toMatch(/sEcReTtOkEn|another-token|webhooks/);
+  });
+
+  it("switches a watch off once its endpoint has done nothing but ask it to wait for a day", async () => {
+    const { deliveries, publish, now, said } = harness(async () => ({ status: 429, body: '{"retry_after": 3600, "global": false}' }));
+    const { id, manageToken } = await deliveries.create({ url: HOOK }, "1.2.3.4");
+    publish(found("bitgo.merged", "m"));
+    for (let hour = 0; hour <= 24; hour++) {
+      expect(deliveries.status(id, manageToken)!.off, `hour ${hour}`).toBeUndefined();
+      await deliveries.tick();
+      now.at += 60 * 60_000 + 1_000;
+    }
+    expect(now.at - 1_000_000).toBeGreaterThan(LIMITED_OFF_MS);
+    expect(deliveries.status(id, manageToken)!.off).toEqual({ at: expect.any(String), reason: "Switched off on event 1: the endpoint asked the watcher to wait for a day without taking a delivery. Make a new watch to start again." });
+    expect(said.at(-1)).toBe(`watch ${id} switched off after a day of rate limits.`);
+  });
+});
+
+describe("an endpoint's answer", () => {
+  it("is kept with the URL's token cut out", () => {
+    expect(scrub(`{"url": "${HOOK}", "token": "sEcReTtOkEn-0123456789"}`, HOOK)).toBe('{"url": "https://discord.com/api/webhooks/…/…", "token": "…"}');
+    expect(scrub("bot123456:AAbbCC denied for -1001234567890", "https://api.telegram.org/bot123456:AAbbCC/sendMessage?chat_id=-1001234567890")).toBe("… denied for …");
+  });
+});
+
+describe("a chat", () => {
+  it("gets the changes that come up together as one message, a line each", async () => {
+    const messages: string[] = [];
+    const { deliveries, publish } = harness(async (_url, body) => (messages.push(JSON.parse(body).content), { status: 204, body: "" }));
+    await deliveries.create({ url: HOOK }, "1.2.3.4");
+    publish(found("bitgo.merged", "a"), found("pool.created", "b"), found("bitgo.pr_opened", "c"));
+    await deliveries.tick();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.split("\n")).toHaveLength(3);
+  });
+
+  it("is sent the first change at once, and what follows within the window as one message at its end", async () => {
+    const messages: { at: number; lines: number }[] = [];
+    const { deliveries, publish, now } = harness(async (_url, body) => (messages.push({ at: now.at, lines: JSON.parse(body).content.split("\n").length }), { status: 204, body: "" }));
+    const { id, manageToken } = await deliveries.create({ url: HOOK }, "1.2.3.4");
+    publish(found("bitgo.merged", "a"));
+    await deliveries.tick();
+    now.at += 1_000;
+    publish(found("bitgo.merged", "b"));
+    await deliveries.tick();
+    now.at += 1_000;
+    publish(found("bitgo.merged", "c"));
+    await deliveries.tick();
+    expect(messages).toEqual([{ at: 1_000_000, lines: 1 }]);
+    now.at = 1_000_000 + GATHER_MS;
+    await deliveries.tick();
+    expect(messages).toEqual([{ at: 1_000_000, lines: 1 }, { at: 1_000_000 + GATHER_MS, lines: 2 }]);
+    expect(deliveries.status(id, manageToken)).toMatchObject({ delivered: 3, cursor: 3 });
+  });
+
+  it("keeps each message inside the service's limit and sends the rest next", async () => {
+    const messages: string[] = [];
+    const { deliveries, log, now } = harness(async (_url, body) => (messages.push(JSON.parse(body).content), { status: 204, body: "" }));
+    await deliveries.create({ url: HOOK }, "1.2.3.4");
+    const rows = Array.from({ length: 30 }, (_, n) => ({ ...found("bitgo.merged", `https://github.com/BitGo/BitGoJS/commit/${"f".repeat(30)}${n}`), observedAt: "2026-11-19T12:00:00Z" }));
+    for (const one of log.append(rows).written) log.settle(one.id, {});
+    for (let round = 0; round < 5; round++) {
+      await deliveries.tick();
+      now.at += GATHER_MS;
+    }
+    expect(messages.length).toBeGreaterThan(1);
+    expect(messages.every((text) => text.length <= 2000)).toBe(true);
+    expect(messages.join("\n").split("\n")).toHaveLength(30);
+  });
+
+  it("is one message in each service's own shape", () => {
+    expect(JSON.parse(chat({ format: "discord", url: HOOK }, ["a", "b"]).body)).toEqual({ content: "a\nb", allowed_mentions: { parse: [] }, flags: 4 });
+    expect(JSON.parse(chat({ format: "slack", url: "https://hooks.slack.com/services/T/B/X" }, ["a<b", "c"]).body).text).toBe("a&lt;b\nc");
+    expect(JSON.parse(chat({ format: "telegram", url: "https://api.telegram.org/bot1:a/sendMessage?chat_id=-1001" }, ["a", "b"]).body)).toEqual({ chat_id: "-1001", text: "a\nb", link_preview_options: { is_disabled: true } });
   });
 });

@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { request, type RequestOptions } from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
@@ -117,6 +118,19 @@ export interface Sent {
   status: number;
   /** The start of the answer, for a failure's message. */
   body: string;
+  /** The answer's rate-limit and routing headers, lower-cased: `ANSWER_HEADERS` only. */
+  headers?: Record<string, string>;
+}
+
+/** What is kept of an answer's headers: how long to wait, and enough to tell Discord's own limits from its CDN's. */
+const ANSWER_HEADERS = /^(?:retry-after|x-ratelimit-[\w-]+|content-type|server|via|cf-ray|cf-mitigated)$/;
+
+export function answerHeaders(headers: Record<string, string | string[] | undefined>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers)
+      .filter(([name, value]) => ANSWER_HEADERS.test(name.toLowerCase()) && value !== undefined)
+      .map(([name, value]) => [name.toLowerCase(), (Array.isArray(value) ? value.join(", ") : value!).slice(0, 200)]),
+  );
 }
 
 /** A lookup that answers with the checked address alone, in whichever form the socket asks for it. */
@@ -161,7 +175,7 @@ export function pinnedPost(resolve: Resolve = resolveAll): Post {
             if (size <= MAX_ANSWER) chunks.push(chunk);
             else answer.destroy();
           });
-          const finish = () => done({ status: answer.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8").slice(0, 300) });
+          const finish = () => done({ status: answer.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8").slice(0, 300), headers: answerHeaders(answer.headers) });
           answer.on("end", finish);
           answer.on("close", finish);
         },
@@ -174,5 +188,29 @@ export function pinnedPost(resolve: Resolve = resolveAll): Post {
       sent.on("error", (error) => fail(error instanceof DeliveryError ? error : new DeliveryError(`${url.hostname} could not be reached.`)));
       sent.end(body);
     });
+  };
+}
+
+export interface Relay {
+  url: URL;
+  /** Signs each relayed post; the relay holds the same key and refuses a post it does not sign. */
+  key: string;
+}
+
+const DISCORD_HOST = /^(?:ptb\.|canary\.)?discord(?:app)?\.com$/i;
+
+/**
+ * Sends Discord posts through a relay on another network, for when Discord refuses the watcher's own address. The relay
+ * gets the webhook's path and query in `X-Relay-Target`, never in its own URL, and `X-Relay-Signature`: `v1=` and the hex
+ * HMAC-SHA256, keyed with the relay's key, of the timestamp, a full stop, the target, a full stop and the body. It answers
+ * with Discord's status, rate-limit headers and body. Every other post goes straight.
+ */
+export function relayed(post: Post, relay: Relay, clock: () => number = Date.now): Post {
+  return (url, body, headers) => {
+    if (!DISCORD_HOST.test(url.hostname)) return post(url, body, headers);
+    const target = `${url.pathname}${url.search}`;
+    const timestamp = String(Math.floor(clock() / 1000));
+    const signature = createHmac("sha256", relay.key).update(`${timestamp}.${target}.${body}`).digest("hex");
+    return post(relay.url, body, { ...headers, "X-Relay-Target": target, "X-Relay-Timestamp": timestamp, "X-Relay-Signature": `v1=${signature}` });
   };
 }
