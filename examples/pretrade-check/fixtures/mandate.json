@@ -1,0 +1,12 @@
+{
+  "chain": 4663,
+  "wallet": "0xd937E50Ee21E66f7640F1a7887399e63055290fe",
+  "recipient": "0xd937E50Ee21E66f7640F1a7887399e63055290fe",
+  "tokens": [
+    { "symbol": "USDG", "address": "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", "decimals": 6, "maxSell": "25" },
+    { "symbol": "WETH", "address": "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73", "decimals": 18, "maxSell": "0.01" },
+    { "symbol": "ETH", "address": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", "decimals": 18, "maxSell": "0.01" }
+  ],
+  "maxSlippageBps": 100,
+  "validUntil": "2026-12-31T23:59:59Z"
+}
