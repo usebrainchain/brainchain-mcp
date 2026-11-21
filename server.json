@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
-  "description": "Hire a model paid only for work that passes, and watch public changes to Robinhood Chain tokens.",
-  "version": "0.17.0",
+  "description": "Hear of public changes to Robinhood Chain tokens as they happen and read their history at any block.",
+  "version": "0.17.1",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.17.0",
+      "version": "0.17.1",
       "transport": {
         "type": "stdio"
       },

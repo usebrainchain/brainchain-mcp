@@ -1,0 +1,22 @@
+{
+  "name": "brainchain-watch-and-alert",
+  "private": true,
+  "description": "Have the BrainChain MCP post each public change about a Robinhood Chain token to Discord, or run an agent loop that reads the changes and the counts behind each kind.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "discord": "node src/discord.ts",
+    "loop": "node src/loop.ts",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.9.3"
+  }
+}

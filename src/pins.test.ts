@@ -10,6 +10,11 @@ const json = (path: string) => JSON.parse(read(path)) as Record<string, unknown>
 const { version } = json("package.json") as { version: string };
 const PIN = /brainchain-mcp@(\d+\.\d+\.\d+(?:-[\w.]*\w)?)/g;
 const pinsIn = (text: string) => [...text.matchAll(PIN)].map(([, pinned]) => pinned);
+/** Cursor's install links carry their settings as base64 JSON, VS Code's as URL-encoded JSON. */
+const settingsOf = (config: string) => {
+  const raw = decodeURIComponent(config);
+  return raw.startsWith("{") ? raw : Buffer.from(raw, "base64").toString("utf8");
+};
 
 /** Every file of the repository but what is installed or built, and the tests, which name made-up releases. */
 function files(dir = root): string[] {
@@ -40,10 +45,27 @@ describe("the release each file names", () => {
     expect([lock.version, lock.packages[""]!.version]).toEqual([version, version]);
   });
 
-  it("is this package's inside the install links, whose settings are base64", () => {
-    const links = all.flatMap((file) => [...read(file).matchAll(/[?&]config=([\w%+/=-]+)/g)].map(([, config]) => Buffer.from(decodeURIComponent(config!), "base64").toString("utf8")));
-    expect(links.length).toBeGreaterThan(0);
-    expect(links.map(pinsIn)).toEqual(links.map(() => [version]));
+  it("is this package's, or the newest release, inside the install links", () => {
+    const links = all.flatMap((file) => [...read(file).matchAll(/[?&]config=([\w%+/=.-]+)/g)].map(([, config]) => settingsOf(config!)));
+    expect(links.filter((settings) => settings.startsWith("{")).length).toBeGreaterThan(2);
+    for (const settings of links) {
+      expect(JSON.parse(settings)).toMatchObject({ command: "npx", args: expect.arrayContaining([expect.stringMatching(/^brainchain-mcp(@|$)/)]) });
+      expect(pinsIn(settings).filter((pinned) => pinned !== version)).toEqual([]);
+    }
+  });
+
+  it("moves with npm version: scripts/pin.mjs leaves nothing pinned elsewhere, inside links too", async () => {
+    const { pin } = (await import("../scripts/pin.mjs")) as { pin: (text: string, version: string) => string };
+    expect((json("package.json").scripts as Record<string, string>).version).toBe("node scripts/pin.mjs");
+    const cursor = (config: string) => `https://cursor.com/en/install-mcp?name=brainchain&config=${encodeURIComponent(Buffer.from(config).toString("base64"))}`;
+    const code = (config: string) => `https://vscode.dev/redirect/mcp/install?name=brainchain&config=${encodeURIComponent(config)}`;
+    const old = '{"command":"npx","args":["-y","brainchain-mcp@0.1.0"]}';
+    const latest = '{"command":"npx","args":["-y","brainchain-mcp"]}';
+    const text = [`npx -y brainchain-mcp@0.1.0`, cursor(old), code(old), cursor(latest), code(latest)].join("\n");
+    const moved = pin(text, "9.8.7").split("\n");
+    expect(moved.slice(0, 3).map((line) => pinsIn(line.includes("config=") ? settingsOf(line.split("config=")[1]!) : line))).toEqual([["9.8.7"], ["9.8.7"], ["9.8.7"]]);
+    expect(moved.slice(3)).toEqual([cursor(latest), code(latest)]);
+    for (const file of all) expect(pin(read(file), version), file).toBe(read(file));
   });
 });
 

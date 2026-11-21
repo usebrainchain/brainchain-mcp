@@ -40,6 +40,6 @@ npm test
 
 ## Releases
 
-A release moves the version in `package.json`, `package-lock.json`, `server.json`, `mcp.json`, `.cursor-plugin/plugin.json` and every pinned install command together; a test fails if one is left behind. Maintainers publish to npm and the MCP Registry, tag the commit and add a GitHub release.
+A release moves the version in `package.json`, `package-lock.json`, `server.json`, `mcp.json`, `.cursor-plugin/plugin.json` and every pinned install command together, the pins inside install links included. `npm version <new> --no-git-tag-version` does all of it, through `scripts/pin.mjs`; a test fails if one is left behind. Maintainers publish to npm and the MCP Registry, tag the commit and add a GitHub release.
 
 By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE).
