@@ -23,7 +23,7 @@ const task = { title: "Explain a Merkle proof", brief: "In two paragraphs.", lev
 interface ChallengeOverrides {
   amount?: string;
   payTo?: string;
-  maxTimeoutSeconds?: number;
+  maxTimeoutSeconds?: unknown;
 }
 
 function challenge(terms: ChallengeOverrides = {}): string {
@@ -385,6 +385,10 @@ describe("posting", () => {
       [{ payTo: stranger }, `The desk asked to be paid on terms this server does not accept: it named ${stranger} as the payee, and this server pays only ${config.payTo}. ${check} Nothing was charged.`],
       [{ maxTimeoutSeconds: 3_600 }, "The desk asked to be paid on terms this server does not accept: it asked for an authorization that lasts 3600 seconds, and this server signs none for longer than 600. Nothing was charged."],
       [{ payTo: stranger, maxTimeoutSeconds: 3_600 }, `The desk asked to be paid on terms this server does not accept: the payee must be ${config.payTo} and the authorization may last at most 600 seconds. ${check} Nothing was charged.`],
+      // x402 adds the lifetime to the clock: a string would be appended as digits, an authorization for millennia.
+      [{ maxTimeoutSeconds: "600" }, 'The desk asked to be paid on terms this server does not accept: it asked for an authorization that lasts "600" seconds, and this server signs none for longer than 600. Nothing was charged.'],
+      [{ maxTimeoutSeconds: 0 }, "The desk asked to be paid on terms this server does not accept: it asked for an authorization that lasts 0 seconds, and this server signs none for longer than 600. Nothing was charged."],
+      [{ maxTimeoutSeconds: 300.5 }, "The desk asked to be paid on terms this server does not accept: it asked for an authorization that lasts 300.5 seconds, and this server signs none for longer than 600. Nothing was charged."],
     ] as const) {
       const { fetchImpl, seen } = fakeDesk(accepted, terms);
       const d = desk(fetchImpl);
@@ -408,6 +412,69 @@ describe("posting", () => {
       const message = await d.post(task).catch((error: Error) => error.message);
       expect(message).toBe(`Permit2 is not yet approved to spend this wallet's test USDG. Run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on Robinhood Chain testnet. Nothing was charged.`);
     }
+  });
+});
+
+describe("a call cancelled before payment", () => {
+  /** A desk whose answer to the unpaid request waits until `release` is called, as a slow desk's 402 would. */
+  function slowTerms() {
+    let release = (): void => {};
+    const arrived = new Promise<void>((resolve) => (release = resolve));
+    const { fetchImpl, seen } = fakeDesk(accepted);
+    let asked = 0;
+    const slow = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!new Request(input, init).headers.get("payment-signature")) {
+        asked += 1;
+        await arrived;
+      }
+      return fetchImpl(input, init);
+    }) as typeof fetch;
+    return { fetchImpl: slow, seen, release, asked: () => asked };
+  }
+
+  it("signs nothing when the cancel comes while the desk's terms are on their way", async () => {
+    for (const kind of ["post", "grade"] as const) {
+      const { fetchImpl, seen, release, asked } = slowTerms();
+      const d = desk(fetchImpl);
+      const call = new AbortController();
+      const pending = kind === "post" ? d.post(task, call.signal) : d.grade({ title: task.title, brief: task.brief, result: "A proof.", levels: task.levels }, call.signal);
+      await vi.waitFor(() => expect(asked()).toBe(1));
+      call.abort();
+      release();
+      await expect(pending).rejects.toThrow(/cancelled before any payment was signed.*Nothing was charged/);
+      expect(seen).toEqual([]);
+      expect(d.spent()).toBe(0n);
+    }
+  });
+
+  it("sends nothing for a call that was cancelled before it started", async () => {
+    const { fetchImpl, seen, asked } = slowTerms();
+    const call = new AbortController();
+    call.abort();
+    await expect(desk(fetchImpl).post(task, call.signal)).rejects.toThrow(/cancelled before any payment was signed/);
+    expect([asked(), seen.length]).toEqual([0, 0]);
+  });
+
+  it("follows a payment already signed to its order when the cancel comes after", async () => {
+    const call = new AbortController();
+    const { fetchImpl, seen } = fakeDesk((payment) => {
+      call.abort();
+      return accepted(payment);
+    });
+    const d = desk(fetchImpl);
+    const reply = (await d.post(task, call.signal)) as Record<string, unknown>;
+    expect(reply).toMatchObject({ order: orderIdOf(seen[0]!), price: "1 test USDG" });
+    expect(d.spent()).toBe(1_000_000n);
+  });
+
+  it("reaches the tool's caller as an error from callTool", async () => {
+    const { fetchImpl, seen } = slowTerms();
+    const call = new AbortController();
+    call.abort();
+    const result = await callTool(desk(fetchImpl), POST_TASK_NAME, task, undefined, undefined, undefined, undefined, call.signal);
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/Nothing was charged/);
+    expect(seen).toEqual([]);
   });
 });
 

@@ -427,7 +427,9 @@ export function createServer(env: Record<string, string | undefined>, version: s
   ];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {}, resources: { subscribe: true } }, instructions: INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
-  server.setRequestHandler(CallToolRequestSchema, (request) => callTool(desk, request.params.name, request.params.arguments, undefined, bonds, refused, readers));
+  server.setRequestHandler(CallToolRequestSchema, (request, extra) =>
+    callTool(desk, request.params.name, request.params.arguments, undefined, bonds, refused, readers, extra.signal),
+  );
   subscribeChanges(server, watchProblem ? undefined : watcher, options.fetch);
   return server;
 }

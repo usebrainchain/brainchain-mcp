@@ -250,9 +250,10 @@ export interface GradeRequest {
 }
 
 export interface Desk {
-  post(task: TaskRequest): Promise<unknown>;
+  /** `signal` is the MCP call's: a call cancelled before the payment is signed pays nothing. */
+  post(task: TaskRequest, signal?: AbortSignal): Promise<unknown>;
   get(order: string): Promise<unknown>;
-  grade(request: GradeRequest): Promise<unknown>;
+  grade(request: GradeRequest, signal?: AbortSignal): Promise<unknown>;
   getGrade(id: string): Promise<unknown>;
 }
 
@@ -547,6 +548,7 @@ export async function callTool(
   bonds?: Bonds,
   refused: ReadonlyMap<string, string> = new Map(),
   readers: Partial<Readers> = {},
+  signal?: AbortSignal,
 ): Promise<CallToolResult> {
   const { custody, makers, readiness, sightings, listed, timeline, marketCap, changes, watch, unwatch, dataset, cutOf, symbols } = { ...READERS, ...readers };
   const input = (args ?? {}) as Record<string, unknown>;
@@ -566,7 +568,7 @@ export async function callTool(
     }
     if (name === POST_TASK_NAME) {
       refuseUnknownFields(input, POST_TASK_INPUT);
-      return reply(await desk.post(checkBrief(input)));
+      return reply(await desk.post(checkBrief(input), signal));
     }
     if (name === GET_TASK_NAME) {
       refuseUnknownFields(input, GET_TASK_TOOL.inputSchema);
@@ -576,7 +578,7 @@ export async function callTool(
     }
     if (name === GRADE_NAME) {
       refuseUnknownFields(input, GRADE_INPUT);
-      return reply(await desk.grade(checkGrade(input)));
+      return reply(await desk.grade(checkGrade(input), signal));
     }
     if (name === GET_GRADE_NAME) {
       refuseUnknownFields(input, GET_GRADE_TOOL.inputSchema);
