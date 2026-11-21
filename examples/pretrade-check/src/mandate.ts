@@ -84,7 +84,7 @@ export function tokenOf(mandate: Mandate, symbolOrAddress: string): Mandate["tok
 }
 
 /** The mandate in plain sentences, for the brief: the judges read these, the checks read the JSON. */
-export function describe(mandate: Mandate): string {
+export function describeMandate(mandate: Mandate): string {
   const sells = mandate.tokens.filter((t) => t.maxSell !== "0").map((t) => `${t.maxSell} ${t.symbol}`);
   const buyOnly = mandate.tokens.filter((t) => t.maxSell === "0").map((t) => t.symbol);
   return [

@@ -2,25 +2,22 @@
 // wallet can pay for a check.
 import { basename } from "node:path";
 
-import { BaseError, erc20Abi, formatUnits, type Address, type PublicClient } from "viem";
+import { erc20Abi, formatUnits, type Address, type PublicClient } from "viem";
 
 import type { Mandate } from "./mandate.ts";
+import { messageOf, same, USDC_BASE } from "./shared.ts";
 
 /** 0x's placeholder for a chain's native token, which has no contract to read. */
 const NATIVE = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-/** USDC on Base, which pays both 0x and BrainChain. */
-export const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 /** One check in USDC's units: 0.01 to 0x and 0.25 to BrainChain. */
 export const CHECK_COST = 260_000n;
-
-const messageOf = (error: unknown) => (error instanceof BaseError ? error.shortMessage : error instanceof Error ? error.message : String(error));
 
 /** Each token's decimals and symbol as the chain has them, refused where the mandate says otherwise. */
 export async function checkTokens(mandate: Mandate, client: PublicClient, file: string): Promise<string[]> {
   const name = basename(file);
   return Promise.all(
     mandate.tokens.map(async (token) => {
-      if (token.address.toLowerCase() === NATIVE) {
+      if (same(token.address, NATIVE)) {
         if (token.decimals !== 18) throw new Error(`The mandate ${name} gives ${token.symbol}, the chain's native token, ${token.decimals} decimals; it has 18.`);
         return `${token.symbol}, the native token, 18 decimals`;
       }
@@ -49,7 +46,7 @@ export async function checkFunds(wallet: Address, base: PublicClient): Promise<s
 
 /** Whether the wallet holds what the trade sells, so a quote is never bought for a trade that would revert. */
 export async function checkHolding(mandate: Mandate, sell: Mandate["tokens"][number], amount: bigint, wallet: Address, client: PublicClient): Promise<string> {
-  const read = sell.address.toLowerCase() === NATIVE ? client.getBalance({ address: wallet }) : client.readContract({ address: sell.address, abi: erc20Abi, functionName: "balanceOf", args: [wallet] });
+  const read = same(sell.address, NATIVE) ? client.getBalance({ address: wallet }) : client.readContract({ address: sell.address, abi: erc20Abi, functionName: "balanceOf", args: [wallet] });
   const held = await read.catch((error: unknown) => {
     throw new Error(`The wallet's ${sell.symbol} could not be read on chain ${mandate.chain}: ${messageOf(error)}`, { cause: error });
   });

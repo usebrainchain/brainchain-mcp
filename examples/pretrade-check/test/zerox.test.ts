@@ -90,7 +90,7 @@ describe("paying 0x's gateway", () => {
   it("refuses a paid answer that carries no signature, saying what was paid", async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(challenge(exact)).mockResolvedValueOnce(new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
     await expect(buyQuote(trade, zeroxPayer(account), { fetch: fetchImpl as typeof fetch })).rejects.toThrow(
-      "0x's response has no content-digest header, so it is not signed. Nothing can vouch for it; do not trade on it. 0x was paid 0.01 USDC for it; nothing was paid to BrainChain.",
+      "0x's response has no content-digest header, so it is not signed. It cannot be verified. 0x was paid 0.01 USDC for it; nothing was paid to BrainChain.",
     );
     const [url, init] = fetchImpl.mock.calls[1]!;
     expect(url).toBe(`https://agent.api.0x.org/v1/x402/swap-allowance-holder-quote/${quoteQuery(trade)}`);

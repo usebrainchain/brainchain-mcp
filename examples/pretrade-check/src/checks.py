@@ -336,14 +336,14 @@ def _run(given, mandate):
         if cap is None:
             problems.append("the mandate sets no limit for this token")
         elif call["amount"] > cap:
-            problems.append("over the mandate's most of " + _shown(cap, tokens[sell]))
+            problems.append("over the token's maxSell of " + _shown(cap, tokens[sell]))
         if str(call["amount"]) != query.get("sellAmount") or str(call["amount"]) != quote.get("sellAmount"):
             problems.append("the transaction sells a different amount from the one asked for")
         if str(tx.get("value", "0")) != str(call["amount"] if native else 0):
             problems.append("the transaction sends " + str(tx.get("value")) + " wei of ETH with it")
         if sell != str(quote.get("sellToken") or "").lower() or buy != str(quote.get("buyToken") or "").lower():
             problems.append("the transaction trades other tokens than the quote names")
-        rule("size", not problems, "sells " + _shown(call["amount"], tokens.get(sell)) + ("; " + "; ".join(problems) if problems else ", within the mandate's most of " + _shown(cap, tokens[sell])))
+        rule("size", not problems, "sells " + _shown(call["amount"], tokens.get(sell)) + ("; " + "; ".join(problems) if problems else ", within the token's maxSell of " + _shown(cap, tokens[sell])))
 
         floor = -(-quoted * (10_000 - mandate["maxSlippageBps"]) // 10_000)
         slip = (quoted - call["minOut"]) * 10_000 / quoted if quoted else 0

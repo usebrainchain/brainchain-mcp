@@ -17,6 +17,7 @@ import {
 } from "viem";
 
 import type { Registry } from "./request.ts";
+import { messageOf, same, USDC_BASE } from "./shared.ts";
 
 /** Paid per request over x402, with no API key: 0.01 USDC on Base. */
 export const GATEWAY = "https://agent.api.0x.org/v1/x402/swap-allowance-holder-quote/";
@@ -38,7 +39,7 @@ export const FRESH_SECONDS = 60;
 /** Where 0x's gateway takes payment. Nothing else is paid from this client. */
 export const ZEROX_PAYMENT = {
   network: "eip155:8453",
-  asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  asset: USDC_BASE,
   payTo: "0xb15a55e85FdF5edc41B6c1eaf7813e2c6e6def59",
   maxUnits: 10_000n,
 } as const;
@@ -110,8 +111,6 @@ export function quoteQuery(trade: Trade): string {
   return `?${query}`;
 }
 
-const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-const messageOf = (error: unknown) => (error instanceof BaseError ? error.shortMessage : error instanceof Error ? error.message : String(error));
 
 /** The payment 0x's gateway asks for, signed only as a transfer authorization of 0.01 USDC or less to 0x's payee on Base. */
 export function zeroxPayer(account: PrivateKeyAccount): x402HTTPClient {
@@ -202,7 +201,7 @@ export async function buyQuote(trade: Trade, payer: x402HTTPClient, options: { f
   if (!Buffer.from(body, "utf8").equals(bytes)) throw new Error(`0x's response is not valid UTF-8, so it cannot be passed on unchanged. ${paid}`);
   const header = (name: string) => {
     const value = response.headers.get(name);
-    if (!value) throw new Error(`0x's response has no ${name} header, so it is not signed. Nothing can vouch for it; do not trade on it. ${paid}`);
+    if (!value) throw new Error(`0x's response has no ${name} header, so it is not signed. It cannot be verified. ${paid}`);
     return value;
   };
   return {

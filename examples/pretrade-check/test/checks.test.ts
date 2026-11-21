@@ -141,9 +141,9 @@ describe("the delivery, which is data and nothing else", { timeout: 60_000 }, ()
     expect((await check("inside", { result: block(`DELIVERY = "${b64(JSON.stringify(extra))}"`) })).output).toContain("FAIL  delivery: DELIVERY has 'note', which the checks do not read");
   });
 
-  // The review's first bypass served the signature check the genuine body and the rules a forged one from a dict
-  // subclass. The checks now read only a string, so no object of the delivery's is ever indexed.
-  it("fails the review's dict-subclass delivery before any of its reads", async () => {
+  // A dict subclass can serve the signature check the genuine body and the rules a forged one. The checks read only a
+  // string, so no object the delivery made is ever indexed.
+  it("fails a delivery that is a dict subclass, before any of its reads", async () => {
     const { quote, registry } = recorded("inside");
     const code = [
       "class Served(dict):",
@@ -156,9 +156,9 @@ describe("the delivery, which is data and nothing else", { timeout: 60_000 }, ()
     expect(output).toContain("FAIL  delivery: DELIVERY is a Served, not a string");
   });
 
-  // The second patched hashlib through a dunder name, which the old namespace rule skipped. Code that runs first can
-  // do that to any module, so this run passes: the guarantee is verify's, which refuses the block for not being data.
-  it("passes the review's sha512 bypass in the run itself, which is why verify reads the block", async () => {
+  // Code that runs before the checks can patch any module they import, so this run passes. Only verify, which reads
+  // the block from the record, refuses it for not being data.
+  it("passes a block that patches sha512 first, which only verify refuses", async () => {
     const { quote, registry } = recorded("inside");
     const forged = forgedSignature(tamperRoute(quote));
     const { run, failed } = await check("inside", { result: block(sha512Bypass(deliveryCode(forged, registry))) });

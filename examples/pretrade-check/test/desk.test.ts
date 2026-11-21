@@ -34,7 +34,7 @@ function desk(paid: (id: string) => Response | Error, reads: ((id: string) => Re
 }
 const graded = (id: string, extra: Record<string, unknown> = {}) => ({ grade: id, state: "graded", status: `${DESK}/x402/grades/${id}`, accepted: true, checks: { language: "python", outcome: "passed" }, ...extra });
 const pay = (fetchImpl: ReturnType<typeof desk>) => payGrade(request, account, { desk: DESK, fetch: fetchImpl as unknown as typeof fetch, pollMs: 1, waitMs: 1_000 });
-const charged = (id: string) => `may have been charged: read ${DESK}/x402/grades/${id}, which is free, and do not run this check again, which would pay again.`;
+const charged = (id: string) => `may have been charged. Read ${DESK}/x402/grades/${id} (free) first; running the check again pays again.`;
 
 describe("paying for the grade", () => {
   it("sends the request with its checks and reads the verdict from the paid reply", async () => {

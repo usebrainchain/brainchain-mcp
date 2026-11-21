@@ -35,7 +35,7 @@ describe("verify, on records made before the delivery was one string", { timeout
     });
     expect(code).toBe(2);
     expect(marks).toEqual({ grade: "ok", record: "ok", delivery: "FAIL", checks: "FAIL", mandate: "ok", rerun: "skip" });
-    expect(out).toContain("FAIL  delivery: the earlier form, DELIVERY assigned a Python dict");
+    expect(out).toContain("FAIL  delivery: the earlier form, a Python dict; this version vouches only for one base64 string");
     expect(out).toContain(`this version's ${sha256(CHECKS_TEMPLATE)}`);
     expect(out).toContain("Verdict: earlier form.");
     expect(out).toContain("npx brainchain-verify mainnet 996");
@@ -61,8 +61,9 @@ describe("verify, on the records of this version's paid runs", { timeout: 60_000
     const id = "0x6f81a236fa37a14e0733ffd479b5502119a80d8e2a8ddd35250989f6e05e1f11";
     const { code, marks, out } = await verified(id, { [`${DEFAULT_DESK}/x402/grades/${id}`]: graded(id, "1004"), [urls["1004"]!]: () => new Response(stored("1004")) });
     expect(marks).toEqual({ grade: "ok", record: "ok", delivery: "ok", checks: "ok", mandate: "ok", rerun: "ok" });
-    expect(out).toContain("Verdict: match.");
-    expect(out).toContain("npx brainchain-verify mainnet 1004");
+    expect(out).toContain("ok    checks: an earlier wording of the same rules, kept in src/templates, template SHA-256 40e7241dc56a4a1a0ec76a2b45df444f53af77c934f73f2d194264731625b0b8");
+    expect(out).toContain("Verdict: match. The published block is data and nothing else, the checks are an earlier wording of its rules");
+    expect(out).toContain("To confirm the record on chain: npx brainchain-verify mainnet 1004");
     expect(code).toBe(0);
   });
 
@@ -164,7 +165,7 @@ describe("verify, on records of this version", { timeout: 90_000 }, () => {
     expect(code).toBe(1);
   });
 
-  // Both bypasses from the review need code in the block; verify refuses the block before anything of it runs here.
+  // Each attack needs code in the block, and verify refuses the block before anything of it runs here.
   it.each([
     ["the dict subclass", 'class Served(dict):\n    pass\nDELIVERY = Served()'],
     ["the sha512 patch", sha512Bypass(deliveryCode(forgedSignature(tamperRoute(quote)), registry))],

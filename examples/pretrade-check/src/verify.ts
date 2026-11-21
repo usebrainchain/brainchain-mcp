@@ -1,6 +1,5 @@
 // Confirms a published pre-trade decision from its record: the delivered block was data and nothing else, the checks
 // were this version's with the given mandate, and run again here they give the outcome BrainChain published.
-// Run: node src/verify.ts <decision id, decision page, grade id or record URL> --mandate <file>
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -9,7 +8,7 @@ import { createPublicClient, http, keccak256, parseAbiItem, toHex, type PublicCl
 
 import { deskUrl, readGrade, type Verdict } from "./desk.ts";
 import { readMandate } from "./mandate.ts";
-import { checksFor, CHECKS_TEMPLATE, DELIVERY_FORM, mandateText, sha256, splitChecks } from "./request.ts";
+import { checksFor, CHECKS_TEMPLATE, DELIVERY_FORM, EARLIER_TEMPLATES, mandateText, sha256, splitChecks } from "./request.ts";
 import { CHECKS_FENCE, CHECKS_OPENER, pythonBlocks, runLocally } from "./sandbox.ts";
 
 /** What a record's request.state holds for a grade: the brief, the result and BrainChain's run of the checks. */
@@ -117,7 +116,7 @@ export async function verify(target: string, mandateFile: string, io: VerifyIo):
   else if (view.grade !== grade || view.decision?.record?.split("#")[0] !== url.split("#")[0]) line("FAIL", `grade: grade ${view.grade}'s verdict links ${view.decision?.record ?? "no record"}, not this one for grade ${grade}`);
   else line("ok", `grade: its verdict links this record, as decision ${view.decision?.id}`);
   if (keccak256(bytes) === name) line("ok", "record: its keccak256 is the hash it is published under");
-  else if (withheld) line("skip", "record: served without the delivery, as BrainChain serves work it did not accept, so it no longer hashes to its name");
+  else if (withheld) line("skip", "record: served without the delivery, as for any work BrainChain did not accept, so its hash cannot match its name");
   else line("FAIL", `record: its keccak256 is ${keccak256(bytes)}, not ${name}, the hash it is published under`);
 
   const result = state.result ?? "";
@@ -128,8 +127,8 @@ export async function verify(target: string, mandateFile: string, io: VerifyIo):
   else if (DELIVERY_FORM.test(blocks[0]!)) {
     pure = true;
     line("ok", `delivery: one line assigning DELIVERY a string of ${blocks[0]!.length - 'DELIVERY = ""'.length} base64 characters, which runs no code`);
-  } else if (blocks[0]!.startsWith("DELIVERY = {")) line("FAIL", "delivery: the earlier form, DELIVERY assigned a Python dict, which this version cannot vouch for: it vouches only for one line assigning one string");
-  else line("FAIL", "delivery: the block is not one line assigning one string to DELIVERY, so code ran before the checks");
+  } else if (blocks[0]!.startsWith("DELIVERY = {")) line("FAIL", "delivery: the earlier form, a Python dict; this version vouches only for one base64 string");
+  else line("FAIL", "delivery: the block is more than one base64 string assigned to DELIVERY, so code may have run before the checks");
 
   const brief = state.task?.brief ?? "";
   const fences = [...brief.matchAll(CHECKS_FENCE)].map((m) => m[1]!.trim());
@@ -137,18 +136,22 @@ export async function verify(target: string, mandateFile: string, io: VerifyIo):
   const parts = published === undefined ? undefined : splitChecks(published);
   const template = sha256(CHECKS_TEMPLATE);
   const ours = mandateText(mandate);
-  const canonical = published === checksFor(mandate);
+  const theirs = parts && sha256(parts.template);
+  // Checks this version knows, its own or an earlier wording of the same rules, are code it can run.
+  const known = parts && (parts.template === CHECKS_TEMPLATE || EARLIER_TEMPLATES.get(theirs!) === parts.template) ? parts.template : undefined;
+  const canonical = known !== undefined && published === checksFor(mandate, known);
   if (published === undefined) line("FAIL", `checks: the brief holds ${fences.length} Python checks blocks, not one`);
-  else if (parts && parts.template === CHECKS_TEMPLATE) line("ok", `checks: this version's, template SHA-256 ${template}`);
-  else line("FAIL", `checks: not this version's: their template's SHA-256 is ${parts ? sha256(parts.template) : "unknown, as they carry no mandate"}, this version's ${template}`);
+  else if (known === CHECKS_TEMPLATE) line("ok", `checks: this version's, template SHA-256 ${template}`);
+  else if (known) line("ok", `checks: an earlier wording of the same rules, kept in src/templates, template SHA-256 ${theirs}`);
+  else line("FAIL", `checks: not this version's: their template's SHA-256 is ${theirs ?? "unknown, as they carry no mandate"}, this version's ${template}`);
   if (parts && parts.mandate === ours) line("ok", `mandate: the checks carry the mandate in ${basename(mandateFile)}, SHA-256 ${sha256(ours)}`);
   else if (published !== undefined) {
     const wallet = parts && /"wallet": "(0x[0-9a-fA-F]{40})"/.exec(parts.mandate)?.[1];
     line("FAIL", `mandate: the checks carry ${parts ? `a mandate${wallet ? ` for wallet ${wallet}` : ""} with SHA-256 ${sha256(parts.mandate)}` : "no mandate"}, not the one in ${basename(mandateFile)}, SHA-256 ${sha256(ours)}`);
   }
 
-  // Only a program that is this version's checks after a block of data is run on this machine: anything else is code from the record.
-  if (!pure || !canonical) line("skip", "rerun: skipped, as this machine runs only a block of data followed by this version's checks");
+  // Only a block of data followed by checks this version knows is run on this machine: anything else is code from the record.
+  if (!pure || !canonical) line("skip", "rerun: skipped; only a block of data followed by known checks is run here");
   else {
     const run = await runLocally({ result, checks: { language: "python", code: published! } });
     const execution = state.execution ?? {};
@@ -177,9 +180,9 @@ export async function verify(target: string, mandateFile: string, io: VerifyIo):
   } else if (skipped) {
     io.log("\nVerdict: not verified. BrainChain publishes the delivery only for work it accepts, so this decision cannot be run again.");
   } else {
-    io.log(`\nVerdict: match. The published block is data and nothing else, the checks are this version's with the mandate in ${basename(mandateFile)}, and they ${record.checks === "passed" ? "pass" : "fail"} here as they did on BrainChain.`);
+    io.log(`\nVerdict: match. The published block is data and nothing else, the checks are ${known === CHECKS_TEMPLATE ? "this version's" : "an earlier wording of its rules"} with the mandate in ${basename(mandateFile)}, and they ${record.checks === "passed" ? "pass" : "fail"} here as they did on BrainChain.`);
   }
-  io.log(`That the record is the one on chain: npx brainchain-verify mainnet ${view?.decision?.id ?? "<decision id>"}`);
+  io.log(`To confirm the record on chain: npx brainchain-verify mainnet ${view?.decision?.id ?? "<decision id>"}`);
   return failed.length > 0 ? 2 : skipped ? 1 : 0;
 }
 
@@ -190,7 +193,6 @@ decision record's URL. The mandate is the file the decision's checks should carr
 
 Exit codes: 0 the record matches; 2 it does not, or is of the earlier form; 1 it could not be checked.`;
 
-/** The command line, as an exit code. */
 export async function cli(argv: string[], io: Omit<VerifyIo, "desk"> & { desk?: string; error: (line: string) => void } = { fetch, log: console.log, error: console.error }): Promise<number> {
   try {
     const { values, positionals } = parseArgs({ args: argv, options: { mandate: { type: "string" }, help: { type: "boolean", short: "h" } }, allowPositionals: true });

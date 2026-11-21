@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { checkFunds, checkHolding, checkTokens, USDC_BASE } from "../src/preflight.ts";
+import { checkFunds, checkHolding, checkTokens } from "../src/preflight.ts";
+import { USDC_BASE } from "../src/shared.ts";
 
 import { MANDATE, node } from "./helpers.ts";
 

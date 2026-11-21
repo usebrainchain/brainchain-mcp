@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 import type { Address } from "viem";
 
-import { describe, type Mandate } from "./mandate.ts";
+import { describeMandate, type Mandate } from "./mandate.ts";
 import type { SignedQuote } from "./zerox.ts";
 
 /** The body of BrainChain's grade route, as docs.usebrainchain.com/other-networks describes it. */
@@ -36,13 +36,21 @@ export const CHECKS_TEMPLATE = `${MANDATE_OPEN}${MANDATE_SLOT}${MANDATE_CLOSE}\n
 
 export const sha256 = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 
+/** Earlier wordings of the same rules, by template SHA-256, kept so the decisions made with them can still be run again. */
+export const EARLIER_TEMPLATES: ReadonlyMap<string, string> = new Map(
+  readdirSync(new URL("./templates/", import.meta.url))
+    .filter((name) => name.endsWith(".py"))
+    .map((name) => readFileSync(new URL(`./templates/${name}`, import.meta.url), "utf8"))
+    .map((template) => [sha256(template), template]),
+);
+
 /**
  * The delivered block, whole: one assignment of one string of base64 to DELIVERY. A line of this form is a single
  * string literal, with no quote, backslash or newline inside it to be read two ways, so it runs no code.
  */
 export const DELIVERY_FORM = /^DELIVERY = "[A-Za-z0-9+/]*={0,2}"$/;
 
-export const REQUIREMENTS = `Check a trade against its mandate before the agent signs it.
+export const BRIEF = `Check a trade against its mandate before the agent signs it.
 
 The agent asked 0x's Swap API for a quote through 0x's keyless gateway and got back a transaction to sign. The result's Python block is one line that assigns DELIVERY a string of base64. Decoded, it is JSON: 0x's response byte for byte with its signature headers, the request that signature covers, when the agent received the response by its own clock, and the Settler contract that 0x's on-chain registry named when the agent read it. The block is that one line and nothing else, which anyone can confirm from the published record.
 
@@ -86,10 +94,10 @@ export function deliveryCode(quote: SignedQuote, registry: Registry): string {
 }
 
 /** The checks with the mandate written into them, so the brief that publishes them also publishes what they enforce. */
-export function checksFor(mandate: Mandate): string {
+export function checksFor(mandate: Mandate, template = CHECKS_TEMPLATE): string {
   const json = mandateText(mandate);
-  if (json.includes('"""') || json.includes("\\")) throw new Error("The mandate holds a character the checks cannot quote.");
-  return CHECKS_TEMPLATE.replace(MANDATE_SLOT, () => json);
+  if (json.includes('"""') || json.includes("\\")) throw new Error('Remove the backslash or """ from the mandate: the checks cannot quote it. Nothing was paid.');
+  return template.replace(MANDATE_SLOT, () => json);
 }
 
 /** A set of checks taken apart into the mandate they carry and their template, or undefined when they carry no mandate. */
@@ -113,7 +121,7 @@ export function pretradeCheck(input: { quote: SignedQuote; registry: Registry; m
   }
   return {
     title: `Pre-trade check: ${input.trade}`.slice(0, 120),
-    brief: REQUIREMENTS.replace("{mandate}", () => describe(input.mandate)),
+    brief: BRIEF.replace("{mandate}", () => describeMandate(input.mandate)),
     result: `The trade the agent is about to sign: ${input.trade}, as 0x quoted it.\n\n\`\`\`python\n${code}\n\`\`\``,
     levels: LEVELS,
     pass: 0,

@@ -7,12 +7,12 @@ import { encodeFunctionData, erc20Abi } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 import { DEFAULT_DESK, GRADE_PAYMENT, gradeId, type Verdict } from "../src/desk.ts";
-import { describeTrade, distrust, loadAccount, Refusal, report, run, toSign, tradeOf, unfillable, type Io } from "../src/main.ts";
-import { CHECKS_TEMPLATE, mandateText, pretradeCheck, sha256 } from "../src/request.ts";
+import { describeTrade, loadAccount, Refusal, report, run, toSign, tradeOf, unfillable, type Io, untrustedReasons } from "../src/main.ts";
+import { checksFor, CHECKS_TEMPLATE, mandateText, pretradeCheck, sha256 } from "../src/request.ts";
 import { runLocally, type Run } from "../src/sandbox.ts";
 import { GATEWAY, quoteQuery, type SignedQuote } from "../src/zerox.ts";
 
-import { USDC_BASE } from "../src/preflight.ts";
+import { USDC_BASE } from "../src/shared.ts";
 
 import { MANDATE, MANDATE_FILE, node, read, recorded, recordOf } from "./helpers.ts";
 
@@ -124,7 +124,7 @@ describe("trusting an acceptance", () => {
   const verdict = (): Verdict => ({ grade: id, state: "graded", status, accepted: true, checks: { language: "python", outcome: "passed", output: local.output } });
 
   it("holds only for the grade paid for, from the desk, on the same passing rules", () => {
-    expect(distrust({ id, status, verdict: verdict() }, local, DEFAULT_DESK, local.output)).toEqual([]);
+    expect(untrustedReasons({ id, status, verdict: verdict() }, local, DEFAULT_DESK, local.output)).toEqual([]);
   });
 
   it.each([
@@ -133,14 +133,14 @@ describe("trusting an acceptance", () => {
     ["another status", (v: Verdict) => ({ ...v, status: "https://evil.test/x402/grades/x" }), "the verdict names https://evil.test/x402/grades/x as its status"],
     ["failed checks", (v: Verdict) => ({ ...v, checks: { language: "python", outcome: "failed" as const } }), "BrainChain's run of the checks failed"],
   ])("fails for a verdict %s", (_case, change, problem) => {
-    expect(distrust({ id, status, verdict: change(verdict()) }, local, DEFAULT_DESK, local.output).join("; ")).toContain(problem);
+    expect(untrustedReasons({ id, status, verdict: change(verdict()) }, local, DEFAULT_DESK, local.output).join("; ")).toContain(problem);
   });
 
   it("fails when the run here failed, BrainChain printed other rules, or printed nothing to compare", () => {
-    expect(distrust({ id, status, verdict: verdict() }, { ...local, outcome: "failed" }, DEFAULT_DESK, local.output)).toEqual(["the checks did not pass here"]);
-    expect(distrust({ id, status, verdict: verdict() }, local, DEFAULT_DESK, local.output.replace("pass  recipient", "pass  recipient (forged)"))).toEqual(["BrainChain's run printed other rule lines than the run here"]);
-    expect(distrust({ id, status, verdict: verdict() }, local, DEFAULT_DESK, undefined)).toEqual(["what BrainChain's run printed is in neither its reply nor its record"]);
-    expect(distrust({ id, status: `https://evil.test/x402/grades/${id}`, verdict: { ...verdict(), status: `https://evil.test/x402/grades/${id}` } }, local, DEFAULT_DESK, local.output)).toHaveLength(1);
+    expect(untrustedReasons({ id, status, verdict: verdict() }, { ...local, outcome: "failed" }, DEFAULT_DESK, local.output)).toEqual(["the checks did not pass here"]);
+    expect(untrustedReasons({ id, status, verdict: verdict() }, local, DEFAULT_DESK, local.output.replace("pass  recipient", "pass  recipient (forged)"))).toEqual(["BrainChain's run printed other rule lines than the run here"]);
+    expect(untrustedReasons({ id, status, verdict: verdict() }, local, DEFAULT_DESK, undefined)).toEqual(["what BrainChain's run printed is in neither its reply nor its record"]);
+    expect(untrustedReasons({ id, status: `https://evil.test/x402/grades/${id}`, verdict: { ...verdict(), status: `https://evil.test/x402/grades/${id}` } }, local, DEFAULT_DESK, local.output)).toHaveLength(1);
   });
 });
 
@@ -214,7 +214,7 @@ describe("the command line's exit codes", { timeout: 90_000 }, () => {
   it("exits 0 with the trade as BrainChain's run printed it, and both transactions ready to sign", async () => {
     const s = setup((id) => Response.json(view(id)));
     expect(await run(paidArgs, s.io)).toBe(0);
-    expect(s.out()).toContain(`ok    checks: 19,818 characters of the grade route's 32,000; template SHA-256 ${sha256(CHECKS_TEMPLATE)}, mandate SHA-256 ${sha256(mandateText(MANDATE))}`);
+    expect(s.out()).toContain(`ok    checks: ${checksFor(MANDATE).length.toLocaleString("en-US")} characters of the grade route's 32,000; template SHA-256 ${sha256(CHECKS_TEMPLATE)}, mandate SHA-256 ${sha256(mandateText(MANDATE))}`);
     expect(s.out()).toContain("ok    tokens: as on chain: USDG, 6 decimals; WETH, 18 decimals; ETH, the native token, 18 decimals");
     expect(s.out()).toContain("ok    funds: 0xd937E50Ee21E66f7640F1a7887399e63055290fe holds 1 USDC on Base, enough for 3 checks");
     expect(s.out()).toContain("Checks: passed. BrainChain's run printed:\n  Trade: sell 5 USDG for at least 0.003072049707352334 WETH (0x quoted 0.003087487143067672 WETH)");
@@ -288,7 +288,7 @@ describe("the command line's exit codes", { timeout: 90_000 }, () => {
   });
 
   it.each([
-    [["--sell", "USDG", "--buy", "WETH", "--amount", "5"], "--mandate names the mandate file. A paid check never falls back to the sample mandate."],
+    [["--sell", "USDG", "--buy", "WETH", "--amount", "5"], "Name the mandate with --mandate <file>: a paid check never uses the sample one. Nothing was paid."],
     [["--mandate", MANDATE_FILE, "--sell", "USDG", "--buy", "WETH", "--amount", "0"], "--amount must be more than 0."],
     [["--mandate", MANDATE_FILE, "--sell", "USDG", "--buy", "usdg", "--amount", "5"], "--sell and --buy are both USDG."],
     [["--mandate", MANDATE_FILE, "--sell", "USDG", "--buy", "WETH", "--amount", "5.0000001"], "--amount has more decimals than USDG's 6."],
@@ -357,7 +357,7 @@ describe("a dry run", { timeout: 90_000 }, () => {
     const s = setup();
     expect(await run(["--dry", "--mandate", MANDATE_FILE, "--sell", "USDG", "--buy", "WETH", "--amount", "5"], s.io)).toBe(0);
     for (const step of ["mandate", "trade", "checks", "node", "tokens", "holds", "funds", "route"]) expect(s.out()).toMatch(new RegExp(`^ {2}ok {4}${step}: `, "m"));
-    expect(s.out()).toContain("ok    route: BrainChain's grade route takes the request, unpaid, for 0.25 USDC on Base, 0.25 USDG on Robinhood Chain");
+    expect(s.out()).toContain("ok    route: BrainChain would grade this request for 0.25 USDC on Base, 0.25 USDG on Robinhood Chain");
     expect(s.out()).toContain("  13 of 13 rules pass.");
     expect(s.out()).toContain("Nothing was paid.");
     expect(s.calls).toEqual([`POST ${DEFAULT_DESK}/x402/grades`]);

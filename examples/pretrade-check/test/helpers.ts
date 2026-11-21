@@ -34,9 +34,9 @@ export function tamperRoute(quote: SignedQuote): SignedQuote {
 }
 
 /**
- * The second bypass from the review, in the new form: a block that patches hashlib.sha512 before the checks import it,
- * so Ed25519's challenge hashes to zero and a signature of (base point, 1) verifies over anything. DELIVERY is still a
- * genuine string, holding a tampered route under that signature.
+ * A block that patches hashlib.sha512 before the checks import it, so Ed25519's challenge hashes to zero and a
+ * signature of (base point, 1) verifies over anything. DELIVERY is still a genuine string, holding a tampered route
+ * under that signature.
  */
 export function sha512Bypass(delivery: string): string {
   return [

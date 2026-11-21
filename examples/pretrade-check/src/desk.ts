@@ -6,13 +6,14 @@ import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { keccak256, toBytes, type PrivateKeyAccount } from "viem";
 
 import type { GradeRequest } from "./request.ts";
+import { messageOf, same, USDC_BASE } from "./shared.ts";
 
 export const DEFAULT_DESK = "https://brain.usebrainchain.com";
 
 /** BrainChain's desk on Base: 0.25 USDC a grade, as a transfer authorization. Nothing else is paid from here. */
 export const GRADE_PAYMENT = {
   network: "eip155:8453",
-  asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  asset: USDC_BASE,
   payTo: "0x97D558417c3D61f1074422AD843e1Db1E565b952",
   maxUnits: 250_000n,
 } as const;
@@ -42,7 +43,7 @@ export interface Paid {
 
 /**
  * The desk to pay and read: BrainChain's own unless BRAINCHAIN_DESK_URL names another, which must be https (or http on
- * this machine, for a local brain) and take payment at the same address on Base, since nothing else is paid.
+ * this machine, for a local desk) and take payment at the same address on Base, since nothing else is paid.
  */
 export function deskUrl(value = process.env.BRAINCHAIN_DESK_URL): string {
   if (!value) return DEFAULT_DESK;
@@ -59,9 +60,7 @@ export function deskUrl(value = process.env.BRAINCHAIN_DESK_URL): string {
   return url.origin;
 }
 
-const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const sentence = (text: string) => (/[.!?]$/.test(text) ? text : `${text}.`);
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** BrainChain's id for a grade: the hash of the signed payment with its keys sorted, so a grade can be read again if the reply is lost. */
 export function gradeId(payload: unknown): string {
@@ -82,7 +81,7 @@ async function json(response: Response): Promise<Record<string, unknown>> {
 
 /** The currencies BrainChain takes, by chain and token address, to name its offers. */
 const CURRENCIES: Record<string, { name: string; symbol: string; decimals: number }> = {
-  "eip155:8453/0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": { name: "Base", symbol: "USDC", decimals: 6 },
+  [`eip155:8453/${USDC_BASE.toLowerCase()}`]: { name: "Base", symbol: "USDC", decimals: 6 },
   "eip155:4663/0x5fc5360d0400a0fd4f2af552add042d716f1d168": { name: "Robinhood Chain", symbol: "USDG", decimals: 6 },
 };
 
@@ -96,13 +95,13 @@ export function describeOffers(accepts: { network: string; asset: string; amount
 }
 
 /** Asks the grade route for its price without paying: a 402 means it would take the request, a 400 says why not. */
-export async function priceOf(request: GradeRequest, options: { desk?: string; fetch?: typeof fetch } = {}): Promise<string> {
+export async function priceOf(request: GradeRequest, options: { desk?: string; fetch?: typeof fetch } = {}): Promise<{ takes: true; text: string } | { takes: false; text: string }> {
   const fetchImpl = options.fetch ?? fetch;
   const response = await fetchImpl(`${options.desk ?? DEFAULT_DESK}/x402/grades`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request), signal: AbortSignal.timeout(20_000) });
   const header = response.headers.get("payment-required");
-  if (response.status !== 402 || !header) return `answered ${response.status}: ${(await response.text()).slice(0, 300)}`;
+  if (response.status !== 402 || !header) return { takes: false, text: `BrainChain's grade route answered ${response.status}: ${(await response.text()).slice(0, 300)}` };
   const { accepts = [] } = JSON.parse(Buffer.from(header, "base64").toString("utf8")) as { accepts?: { network: string; asset: string; amount: string }[] };
-  return `takes the request, unpaid, for ${describeOffers(accepts)}`;
+  return { takes: true, text: `BrainChain would grade this request for ${describeOffers(accepts)}` };
 }
 
 /** A grade BrainChain cannot find, which is no proof that nothing was charged. */
@@ -153,13 +152,13 @@ export async function payGrade(request: GradeRequest, account: PrivateKeyAccount
     payment = await payer.createPaymentPayload({ ...required, accepts: [accept] });
     price = Number(accept.amount) / 1e6;
   } catch (error) {
-    throw new Error(`BrainChain offers no grade this client signs, at most 0.25 USDC on Base to ${GRADE_PAYMENT.payTo} (${messageOf(error)}). Nothing was paid to BrainChain.`, { cause: error });
+    throw new Error(`Not signing BrainChain's offer: this client pays at most 0.25 USDC on Base to ${GRADE_PAYMENT.payTo}, by transfer authorization (${messageOf(error)}). Nothing was paid to BrainChain.`, { cause: error });
   }
   const id = gradeId(payment.payload);
   const status = `${url}/${id}`;
   const charged = (why: string, cause?: unknown) =>
-    new Error(`${sentence(why)} The ${price} USDC grade may have been charged: read ${status}, which is free, and do not run this check again, which would pay again.`, cause === undefined ? undefined : { cause });
-  /** The grade by its id, read until decided; one BrainChain cannot find more than `missing` times in a row is thrown as `absent` says. */
+    new Error(`${sentence(why)} The ${price} USDC grade may have been charged. Read ${status} (free) first; running the check again pays again.`, cause === undefined ? undefined : { cause });
+  /** Reads the grade by its id until it is decided. If BrainChain cannot find it `missing` reads in a row, the error is `absent`'s. */
   const wait = async (missing: number, absent: (cause: Missing) => Error): Promise<Paid> => {
     try {
       return { id, status, verdict: await waitFor(id, status, { fetch: fetchImpl, log, charged, missing, waitMs: options.waitMs ?? 600_000, pollMs: options.pollMs ?? 10_000 }) };
@@ -168,10 +167,10 @@ export async function payGrade(request: GradeRequest, account: PrivateKeyAccount
     }
   };
 
-  log(`grade ${id}: paying ${price} USDC on Base`);
+  log(`Paying ${price} USDC on Base for grade ${id}.`);
   const response = await fetchImpl(url, { method: "POST", headers: { ...headers, ...payer.encodePaymentSignatureHeader(payment) }, body, signal: AbortSignal.timeout(120_000) }).catch((error: Error) => error);
   if (!(response instanceof Response)) {
-    log(`grade ${id}: no reply to the paid request (${response.message}); reading the grade instead`);
+    log(`No reply to the paid request (${response.message}). Reading grade ${id} instead.`);
     // The request may still be on its way, so a grade BrainChain cannot find yet is read a few more times.
     return wait(3, (cause) => charged(`BrainChain did not answer the paid request (${response.message}) and has no grade ${id}`, cause));
   }
@@ -181,11 +180,11 @@ export async function payGrade(request: GradeRequest, account: PrivateKeyAccount
   if (response.status === 400) throw new Error(`BrainChain refused the paid request: ${sentence(refusal)} Nothing was charged.`);
   if (response.ok && reply.state === "graded") return { id, status, verdict: reply };
   if (reply.state === "failed") throw new Error("The payment did not go through. Nothing was charged.");
-  log(`grade ${id}: BrainChain answered ${response.status}${reply.state ? `, ${reply.state}` : ""}; reading the grade`);
+  log(`BrainChain answered ${response.status}${reply.state ? ` (${reply.state})` : ""}. Reading grade ${id}.`);
   // A 402 or 403 after a signed payment can still follow a saved payment: a grade by this id is the answer, and its absence is not proof of no charge.
   if (response.status === 402 || response.status === 403) {
     return wait(0, (cause) =>
-      // A payment the facilitator would not verify for want of funds is never settled.
+      // A payment the facilitator would not verify because the wallet is short is never settled.
       refusal === "insufficient_funds"
         ? new Error(`BrainChain refused the payment: the wallet's USDC on Base does not cover the ${price} USDC grade. Nothing was charged.`, { cause })
         : charged(`BrainChain refused the payment: ${refusal}`, cause),
@@ -198,22 +197,23 @@ export async function payGrade(request: GradeRequest, account: PrivateKeyAccount
 async function waitFor(
   id: string,
   status: string,
-  o: { fetch: typeof fetch; log: (line: string) => void; charged: (why: string, cause?: unknown) => Error; missing: number; waitMs: number; pollMs: number },
+  options: { fetch: typeof fetch; log: (line: string) => void; charged: (why: string, cause?: unknown) => Error; missing: number; waitMs: number; pollMs: number },
 ): Promise<Verdict> {
   const started = Date.now();
   let absent = 0;
   for (;;) {
-    const response = await o.fetch(status, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) }).catch(() => undefined);
+    const response = await options.fetch(status, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) }).catch(() => undefined);
     const view = response?.ok ? ((await json(response)) as unknown as Verdict) : undefined;
-    if (view && view.grade !== id) throw o.charged(`BrainChain answered ${status} with grade ${String(view.grade)}, not ${id}`);
+    if (view && view.grade !== id) throw options.charged(`BrainChain answered ${status} with grade ${String(view.grade)}, not ${id}`);
     if (view?.state === "graded") return view;
     if (view?.state === "failed") throw new Error("The payment did not go through. Nothing was charged.");
     absent = response?.status === 404 ? absent + 1 : 0;
-    if (absent > o.missing) throw new Missing(`BrainChain has no grade ${id}`);
+    if (absent > options.missing) throw new Missing(`BrainChain has no grade ${id}`);
     const waited = Date.now() - started;
-    if (waited + o.pollMs > o.waitMs) throw o.charged(`No verdict for grade ${id} after ${Math.round(waited / 1000)} s; it may still come`);
-    o.log(`grade ${id}: ${view?.state ?? (response ? `answered ${response.status}` : "no answer")}, ${Math.round(waited / 1000)} s since paying; reading again in ${o.pollMs / 1000} s`);
-    await sleep(o.pollMs);
+    if (waited + options.pollMs > options.waitMs) throw options.charged(`No verdict for grade ${id} after ${Math.round(waited / 1000)} s; it may still come`);
+    const state = view?.state ?? (response ? `answered ${response.status}` : "not answering");
+    options.log(`Grade ${id} is ${state}, ${Math.round(waited / 1000)} s after paying. Reading it again in ${options.pollMs / 1000} s.`);
+    await sleep(options.pollMs);
   }
 }
 

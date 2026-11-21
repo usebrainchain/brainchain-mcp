@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +7,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { parseMandate, readMandate } from "../src/mandate.ts";
-import { checksFor, CHECKS_TEMPLATE, deliveryCode, mandateText, MAX_CHECKS, MAX_PROGRAM, pretradeCheck, splitChecks } from "../src/request.ts";
+import { checksFor, CHECKS_TEMPLATE, deliveryCode, EARLIER_TEMPLATES, mandateText, MAX_CHECKS, MAX_PROGRAM, pretradeCheck, sha256, splitChecks } from "../src/request.ts";
 import { programOf, runLocally } from "../src/sandbox.ts";
 
 import { MANDATE, read, recorded } from "./helpers.ts";
@@ -27,7 +28,7 @@ describe("the grade request", () => {
     expect(request.brief).toContain("- Most one trade may sell: 25 USDG, 0.01 WETH, 0.01 ETH.");
     expect(request.brief).toContain("- The guaranteed minimum out may be at most 100 basis points under 0x's quoted amount.");
     expect(request.checks.code).toContain(`"validUntil": "2026-12-31T23:59:59Z"`);
-    // The brain shows checks as a fenced block, so a fence inside them would end it early.
+    // BrainChain shows checks as a fenced block, so a fence inside them would end it early.
     expect(CHECKS_TEMPLATE).not.toContain("```");
   });
 
@@ -44,6 +45,13 @@ describe("the grade request", () => {
       checks: { language: "python", code: `import base64, hashlib, json\nbody = json.loads(base64.b64decode(DELIVERY))["response"]["body"]\nif hashlib.sha256(body.encode("utf-8")).hexdigest() != "${digest}":\n    raise AssertionError(body)` },
     });
     expect(run).toMatchObject({ outcome: "passed" });
+  });
+
+  it("keeps each earlier wording of the checks under the start of its own SHA-256", () => {
+    const kept = readdirSync(new URL("../src/templates/", import.meta.url));
+    expect(kept.length).toBeGreaterThan(0);
+    for (const name of kept) expect(sha256(readFileSync(new URL(`../src/templates/${name}`, import.meta.url), "utf8")).startsWith(name.replace(/\.py$/, ""))).toBe(true);
+    expect([...EARLIER_TEMPLATES.values()]).not.toContain(CHECKS_TEMPLATE);
   });
 
   it("writes the mandate into the template, and takes it back out the same", () => {
