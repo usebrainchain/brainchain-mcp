@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { parseMandate, type Mandate } from "../src/mandate.ts";
@@ -80,6 +82,33 @@ describe("the checks, on 0x's recorded quotes, as BrainChain's sandbox runs them
     const { failed, output } = await check("inside", { quote: { request: { ...quote.request, query } } });
     expect(failed).toEqual(["signature", "query", "fees"]);
     expect(output).toContain("FAIL  query: it asks for swapFeeRecipient, which the checks do not allow; it asks for swapFeeBps, which the checks do not allow");
+  });
+});
+
+describe("the minimum out at the mandate's own maximum", { timeout: 60_000 }, () => {
+  it("allows 0x's minimum when it is a wei under the exact bound", async () => {
+    // 50 bps under 3048728404035585 is 3033484762015407.5; 0x quoted 3033484762015407.
+    const definitions = checksFor(MANDATE).split("\n_run(")[0];
+    const code = `${definitions}\nprint(_lowest_minimum(3048728404035585, 50))`;
+    const run = await runLocally({ result: "```python\nDELIVERY = \"\"\n```", checks: { language: "python", code } });
+    expect(run.output.trim()).toBe("3033484762015407");
+  });
+
+  it.each(["inside", "native", "outside", "minimum", "size", "tampered"])("passes the %s quote's minimum against a mandate whose maximum is the slippage asked for", async (name) => {
+    const slippage = Number(/slippageBps=(\d+)/.exec(recorded(name).quote.request.query)![1]);
+    const { failed } = await check(name, { mandate: { maxSlippageBps: slippage } });
+    expect(failed).not.toContain("minimum out");
+  });
+
+  it("passes decision 1004's quote at 50 bps, whose minimum is a wei under the rounded-up bound", async () => {
+    const record = JSON.parse(readFileSync(new URL("../fixtures/records/1004.json", import.meta.url), "utf8"));
+    const delivery = JSON.parse(Buffer.from(/DELIVERY = "([^"]*)"/.exec(JSON.parse(record.request.state).result)![1]!, "base64").toString("utf8"));
+    const { response } = delivery;
+    const quote = { request: delivery.request, response: { status: response.status, contentType: response["content-type"], contentDigest: response["content-digest"], signatureInput: response["signature-input"], signature: response.signature, body: response.body }, receivedAt: delivery.receivedAt };
+    const request = pretradeCheck({ quote, registry: delivery.registry, mandate: parseMandate({ ...MANDATE, maxSlippageBps: 50 }), trade: "sell 5 USDG for WETH on Robinhood Chain" });
+    const run = await runLocally(request);
+    expect(ruleLines(run.output).filter((l) => l.startsWith("FAIL"))).toEqual([]);
+    expect(run.output).toContain("pass  minimum out: the trade reverts unless it pays at least 0.003071136127464364 WETH, 50.0 bps under 0x's quote, within the mandate's 50");
   });
 });
 

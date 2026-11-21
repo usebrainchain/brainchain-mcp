@@ -161,6 +161,12 @@ def _call(data):
     }
 
 
+def _lowest_minimum(quoted, max_bps):
+    """The least minimum out the mandate allows, rounded down: 0x's own minimum can fall a wei under the exact bound,
+    which must not fail a slippage at the mandate's maximum."""
+    return quoted * (10_000 - max_bps) // 10_000
+
+
 def _base_units(amount, decimals):
     whole, _, fraction = amount.partition(".")
     if len(fraction) > decimals:
@@ -345,7 +351,7 @@ def _run(given, mandate):
             problems.append("the transaction trades other tokens than the quote names")
         rule("size", not problems, "sells " + _shown(call["amount"], tokens.get(sell)) + ("; " + "; ".join(problems) if problems else ", within the token's maxSell of " + _shown(cap, tokens[sell])))
 
-        floor = -(-quoted * (10_000 - mandate["maxSlippageBps"]) // 10_000)
+        floor = _lowest_minimum(quoted, mandate["maxSlippageBps"])
         slip = (quoted - call["minOut"]) * 10_000 / quoted if quoted else 0
         problems = []
         if call["minOut"] < floor:
