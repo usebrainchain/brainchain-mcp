@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CHANGES_NAME, CHANGES_TOOL, changesQuery, createWatch, HOSTED_WATCH_URL, readChanges, removeWatch, UNWATCH_NAME, WATCH_NAME, WATCH_TOOL, watchUrl } from "../changes.js";
 import { createServer } from "../server.js";
 import { callTool, type Desk } from "../tools.js";
-import { githubEvery, githubToken, watchArgs } from "./cli.js";
+import { discordRelay, githubEvery, githubToken, watchArgs } from "./cli.js";
 import { useGitHubToken } from "../github.js";
 import { Deliveries } from "./deliver.js";
 import { EventLog, KINDS, type Found } from "./events.js";
@@ -189,6 +189,14 @@ describe("the watch command's arguments", () => {
     expect(() => watchArgs(["--serve", "99999"])).toThrow(/^--serve needs a port/);
     expect(() => watchArgs(["--state"])).toThrow("--state needs a folder.");
     expect(() => watchArgs(["--follow"])).toThrow("Unknown argument --follow.");
+  });
+
+  it("take a Discord relay only with its key, at a public https address", () => {
+    const key = "r".repeat(43);
+    expect(discordRelay({})).toBeUndefined();
+    expect(discordRelay({ BRAINCHAIN_WATCH_DISCORD_RELAY: "https://relay.example.workers.dev/", BRAINCHAIN_WATCH_DISCORD_RELAY_KEY: key })).toEqual({ url: new URL("https://relay.example.workers.dev/"), key });
+    expect(() => discordRelay({ BRAINCHAIN_WATCH_DISCORD_RELAY: "https://relay.example.workers.dev/" })).toThrow(/must hold the relay's key/);
+    expect(() => discordRelay({ BRAINCHAIN_WATCH_DISCORD_RELAY: "http://127.0.0.1/", BRAINCHAIN_WATCH_DISCORD_RELAY_KEY: key })).toThrow("url must start with https://.");
   });
 });
 
