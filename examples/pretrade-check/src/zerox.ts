@@ -131,6 +131,24 @@ export function zeroxPayer(account: PrivateKeyAccount): x402HTTPClient {
 }
 
 /**
+ * Why the facilitator refused a payment it never settled, from a 402's body: 0x's gateway puts the facilitator's
+ * verification, with isValid false and its invalidReason, as JSON inside the error string.
+ */
+function unverified(body: string): string | undefined {
+  const parse = (text: unknown): unknown => {
+    if (typeof text !== "string") return text;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return undefined;
+    }
+  };
+  const outer = parse(body) as { error?: unknown } | undefined;
+  const inner = parse(outer?.error) as { isValid?: unknown; invalidReason?: unknown } | undefined;
+  return inner?.isValid === false && typeof inner.invalidReason === "string" ? inner.invalidReason : undefined;
+}
+
+/**
  * Pays 0x for one signed quote. The gateway charges a request it refuses as well, so a refusal is thrown with
  * 0x's reason and is not retried here.
  */
@@ -173,6 +191,9 @@ export async function buyQuote(trade: Trade, payer: x402HTTPClient, options: { f
   }
   const body = bytes.toString("utf8");
   if (!response.ok) {
+    const refused = response.status === 402 ? unverified(body) : undefined;
+    if (refused === "insufficient_funds") throw new Error(`0x's payment processor refused the payment: the wallet's USDC on Base does not cover the 0.01 USDC fee. Nothing was charged.`);
+    if (refused) throw new Error(`0x's payment processor refused the payment (${refused}). Nothing was charged.`);
     const fee = paymentTx ? `The request fee of 0.01 USDC was paid in ${paymentTx}; nothing was paid to BrainChain.` : unsure;
     throw new Error(`0x refused the quote (${response.status}): ${body.slice(0, 300)}. ${fee}`);
   }

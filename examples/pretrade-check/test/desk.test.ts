@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
-import { deskUrl, GRADE_PAYMENT, gradeId, payGrade } from "../src/desk.ts";
+import { describeOffers, deskUrl, GRADE_PAYMENT, gradeId, payGrade } from "../src/desk.ts";
 import { pretradeCheck } from "../src/request.ts";
 
 import { MANDATE, recorded } from "./helpers.ts";
@@ -98,6 +98,10 @@ describe("paying for the grade", () => {
     expect((error as Error).message).toBe(`BrainChain refused the payment: settlement failed. The 0.25 USDC grade ${charged(id)}`);
   });
 
+  it("says nothing was charged when the facilitator finds the wallet short", async () => {
+    await expect(pay(desk(() => answer(402, { error: "insufficient_funds" })))).rejects.toThrow("BrainChain refused the payment: the wallet's USDC on Base does not cover the 0.25 USDC grade. Nothing was charged.");
+  });
+
   it("takes a failed grade as nothing charged", async () => {
     await expect(pay(desk((id) => answer(402, { grade: id, state: "failed" })))).rejects.toThrow("The payment did not go through. Nothing was charged.");
     await expect(pay(desk((id) => answer(202, { grade: id, state: "paid" }), [(id) => answer(200, { grade: id, state: "failed" })]))).rejects.toThrow("The payment did not go through. Nothing was charged.");
@@ -112,6 +116,18 @@ describe("paying for the grade", () => {
   it("refuses a read that answers for another grade", async () => {
     const other = `0x${"1".repeat(64)}`;
     await expect(pay(desk((id) => answer(202, { grade: id, state: "paid" }), [() => answer(200, graded(other))]))).rejects.toThrow(`with grade ${other}, not`);
+  });
+});
+
+describe("an offer", () => {
+  it("is named once per price, with its currency and chain", () => {
+    const accepts = [
+      { network: "eip155:4663", asset: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", amount: "250000" },
+      { network: "eip155:4663", asset: "0x5fc5360d0400a0fd4f2af552add042d716f1d168", amount: "250000" },
+      { network: "eip155:8453", asset: GRADE_PAYMENT.asset, amount: "250000" },
+      { network: "eip155:1", asset: "0x0000000000000000000000000000000000000001", amount: "7" },
+    ];
+    expect(describeOffers(accepts)).toBe("0.25 USDG on Robinhood Chain, 0.25 USDC on Base, 7 base units of 0x0000000000000000000000000000000000000001 on eip155:1");
   });
 });
 

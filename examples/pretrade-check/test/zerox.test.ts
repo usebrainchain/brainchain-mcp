@@ -113,6 +113,13 @@ describe("paying 0x's gateway", () => {
     expect(quote.receivedAt).toBe(1_795_225_000);
   });
 
+  it("says nothing was charged when 0x's facilitator finds the wallet short, without its JSON", async () => {
+    const body = JSON.stringify({ error: `${JSON.stringify({ invalidMessage: "contract call failed", invalidReason: "insufficient_funds", isValid: false, payer: account.address })}\n` });
+    const fetchImpl = vi.fn().mockResolvedValueOnce(challenge(exact)).mockResolvedValueOnce(new Response(body, { status: 402, headers: { "content-type": "application/json" } }));
+    const error = await buyQuote(trade, zeroxPayer(account), { fetch: fetchImpl as typeof fetch }).catch((e: Error) => e);
+    expect((error as Error).message).toBe("0x's payment processor refused the payment: the wallet's USDC on Base does not cover the 0.01 USDC fee. Nothing was charged.");
+  });
+
   it("passes on 0x's refusal of a paid request with the fee's transaction", async () => {
     const settle = Buffer.from(JSON.stringify({ success: true, transaction: "0xabc", network: "eip155:8453" })).toString("base64");
     const fetchImpl = vi.fn().mockResolvedValueOnce(challenge(exact)).mockResolvedValueOnce(new Response('{"name":"INPUT_INVALID"}', { status: 400, headers: { "payment-response": settle } }));
