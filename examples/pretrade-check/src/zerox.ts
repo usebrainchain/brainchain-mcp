@@ -253,12 +253,13 @@ export function checkQuote(quote: SignedQuote, now = quote.receivedAt): void {
 }
 
 /**
- * A node for the chain, checked to be on it. The URL is never printed: a node's URL often carries its key.
+ * A node for the chain, checked to be on it: `rpc`, read from the variable `variable` names, or the public node. The
+ * URL is never printed: a node's URL often carries its key.
  */
-export async function connect(chainId: number, rpc = process.env.CHAIN_RPC): Promise<PublicClient> {
+export async function connect(chainId: number, rpc: string | undefined, variable: string): Promise<PublicClient> {
   const node = rpc || RPCS[chainId];
-  const named = rpc ? "The node CHAIN_RPC names" : `The public node for chain ${chainId}`;
-  if (!node) throw new Error(`No public node is known for chain ${chainId}. Set CHAIN_RPC to one, so 0x's Settler registry can be read there.`);
+  const named = rpc ? `The node ${variable} names` : `The public node for chain ${chainId}`;
+  if (!node) throw new Error(`No public node is known for chain ${chainId}. Set ${variable} to one.`);
   const client = createPublicClient({ transport: http(node, { timeout: 20_000, retryCount: 1 }) });
   const answered = await client.getChainId().catch((error: unknown) => {
     throw new Error(`${named} does not answer: ${messageOf(error)}`, { cause: error });

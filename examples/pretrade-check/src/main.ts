@@ -56,7 +56,7 @@ export interface Io {
   /** Milliseconds, as Date.now. */
   now: () => number;
   env: Record<string, string | undefined>;
-  connect: (chainId: number, rpc?: string) => Promise<PublicClient>;
+  connect: (chainId: number, rpc: string | undefined, variable: string) => Promise<PublicClient>;
   account: (file: string | undefined) => Promise<PrivateKeyAccount>;
   /** Between reads of a grade still being decided. */
   pollMs?: number;
@@ -273,10 +273,10 @@ async function mandateOf(values: Values, io: Io, what: string): Promise<{ file: 
 async function preflight(mandate: Mandate, file: string, wallet: `0x${string}`, trade: Trade | undefined, io: Io): Promise<{ client: PublicClient; lines: [string, string][] }> {
   const checks = checksFor(mandate);
   if (checks.length > MAX_CHECKS) throw new Error(`With the mandate ${basename(file)} the checks are ${checks.length.toLocaleString("en-US")} characters; the grade route takes ${MAX_CHECKS.toLocaleString("en-US")}.`);
-  const client = await io.connect(mandate.chain, io.env.CHAIN_RPC);
+  const client = await io.connect(mandate.chain, io.env.CHAIN_RPC, "CHAIN_RPC");
   const tokens = await checkTokens(mandate, client, file);
   const holding = trade && (await checkHolding(mandate, tokenOf(mandate, trade.sellToken)!, trade.sellAmount, wallet, client));
-  const funds = await checkFunds(wallet, mandate.chain === BASE ? client : await io.connect(BASE, io.env.BASE_RPC));
+  const funds = await checkFunds(wallet, mandate.chain === BASE ? client : await io.connect(BASE, io.env.BASE_RPC, "BASE_RPC"));
   return {
     client,
     lines: [

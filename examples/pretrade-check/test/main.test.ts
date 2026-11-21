@@ -308,6 +308,22 @@ describe("the command line's exit codes", { timeout: 90_000 }, () => {
     expect(s.out()).toContain("Exit codes: 0 accepted, with the transactions to sign; 2 the mandate refuses the trade, here or on BrainChain;");
   });
 
+  it("reads Base through BASE_RPC or its public node, never through CHAIN_RPC", async () => {
+    const s = setup((id) => Response.json(view(id)));
+    const asked: [number, string | undefined, string][] = [];
+    const connect = s.io.connect;
+    s.io.env = { CHAIN_RPC: "https://robinhood.example" };
+    s.io.connect = async (chainId, rpc, variable) => {
+      asked.push([chainId, rpc, variable]);
+      return connect(chainId, rpc, variable);
+    };
+    expect(await run(paidArgs, s.io)).toBe(0);
+    expect(asked).toEqual([
+      [4663, "https://robinhood.example", "CHAIN_RPC"],
+      [8453, undefined, "BASE_RPC"],
+    ]);
+  });
+
   it("names the key's variable when its file is missing", async () => {
     await expect(loadAccount("/nowhere/agent.key")).rejects.toThrow("BRAINCHAIN_PAYER_KEY_FILE names /nowhere/agent.key, which does not exist.");
   });

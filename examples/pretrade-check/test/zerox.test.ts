@@ -152,6 +152,17 @@ describe("0x's Settler registry", () => {
     await expect(readSettlers(quoteOf("inside"), node("revert"))).resolves.toMatchObject({ settler: SETTLER, previous: zeroAddress });
   });
 
+  it("never falls back to CHAIN_RPC for another chain, and names the variable that is missing", async () => {
+    const before = process.env.CHAIN_RPC;
+    process.env.CHAIN_RPC = "http://127.0.0.1:9/robinhood";
+    try {
+      await expect(connect(1, undefined, "BASE_RPC")).rejects.toThrow("No public node is known for chain 1. Set BASE_RPC to one.");
+    } finally {
+      if (before === undefined) delete process.env.CHAIN_RPC;
+      else process.env.CHAIN_RPC = before;
+    }
+  });
+
   it("is read only from a node that answers on the mandate's chain, without printing its URL", async () => {
     const server = createServer((req, res) => {
       let body = "";
@@ -161,10 +172,10 @@ describe("0x's Settler registry", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/secret-key`;
     try {
-      await expect(connect(8453, url)).resolves.toBeDefined();
-      const error = await connect(4663, url).catch((e: Error) => e);
+      await expect(connect(8453, url, "BASE_RPC")).resolves.toBeDefined();
+      const error = await connect(4663, url, "CHAIN_RPC").catch((e: Error) => e);
       expect((error as Error).message).toBe("The node CHAIN_RPC names is on chain 8453, not the mandate's chain 4663.");
-      await expect(connect(1, "")).rejects.toThrow("No public node is known for chain 1. Set CHAIN_RPC to one");
+      await expect(connect(1, "", "CHAIN_RPC")).rejects.toThrow("No public node is known for chain 1. Set CHAIN_RPC to one.");
     } finally {
       server.close();
     }
