@@ -88,6 +88,15 @@ describe("the base rates", () => {
     expect({ ...custody!, unconfirmed: same!.unconfirmed }).toEqual(same);
   });
 
+  it("counts a listing confirmed later, and no longer counts the row the symbol alone tied as unconfirmed", () => {
+    const shaky: OutcomeRow = { ...listed(5, "robinhood_page", { at: 6 }), match: "symbol", unconfirmed: true };
+    const named: OutcomeRow = { ...listed(5, "robinhood_page", { at: 6 }), match: "name" };
+    const [custody] = baseRates({ steps, outcomes: [...outcomes, shaky, named], cut, kinds: ["custody"], windows: [30] });
+    expect(custody!.unconfirmed).toEqual({ rows: 0, tokens: [] });
+    const [alone] = baseRates({ steps, outcomes: [...outcomes, named], cut, kinds: ["custody"], windows: [30] });
+    expect(custody).toEqual(alone);
+  });
+
   it("names the tokens behind n only up to a limit", () => {
     const many = Array.from({ length: MAX_LISTED + 1 }, (_, i) => step(i + 1, 0));
     const [custody] = baseRates({ steps: many, outcomes: [], cut, kinds: ["custody"], windows: [7] });

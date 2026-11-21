@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { EventLog } from "./events.js";
 import { Requests } from "./http.js";
 import { StateFile } from "./state.js";
-import { coingecko, gate, kucoin, lifi, robinhoodPages, robinhoodPairs } from "./venues.js";
+import { coingecko, gate, kucoin, lifi, NAME_READS, robinhoodNames, robinhoodPages, robinhoodPairs, type NamesState } from "./venues.js";
 import { Watcher, type Poller } from "./watcher.js";
 
 const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
@@ -73,6 +73,56 @@ describe("Robinhood's crypto pages", () => {
     table[SITEMAP] = sitemap("BTC", "pons");
     await run();
     expect(log.query().events.map(({ kind, token, ref }) => [kind, token.symbol, ref])).toEqual([["robinhood.page_added", "PONS", "https://robinhood.com/us/en/crypto/PONS/"]]);
+  });
+});
+
+describe("Robinhood's page names", () => {
+  const titled = (name: string, symbol: string) => () => new Response(`<html><head><meta content="${name} - ${symbol} Price Today, Live Charts and News - Robinhood" property="og:title"/></head></html>`);
+  const page = (symbol: string) => `https://robinhood.com/us/en/crypto/${symbol}/`;
+
+  it("reads the name on each page the sitemap listed, a batch at a time, and again only once it is due", async () => {
+    let now = Date.parse("2026-11-21T10:00:00Z");
+    const symbols = Array.from({ length: NAME_READS.perPoll + 5 }, (_, i) => `T${i}`);
+    const { requests, table, asked } = routes(Object.fromEntries(symbols.map((symbol) => [page(symbol), titled(`Token ${symbol}`, symbol)])));
+    table[page("T0")] = () => new Response("Not Found", { status: 404 });
+    const poller = robinhoodNames(() => symbols, requests.fetchFor("robinhood-names"), { clock: () => now, sleep: async () => {} });
+    const dir = mkdtempSync(join(tmpdir(), "brainchain-watch-"));
+    const state = new StateFile(dir);
+    const watcher = new Watcher({ log: new EventLog(dir), state, pollers: [poller], say: () => {} });
+    const names = () => (state.source("robinhood-names") as NamesState).names!;
+
+    expect(await watcher.runOnce(poller)).toBe(0);
+    expect(Object.keys(names())).toHaveLength(NAME_READS.perPoll);
+    expect(await watcher.runOnce(poller)).toBe(poller.interval);
+    expect(names().T1).toEqual({ name: "Token T1", at: "2026-11-21T10:00:00.000Z" });
+    expect(names().T0).toEqual({ name: "", at: "2026-11-21T10:00:00.000Z" });
+    expect(asked).toHaveLength(symbols.length);
+
+    // A page with no name is asked again after an hour, a named one after a day.
+    now += NAME_READS.unnamed;
+    await watcher.runOnce(poller);
+    expect(asked.slice(symbols.length).map(({ url }) => url)).toEqual([page("T0")]);
+    now += NAME_READS.named;
+    await watcher.runOnce(poller);
+    await watcher.runOnce(poller);
+    expect(asked).toHaveLength(2 * symbols.length + 1);
+  });
+
+  it("tries a page that could not be read again after an hour, and fails only when every read in a turn did", async () => {
+    let now = Date.parse("2026-11-21T10:00:00Z");
+    const { requests, table } = routes({ [page("PONS")]: titled("Pons", "PONS"), [page("ORE")]: () => new Response("busy", { status: 500 }) });
+    const poller = robinhoodNames(() => ["PONS", "ORE"], requests.fetchFor("robinhood-names"), { clock: () => now, sleep: async () => {} });
+    const { run, status } = harness(poller);
+    await run();
+    expect(status().failures).toBe(0);
+    now += NAME_READS.unnamed;
+    table[page("PONS")] = () => new Response("busy", { status: 500 });
+    await run();
+    expect(status().failures).toBe(1);
+    table[page("ORE")] = titled("ORE", "ORE");
+    now += NAME_READS.unnamed;
+    await run();
+    expect(status().failures).toBe(0);
   });
 });
 

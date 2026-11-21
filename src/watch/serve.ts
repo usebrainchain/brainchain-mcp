@@ -125,10 +125,15 @@ function poolsPage(index: PoolLookup, params: URLSearchParams, now: number) {
   return { readAt: new Date(now).toISOString(), ready: index.ready, through: index.through, bytes, after: Number(after), next: page.next, pools: page.pools };
 }
 
+/** Robinhood's name on each crypto page the watcher has read, "" for a page that gave none, and when it was read. */
+export type PageNames = () => Readonly<Record<string, { name: string; at: string }>>;
+
 export interface ServeOptions {
   log: EventLog;
   /** The pool index, for `GET /pools`; a watcher without one answers 404 there. */
   pools?: PoolLookup;
+  /** Robinhood's page names, for `GET /robinhood/names`; a watcher without them answers 404 there. */
+  names?: PageNames;
   /** The full state of the sources; anyone gets only whether they are reading, and who holds `adminToken` gets it all. */
   health: () => Health;
   adminToken?: string;
@@ -263,10 +268,12 @@ export interface Served {
 
 /**
  * The watcher's HTTP surface. Reads: `GET /events`, `GET /events/stream` (server-sent events, resumed from Last-Event-ID),
- * `GET /pools?token=` (a token's pools from the index), `GET /pools?after=` (the whole index a page at a time), `GET /health` (503 while a source keeps failing) and `GET /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
+ * `GET /pools?token=` (a token's pools from the index), `GET /pools?after=` (the whole index a page at a time), `GET
+ * /robinhood/names` (Robinhood's name on each crypto page), `GET /health` (503 while a source keeps failing) and `GET
+ * /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
  * /watches/:id` with the watch's manage token. Nothing lists watches. Every address is held to `perMinute` requests.
  */
-export function serveEvents({ log, pools, health, adminToken, deliveries, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
+export function serveEvents({ log, pools, names, health, adminToken, deliveries, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
   const perMinute = new Window(limits.perMinute, 60_000);
   const creations = new Window(limits.watchesPerHour, 3_600_000);
   const streams = new Set<{ response: ServerResponse; address: string; wanted: Pick<Query, "kinds" | "tokens">; cursor: number }>();
@@ -338,6 +345,11 @@ export function serveEvents({ log, pools, health, adminToken, deliveries, trustP
       if (url.searchParams.has("after")) return send(response, 200, poolsPage(pools, url.searchParams, clock()), OPEN);
       return send(response, 200, poolsAnswer(pools, url.searchParams.get("token") ?? "", clock()), OPEN);
     }
+    if (url.pathname === "/robinhood/names" && reading) {
+      if (!names) throw new HttpError(404, "This watcher does not read Robinhood's crypto pages.");
+      const read = names();
+      return send(response, 200, { readAt: new Date(clock()).toISOString(), pages: Object.keys(read).length, names: Object.fromEntries(Object.entries(read).sort(([a], [b]) => a.localeCompare(b))) }, OPEN);
+    }
     if (url.pathname === "/watches" && method === "POST") {
       if (!deliveries) throw new HttpError(404, "This watcher sends no events.");
       if (!creations.take(address, clock())) throw new HttpError(429, `An address can make ${limits.watchesPerHour} watches an hour.`);
@@ -369,8 +381,8 @@ export function serveEvents({ log, pools, health, adminToken, deliveries, trustP
       if (!status) throw gone();
       return send(response, 200, status);
     }
-    if (["/events", "/events/stream", "/pools", "/health", "/health/live", "/watches"].includes(url.pathname) || id !== undefined) throw new HttpError(405, "That method is not served here.");
-    throw new HttpError(404, "Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /health, POST /watches and GET or DELETE /watches/:id.");
+    if (["/events", "/events/stream", "/pools", "/robinhood/names", "/health", "/health/live", "/watches"].includes(url.pathname) || id !== undefined) throw new HttpError(405, "That method is not served here.");
+    throw new HttpError(404, "Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /health, POST /watches and GET or DELETE /watches/:id.");
   }
 
   const server = createServer((request, response) => {

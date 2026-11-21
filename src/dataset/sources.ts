@@ -161,9 +161,25 @@ export async function gateStarts(fetchImpl: typeof fetch = fetch): Promise<Map<s
 const ENTITIES: Record<string, string> = { "&amp;": "&", "&#x27;": "'", "&#39;": "'", "&quot;": '"', "&lt;": "<", "&gt;": ">" };
 
 /**
- * The name Robinhood gives the asset on its page for `symbol`, the page its crypto sitemap lists, as the page's og:title
- * says it: "Cash Cat (CASHCAT)". Robinhood sends a reader outside the US to its regional page, which has no page for an
- * asset it lists only in the US: then, and for any page without the name, this is "". Only the page's head is read.
+ * The asset's name in a Robinhood page's og:title, in the forms its pages take: in the US "Buy and sell Cash Cat (CASHCAT)
+ * and 20+ other crypto on Robinhood" for an asset customers can trade and "Pons - PONS Price Today, Live Charts and News -
+ * Robinhood" for one with a price only, and outside it "Cash Cat (CASHCAT)", a dash, then "Buy and sell commission-free".
+ * Any other title gives "", so a page is left unconfirmed rather than tied to a token by a name misread.
+ */
+export function titleName(title: string, symbol: string): string {
+  const code = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const forms = [new RegExp(`^Buy and sell (.+?) \\(${code}\\) and `, "i"), new RegExp(`^(.+?) - ${code} Price Today\\b`, "i"), new RegExp(`^(.+?) \\(${code}\\) [\u2014\u2013-] `, "i")];
+  for (const form of forms) {
+    const name = form.exec(title)?.[1]?.trim();
+    if (name) return name;
+  }
+  return "";
+}
+
+/**
+ * The name Robinhood gives the asset on its page for `symbol`, the page its crypto sitemap lists, from the page's
+ * og:title (see `titleName`). Robinhood sends a reader outside the US to its regional page, which has no page for an asset
+ * it lists only in the US: then, and for any page without the name, this is "". Only the page's head is read.
  */
 export async function robinhoodPageName(symbol: string, fetchImpl: typeof fetch = fetch): Promise<string> {
   const response = await fetchImpl(`https://robinhood.com/us/en/crypto/${encodeURIComponent(symbol)}/`, { headers: { Accept: "text/html", "User-Agent": "brainchain-mcp" }, signal: AbortSignal.timeout(REQUEST_MS) });
@@ -185,7 +201,32 @@ export async function robinhoodPageName(symbol: string, fetchImpl: typeof fetch 
     await reader.cancel().catch(() => {});
   }
   const tag = /<meta\b[^>]*\bproperty="og:title"[^>]*>/i.exec(head)?.[0] ?? "";
-  const title = (/\bcontent="([^"]*)"/i.exec(tag)?.[1] ?? "").replace(/&(?:amp|#x27|#39|quot|lt|gt);/g, (entity) => ENTITIES[entity]!);
-  const escaped = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^(.+?) \\(${escaped}\\)`, "i").exec(title)?.[1]?.trim() ?? "";
+  return titleName((/\bcontent="([^"]*)"/i.exec(tag)?.[1] ?? "").replace(/&(?:amp|#x27|#39|quot|lt|gt);/g, (entity) => ENTITIES[entity]!), symbol);
+}
+
+/** Robinhood's name on each crypto page a watcher has read, by symbol: "" for a page read without one. */
+export interface PageNames {
+  readAt: string;
+  names: Map<string, { name: string; at: string }>;
+}
+
+/**
+ * The names a watcher has read from Robinhood's crypto pages, through `GET /robinhood/names`. A watcher in the US reads
+ * the US pages, which a build elsewhere is sent away from. One older than 0.16.2 has no such route: then nothing.
+ */
+export async function watcherNames(watcher: URL, fetchImpl: typeof fetch = fetch, pace = watcherPace(watcher)): Promise<PageNames | undefined> {
+  let body: unknown;
+  try {
+    body = await getJson(at(watcher, "robinhood/names"), fetchImpl, pace);
+  } catch (error) {
+    if (error instanceof Error && / answered 404\b/.test(error.message)) return undefined;
+    throw error;
+  }
+  const { readAt, names } = (body ?? {}) as { readAt?: unknown; names?: unknown };
+  if (typeof readAt !== "string" || !names || typeof names !== "object") throw new Error(`The watcher at ${watcher.origin} did not answer with Robinhood's page names.`);
+  const kept = new Map<string, { name: string; at: string }>();
+  for (const [symbol, entry] of Object.entries(names as Record<string, { name?: unknown; at?: unknown }>)) {
+    if (typeof entry?.name === "string" && typeof entry.at === "string") kept.set(symbol.toUpperCase(), { name: entry.name, at: entry.at });
+  }
+  return { readAt, names: kept };
 }
