@@ -115,6 +115,45 @@ describe("the outcomes", () => {
   });
 });
 
+describe("the exchanges' listings", () => {
+  const traced = tracedIn([event("coingecko.listed", { address: CASHCAT, symbol: "CASHCAT", name: "Cash Cat" }), event("lifi.listed", { address: PONS, symbol: "PONS", name: "Pons" })]);
+  const none = { kucoin: new Map(), gate: new Map() };
+  const listed = (source: string, token: Partial<WatchEvent["token"]>, detail: Record<string, unknown>, extra: Partial<WatchEvent> = {}) => event("venue.listed", token, { source, ref: `https://venue.example/${source}`, detail, ...extra });
+
+  it("date a market by the time the venue gives it when that had passed by the sighting, and by the sighting otherwise", () => {
+    const rows = outcomesFromEvents(
+      [
+        listed("Binance Futures", { symbol: "PONS" }, { market: "PONSUSDT", match: "symbol", opens: "2026-09-06T06:45:00.000Z" }),
+        listed("Coinbase", { address: PONS, symbol: "PONS", name: "Pons" }, { market: "PONS-USD", match: "contract", venueName: "Pons" }, { baseline: undefined, observedAt: "2026-10-07T16:00:20.000Z" }),
+        listed("Upbit", { address: CASHCAT, symbol: "CASHCAT", name: "Cash Cat" }, { market: "KRW-CASHCAT", match: "name", venueName: "Cash Cat" }),
+        listed("Bitget", { address: PONS, symbol: "PONS" }, { market: "PONSUSDT", match: "contract", opens: "2026-12-01T00:00:00.000Z" }, { baseline: undefined, observedAt: "2026-11-25T00:00:00.000Z" }),
+        listed("Bitstamp", { address: PONS, symbol: "PONS" }, { market: "PONSUSD", match: "contract" }),
+      ],
+      traced,
+      none,
+    );
+    expect(rows.map(({ token, outcome, venue, at, by, atFrom, match, unconfirmed, name, tradingStart, market }) => ({ token, outcome, venue, at, by, atFrom, match, unconfirmed, name, tradingStart, market }))).toEqual([
+      { token: PONS, outcome: "binance_futures", venue: "Binance Futures", at: "2026-09-06T06:45:00.000Z", by: undefined, atFrom: "source", match: "symbol", unconfirmed: true, name: undefined, tradingStart: "2026-09-06T06:45:00.000Z", market: "PONSUSDT" },
+      { token: PONS, outcome: "coinbase", venue: "Coinbase", at: "2026-10-07T16:00:20.000Z", by: undefined, atFrom: "observed", match: "contract", unconfirmed: undefined, name: "Pons", tradingStart: undefined, market: "PONS-USD" },
+      { token: CASHCAT, outcome: "upbit", venue: "Upbit", at: undefined, by: BASELINE, atFrom: undefined, match: "name", unconfirmed: undefined, name: "Cash Cat", tradingStart: undefined, market: "KRW-CASHCAT" },
+      // Bitget gives a start after the sighting: the market was public when it was seen, and trading opens later.
+      { token: PONS, outcome: "bitget", venue: "Bitget", at: "2026-11-25T00:00:00.000Z", by: undefined, atFrom: "observed", match: "contract", unconfirmed: undefined, name: undefined, tradingStart: "2026-12-01T00:00:00.000Z", market: "PONSUSDT" },
+    ]);
+  });
+
+  it("confirm a market tied by symbol with the name the same venue gave it in an announcement, and no other venue's", () => {
+    const announced = (source: string) => event("venue.announced", { address: PONS, symbol: "PONS", name: "Pons" }, { source, at: "2026-09-25T15:00:00.000Z", detail: { venueName: "Pons", match: "name" } });
+    const market = listed("Kraken", { symbol: "PONS" }, { market: "PONSUSD", match: "symbol" });
+    expect(outcomesFromEvents([announced("Kraken"), market], traced, none)).toMatchObject([{ outcome: "kraken", match: "name", name: "Pons" }]);
+    expect(outcomesFromEvents([announced("Bitget"), market], traced, none)).toMatchObject([{ outcome: "kraken", match: "symbol", unconfirmed: true }]);
+  });
+
+  it("make an announcement naming a token a step, dated by the venue", () => {
+    const rows = stepsFromEvents([event("venue.announced", { address: PONS, symbol: "PONS" }, { source: "Coinbase", ref: "https://status.exchange.coinbase.com/incidents/2", at: "2026-10-06T19:09:00.000Z" }), event("venue.announced", { symbol: "CASHCAT" }, { source: "Bithumb" })], new Map());
+    expect(rows).toEqual([{ token: PONS, step: "announcement", source: "Coinbase", at: "2026-10-06T19:09:00.000Z", atFrom: "source", ref: "https://status.exchange.coinbase.com/incidents/2", observedAt: BASELINE, backfill: true }]);
+  });
+});
+
 describe("the token table", () => {
   it("keeps each token's first pool on each venue and its earliest block, and tells tokens that share a prefix apart", () => {
     const table = new TokenTable(16);

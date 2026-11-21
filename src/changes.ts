@@ -17,14 +17,17 @@ export const CHANGES_TOOL: Tool = {
   name: CHANGES_NAME,
   title: "New public changes about Robinhood Chain tokens",
   description:
-    "New public changes about Robinhood Chain tokens since your last call, from a watcher that reads public sources on a schedule, from every 15 seconds for the chain to every 30 minutes for CoinGecko, and keeps each change it sees as an event. " +
+    "New public changes about Robinhood Chain tokens since your last call, from a watcher that reads public sources on a schedule, from every 15 seconds for the chain and every minute for most exchanges to every 30 minutes for CoinGecko, and keeps each change it sees as an event. " +
     "The kinds: `pool.created`, a new Uniswap pool for a token that already has a public trace, paired with ETH, WETH, USDG or another such token; " +
     "`maker.approval` and `maker.receipt`, the first approval or first receipt of a token by a wallet brainchain_market_maker_holdings follows; " +
     "`maker.pool_queued`, a market maker adding one of a token's pools to its trading contracts' approved list for the first time: Wintermute's multisig queues each pool on its role registry, and the pool can be traded once the role takes effect, hours or days later; " +
     "`bitgo.pr_opened`, `bitgo.merged` and `bitgo.released`, a pull request opened in BitGo's public code that adds a Robinhood Chain token, its merge into master, and the first release of BitGo's @bitgo/statics package that includes the token; " +
     "`trustwallet.pr_opened`, `trustwallet.merged`, `metamask.pr_opened` and `metamask.merged`, the same for Trust Wallet's and MetaMask's token lists; " +
     "`robinhood.pair_added` and `robinhood.tradability_changed`, a symbol entering the pair list Robinhood serves to API clients, with `pairsRead`, the number of pairs read, and its tradability changing there; that list leaves out most price-only pairs, so a symbol can have had a price on Robinhood before it enters the list. `robinhood.page_added` is a page in Robinhood's crypto sitemap, which has the price-only pairs too; " +
-    "and `kucoin.listed`, `gate.listed`, `lifi.listed` and `coingecko.listed`, a token's contract appearing on those lists. " +
+    "`kucoin.listed`, `gate.listed`, `lifi.listed` and `coingecko.listed`, a token's contract appearing on those lists; " +
+    "`venue.listed`, an exchange adding its first spot or perpetual market for a token, read from the market lists Coinbase, Kraken, Binance Futures, Upbit, Bithumb and Bitget publish, with the market, its `status` (pre-trading, auction, trading or halted) and the time the exchange gives it, where it gives one; `venue.status_changed`, that market's status changing, such as from its opening auction to trading; " +
+    "and `venue.announced`, an exchange's announcement naming a token: Coinbase Exchange's status feed when a pair opens, Kraken's Asset Listings posts, Bithumb's market-added notices and Bitget's coin-listing announcements. " +
+    "An exchange's entry is tied to a token by the contract the exchange gives, or else by its own name for the asset, and `detail.match` says which; one with neither rests on the symbol alone and is marked `unconfirmed`. " +
     "Each event has `id`; `kind`; `token`, with `address`, `symbol` and `name`, any of which can be null, since Robinhood names a token by symbol only; `source`; `ref`, a link, transaction or commit to check it by; " +
     "`at`, when the source dates the change, or null for a source that publishes no date; `observedAt`, when the watcher saw it; `detail`; and `context`. " +
     "`context.worth` is the token's market cap, price and deepest pool's depth within 2% of its price (`depth2pctUsd`) when the event went out, or null with `worthMissing` saying why; `context.priorTraces` lists the token's dated public steps before the event, as brainchain_token_timeline reads them, and `context.priorEvents` what the watcher had already recorded for the token. " +

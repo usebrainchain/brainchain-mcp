@@ -1,7 +1,7 @@
 import { getAddress, zeroAddress } from "viem";
 
 import type { WatchEvent } from "../watch/events.js";
-import type { MakerRef, OutcomeRow, StepRow } from "./format.js";
+import { VENUE_OUTCOMES, type MakerRef, type OutcomeRow, type StepRow } from "./format.js";
 
 /** A token with a trace: any event about its contract but a new pool, or a step the job's own scans found. */
 export interface Traced {
@@ -89,6 +89,9 @@ export function stepsFromEvents(events: readonly WatchEvent[], listDates: Readon
       case "coingecko.listed":
         add({ step: "aggregator", source: AGGREGATORS[event.kind]!, ...undated(), ref: event.ref });
         break;
+      case "venue.announced":
+        add({ step: "announcement", source: event.source, ...(event.at ? dated(event.at, "source") : undated()), ref: event.ref });
+        break;
       case "maker.approval": {
         const maker = makerOf(detail);
         if (!maker || !event.at || typeof detail.block !== "number") break;
@@ -144,7 +147,10 @@ export interface TradingStarts {
 
 /**
  * The outcomes: KuCoin and Gate by the contract they list on Robinhood Chain, dated by the trading start the venue
- * publishes when it had opened by the time the watcher saw the listing; Robinhood's sitemap and tradable pairs by symbol
+ * publishes when it had opened by the time the watcher saw the listing; the other exchanges' first market for a token as
+ * the watcher matched it, by contract or the venue's own name, dated the same way by the time the venue gives, and one
+ * matched by symbol alone tied to a traced token as Robinhood's are, confirmed by the name the same venue gave the symbol
+ * in an announcement, or else kept as `unconfirmed`; Robinhood's sitemap and tradable pairs by symbol
  * (see `attribute`), confirmed by Robinhood's own name for the asset, from its pair list or from `pageNames`, the name
  * on its page, and dated when the watcher first saw them. A page with no such name to compare is kept as `unconfirmed`.
  * One already there when the watcher first read the venue is "listed by" that time.
@@ -153,10 +159,39 @@ export function outcomesFromEvents(events: readonly WatchEvent[], traced: Readon
   const rows: OutcomeRow[] = [];
   const pairNames = new Map<string, string>();
   for (const event of events) if (event.kind === "robinhood.pair_added" && event.token.symbol && event.token.name) pairNames.set(event.token.symbol.toUpperCase(), event.token.name);
+  const announced = new Map<string, string>();
+  for (const event of events) {
+    if (event.kind === "venue.announced" && event.token.symbol && typeof event.detail.venueName === "string") announced.set(`${event.source}|${event.token.symbol.toUpperCase()}`, event.detail.venueName);
+  }
   const undated = (event: WatchEvent) => (event.baseline ? { by: event.observedAt } : { at: event.observedAt, atFrom: "observed" as const });
   for (const event of events) {
     const flags = event.baseline ? { backfill: true as const } : {};
     const { address, symbol } = event.token;
+    if (event.kind === "venue.listed") {
+      const outcome = VENUE_OUTCOMES[event.source];
+      if (!outcome || !symbol) continue;
+      const opens = typeof event.detail.opens === "string" ? Date.parse(event.detail.opens) : NaN;
+      const opened = Number.isFinite(opens) && opens <= Date.parse(event.observedAt);
+      const venueName = typeof event.detail.venueName === "string" ? event.detail.venueName : announced.get(`${event.source}|${symbol.toUpperCase()}`);
+      const found = address && isToken(address) ? { token: getAddress(address), match: event.detail.match === "name" ? ("name" as const) : ("contract" as const) } : attribute(symbol, venueName, traced, new Map());
+      if (!found) continue;
+      rows.push({
+        token: found.token,
+        outcome,
+        venue: event.source,
+        ...(opened ? { at: new Date(opens).toISOString(), atFrom: "source" as const } : undated(event)),
+        match: found.match,
+        ...(found.match === "symbol" ? { unconfirmed: true as const } : {}),
+        symbol: symbol.toUpperCase(),
+        ...(found.match !== "symbol" && venueName ? { name: venueName } : {}),
+        ...(Number.isFinite(opens) ? { tradingStart: new Date(opens).toISOString() } : {}),
+        ...(typeof event.detail.market === "string" ? { market: event.detail.market } : {}),
+        ref: event.ref,
+        observedAt: event.observedAt,
+        ...flags,
+      });
+      continue;
+    }
     if ((event.kind === "kucoin.listed" || event.kind === "gate.listed") && address) {
       const venue = event.kind === "kucoin.listed" ? "KuCoin" : "Gate";
       const start = symbol ? (venue === "KuCoin" ? starts.kucoin : starts.gate).get(symbol.toUpperCase()) : undefined;

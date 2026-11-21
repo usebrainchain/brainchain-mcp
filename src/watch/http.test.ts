@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { useGitHubToken } from "../github.js";
 
-import { Backoff, FIRST_REFUSED_MS, GITHUB_RESERVE, QUIET_MS, Requests } from "./http.js";
+import { Backoff, FIRST_REFUSED_MS, GITHUB_RESERVE, QUIET_MS, REGION_MS, Requests } from "./http.js";
 
 const API = "https://api.github.com/repos/BitGo/BitGoJS/pulls";
 const RAW = "https://raw.githubusercontent.com/BitGo/BitGoJS/master/x";
@@ -114,6 +114,21 @@ describe("the watcher's requests", () => {
     expect((await requests.get("bitgo-prs", API)).status).toBe(200);
     await expect(requests.get("bitgo-prs", API)).rejects.toEqual(expect.objectContaining({ until: 9_000_000 }));
     expect(sent).toHaveLength(1);
+  });
+
+  it("leave a host that does not serve the watcher's region alone for six hours, and take Binance's 418 as a refusal", async () => {
+    let status = 451;
+    const { sent, fetchImpl } = serving(() => new Response("{}", { status, headers: status === 418 ? { "retry-after": "300" } : {} }));
+    const requests = new Requests({ fetch: fetchImpl, clock: () => 0 });
+    const URL = "https://fapi.binance.com/fapi/v1/exchangeInfo";
+    const refused = (await requests.get("binance-futures-markets", URL).catch((error: unknown) => error)) as Backoff;
+    expect(refused).toBeInstanceOf(Backoff);
+    expect(refused.until).toBe(REGION_MS);
+    expect(refused.message).toContain("does not serve the region");
+    await expect(requests.get("binance-futures-markets", URL)).rejects.toBeInstanceOf(Backoff);
+    expect(sent).toHaveLength(1);
+    status = 418;
+    expect(((await requests.get("binance-markets", "https://data-api.binance.vision/api/v3/exchangeInfo").catch((error: unknown) => error)) as Backoff).until).toBe(300_000);
   });
 
   it("keep waiting longer for a host that refuses again soon after answering, and start over once it has been quiet", async () => {

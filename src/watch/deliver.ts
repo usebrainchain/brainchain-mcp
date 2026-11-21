@@ -111,8 +111,26 @@ function change(event: WatchEvent, name: string): string {
       return `LI.FI routes ${name} on Robinhood Chain.`;
     case "coingecko.listed":
       return `CoinGecko lists ${name} on Robinhood Chain.`;
+    case "venue.listed":
+      return `${event.source} added a ${MARKET_WORDS[String(detail.type)] ?? "market"} for ${name}, ${String(detail.market)}: ${statusWords(detail)}.${bySymbol(detail)}`;
+    case "venue.status_changed":
+      return `${event.source}'s ${String(detail.market)} ${MARKET_WORDS[String(detail.type)] ?? "market"} for ${name} is ${statusWords(detail)} now; it was ${STATUS_WORDS[String(detail.was)] ?? String(detail.was)}.${bySymbol(detail)}`;
+    case "venue.announced":
+      return `${event.source} published an announcement that names ${name}.${bySymbol(detail)}`;
   }
 }
+
+const MARKET_WORDS: Record<string, string> = { spot: "spot market", perpetual: "perpetual futures market", futures: "futures market" };
+const STATUS_WORDS: Record<string, string> = { trading: "trading", auction: "in its opening auction", "pre-trading": "not trading yet", halted: "halted" };
+
+/** A market's status in words, with the start the venue gives for one that has not opened. */
+function statusWords(detail: Record<string, unknown>): string {
+  const words = STATUS_WORDS[String(detail.status)] ?? String(detail.status);
+  const opens = typeof detail.opens === "string" ? Date.parse(detail.opens) : NaN;
+  return detail.status === "pre-trading" && opens > Date.now() ? `${words}; the venue gives ${new Date(opens).toISOString().slice(0, 16).replace("T", " ")} UTC as its start` : words;
+}
+
+const bySymbol = (detail: Record<string, unknown>) => (detail.match === "symbol" ? " Matched by symbol only: nothing the venue gives confirms it is this token." : "");
 
 /** A name or symbol that reads as a web address or a handle, which a chat would turn into a link or a mention from our bot. */
 const LINKISH = /https?:|www\.|[\w-]\.[a-z]{2,}\b|@\w|t\.me\b|discord\.gg/i;

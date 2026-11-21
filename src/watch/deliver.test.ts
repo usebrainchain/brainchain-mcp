@@ -68,6 +68,21 @@ describe("a chat message", () => {
     expect(queued(false)).toContain("the first for this token, by the registry's log only.");
   });
 
+  it("says an exchange added a market for a token, in what state, and when the match rests on the symbol alone", () => {
+    const listed = (detail: Record<string, unknown>, token = { address: CASHCAT, symbol: "CASHCAT", name: "Cash Cat" }) => line(event({ kind: "venue.listed", source: "Bitget", token, ref: "https://api.bitget.com/api/v2/spot/public/symbols?symbol=CASHCATUSDT", detail, context: {} }));
+    expect(listed({ market: "CASHCATUSDT", type: "spot", status: "trading", match: "name" })).toBe("Bitget added a spot market for Cash Cat CASHCAT (0x020b…18b4), CASHCATUSDT: trading. https://api.bitget.com/api/v2/spot/public/symbols?symbol=CASHCATUSDT");
+    const later = new Date(Date.now() + 3_600_000).toISOString();
+    expect(listed({ market: "PONSUSDT", type: "perpetual", status: "pre-trading", opens: later, match: "symbol" }, { address: null, symbol: "PONS", name: null } as never)).toBe(
+      `Bitget added a perpetual futures market for PONS, PONSUSDT: not trading yet; the venue gives ${later.slice(0, 16).replace("T", " ")} UTC as its start. Matched by symbol only: nothing the venue gives confirms it is this token. https://api.bitget.com/api/v2/spot/public/symbols?symbol=CASHCATUSDT`,
+    );
+    expect(line(event({ kind: "venue.status_changed", source: "Coinbase", ref: "https://api.exchange.coinbase.com/products/CASHCAT-USD@2026-11-21T10:00:00Z", detail: { market: "CASHCAT-USD", type: "spot", status: "trading", was: "auction", match: "contract" }, context: {} }))).toBe(
+      "Coinbase's CASHCAT-USD spot market for Cash Cat CASHCAT (0x020b…18b4) is trading now; it was in its opening auction. https://api.exchange.coinbase.com/products/CASHCAT-USD",
+    );
+    expect(line(event({ kind: "venue.announced", source: "Kraken", ref: "https://blog.kraken.com/product/asset-listings/cashcat", detail: { title: "CASHCAT is available for trading!", match: "name" }, context: {} }))).toBe(
+      "Kraken published an announcement that names Cash Cat CASHCAT (0x020b…18b4). https://blog.kraken.com/product/asset-listings/cashcat",
+    );
+  });
+
   it("names the pair's other side when it is ETH, WETH or USDG", () => {
     expect(line(event({ kind: "pool.created", source: "Uniswap v4", ref: TX, detail: { pairedWith: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168" }, context: {} }))).toContain("paired with USDG.");
     expect(line(event({ kind: "pool.created", source: "Uniswap v3", ref: TX, detail: { pairedWith: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73" }, context: {} }))).toContain("paired with WETH.");

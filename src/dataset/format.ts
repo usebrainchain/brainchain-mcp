@@ -9,15 +9,25 @@ import type { Kind } from "../watch/events.js";
  */
 
 /** The steps a token can take on its way to a wider market, each counted in the base rates. */
-export const STEPS = ["pool", "custody_pr", "custody", "custody_release", "listing_pr", "listing", "aggregator", "approval", "pool_queued"] as const;
+export const STEPS = ["pool", "custody_pr", "custody", "custody_release", "listing_pr", "listing", "aggregator", "approval", "pool_queued", "announcement"] as const;
 export type Step = (typeof STEPS)[number];
 
 /**
  * What a step can be followed by: a venue taking the token. Bitstamp is not among them: its robots.txt closes its API to
  * automated clients, and its markets sitemap answers a script with a bot check, so nothing a daily build may read shows it.
  */
-export const OUTCOMES = ["robinhood_page", "robinhood_tradable", "kucoin", "gate"] as const;
+export const OUTCOMES = ["robinhood_page", "robinhood_tradable", "kucoin", "gate", "coinbase", "kraken", "binance_futures", "upbit", "bithumb", "bitget"] as const;
 export type Outcome = (typeof OUTCOMES)[number];
+
+/** The exchanges whose market lists the watcher reads, as its events name them, and the outcome each listing is. */
+export const VENUE_OUTCOMES: Readonly<Record<string, Outcome>> = {
+  Coinbase: "coinbase",
+  Kraken: "kraken",
+  "Binance Futures": "binance_futures",
+  Upbit: "upbit",
+  Bithumb: "bithumb",
+  Bitget: "bitget",
+};
 
 /** The windows the base rates count in, in days. */
 export const WINDOWS = [7, 30, 90] as const;
@@ -61,7 +71,7 @@ export interface StepRow {
 export interface OutcomeRow {
   token: string;
   outcome: Outcome;
-  venue: "Robinhood" | "KuCoin" | "Gate";
+  venue: string;
   at?: string;
   by?: string;
   atFrom?: AtFrom;
@@ -77,6 +87,8 @@ export interface OutcomeRow {
   name?: string;
   /** When the venue says trading opened, which can be after the listing was public. */
   tradingStart?: string;
+  /** The venue's first market for the token, such as PONS-USDT. */
+  market?: string;
   ref: string;
   observedAt: string;
   backfill?: true;
@@ -144,6 +156,7 @@ export const STEP_OF: Partial<Record<Kind, Step>> = {
   "metamask.merged": "listing",
   "lifi.listed": "aggregator",
   "coingecko.listed": "aggregator",
+  "venue.announced": "announcement",
 };
 
 /** What each step is, in a few words, for the tools and the feed. */
@@ -157,6 +170,7 @@ export const STEP_WORDS: Record<Step, string> = {
   aggregator: "LI.FI or CoinGecko listing it",
   approval: "a followed market maker wallet's first approval of it",
   pool_queued: "a market maker's multisig queuing one of its pools",
+  announcement: "an exchange's announcement naming it",
 };
 
 export const OUTCOME_WORDS: Record<Outcome, string> = {
@@ -164,6 +178,12 @@ export const OUTCOME_WORDS: Record<Outcome, string> = {
   robinhood_tradable: "a tradable pair in the list Robinhood serves to API clients",
   kucoin: "KuCoin listing it on Robinhood Chain",
   gate: "Gate listing it on Robinhood Chain",
+  coinbase: "a market on Coinbase Exchange",
+  kraken: "a market on Kraken",
+  binance_futures: "a futures market on Binance Futures",
+  upbit: "a market on Upbit",
+  bithumb: "a market on Bithumb",
+  bitget: "a market on Bitget",
 };
 
 /** The time a row stands for: its `at`, or for an undated row its `by`. */
@@ -192,7 +212,7 @@ const cell = (value: unknown) => {
 };
 
 export const EVENT_COLUMNS = ["token", "step", "source", "at", "by", "atFrom", "block", "transaction", "ref", "observedAt", "backfill"] as const;
-export const OUTCOME_COLUMNS = ["token", "outcome", "venue", "at", "by", "atFrom", "match", "unconfirmed", "symbol", "name", "tradingStart", "ref", "observedAt", "backfill"] as const;
+export const OUTCOME_COLUMNS = ["token", "outcome", "venue", "at", "by", "atFrom", "match", "unconfirmed", "symbol", "name", "tradingStart", "market", "ref", "observedAt", "backfill"] as const;
 
 export function csv(columns: readonly string[], rows: readonly object[]): string {
   const lines = rows.map((row) => columns.map((column) => cell((row as Record<string, unknown>)[column])).join(","));

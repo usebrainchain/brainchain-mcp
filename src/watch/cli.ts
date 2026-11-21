@@ -17,12 +17,14 @@ import { chainFirsts, chainKept, chainPoller } from "./chain.js";
 import { chainTurn, createdIn, eventContext, loadWorth, saveWorth, worthOf } from "./context.js";
 import { Deliveries } from "./deliver.js";
 import { EventLog, type WatchEvent } from "./events.js";
+import { marketPoller, universeFrom, VENUE_HOSTS, VENUE_LISTS, VENUE_PER_HOUR } from "./exchanges.js";
 import { Requests } from "./http.js";
 import { listMerges, listPullRequests, METAMASK, TRUST_WALLET } from "./lists.js";
 import { pinnedPost, publicTarget } from "./net.js";
 import { PoolIndex } from "./pools.js";
 import { chainReader, privateReader, redactor, RPC_SETTING, rpcSetting } from "./rpc.js";
 import { serveEvents } from "./serve.js";
+import { NOTICE_SOURCES, noticePoller } from "./notices.js";
 import { lockStateDir, StateFile } from "./state.js";
 import { coingecko, gate, kucoin, lifi, robinhoodNames, robinhoodPages, robinhoodPairs, type NamesState } from "./venues.js";
 import { Watcher, type Poller } from "./watcher.js";
@@ -34,10 +36,13 @@ Watches public sources for changes about Robinhood Chain tokens and keeps each o
 new Uniswap pools for tokens with a public trace, a followed market maker wallet's first approval or first receipt of a
 token, a market maker's multisig queuing a token's pool for its trading contracts for the first time, pull requests and
 merges that add a Robinhood Chain token in BitGo's, Trust Wallet's and MetaMask's public code, releases of @bitgo/statics
-that include one, the pair list Robinhood serves to API clients and its crypto sitemap, and KuCoin's, Gate's, LI.FI's and
-CoinGecko's lists. Each event carries the token's earlier public steps, what it is worth now and, from the newest
-published dataset, how often earlier tokens with the same step were listed within 7, 30 and 90 days. The first run
-records what is already public as a baseline and reports none of it as new.
+that include one, the pair list Robinhood serves to API clients and its crypto sitemap, KuCoin's, Gate's, LI.FI's and
+CoinGecko's lists, an exchange adding a market for a token or changing its status, read from the market lists Coinbase,
+Kraken, Binance Futures, Upbit, Bithumb and Bitget publish, and an announcement naming a token in Coinbase Exchange's
+status feed, Kraken's Asset Listings posts, Bithumb's notices or Bitget's announcements. Each event carries the token's
+earlier public steps, what it is worth now and, from the newest published dataset, how often earlier tokens with the same
+step were listed within 7, 30 and 90 days. The first run records what is already public as a baseline and reports none
+of it as new.
 
   --state <dir>          Where the log and the watcher's state are kept (default: BRAINCHAIN_STATE_DIR/watch, or
                          ~/.brainchain/watch). A restart resumes from there.
@@ -128,6 +133,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       { hosts: ["api.github.com"], perHour: token ? ALLOWANCES.githubWithToken : ALLOWANCES.githubWithoutToken },
       { hosts: [new URL(ROBINHOOD_RPC).host], perHour: ALLOWANCES.publicChain },
       ...(rpc ? [{ hosts: [rpc.host], perHour: ALLOWANCES.privateChain }] : []),
+      ...VENUE_HOSTS.map((host) => ({ hosts: [host], perHour: VENUE_PER_HOUR })),
     ],
   });
   const github = githubEvery(token);
@@ -192,6 +198,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     return paged;
   };
 
+  const universe = universeFrom(log);
   const pollers: Poller[] = [
     // With a private endpoint the chain is read every 10 s, so an event is out within about 20 s of its block.
     chainPoller({ reader, wallets, watched: tracked, firsts: chainFirsts(reader, kept), kept: kept.queued, ...(rpc ? { interval: 10_000 } : {}), onPools: (from, to, pools) => poolIndex.addLive(from, to, pools) }),
@@ -209,6 +216,9 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     gate(requests),
     lifi(requests),
     coingecko(requests),
+    // The exchanges' own market lists and announcements, matched to the tokens the log knows.
+    ...VENUE_LISTS.map((list) => marketPoller(requests, list, universe)),
+    ...NOTICE_SOURCES.map((source) => noticePoller(requests, source, universe)),
   ];
   // The timeline takes only Trust Wallet's and MetaMask's dates from the sightings, so the context reads their files and no
   // other list: Bitstamp's robots.txt closes its API to a watcher, and the exchanges' lists are megabytes each.

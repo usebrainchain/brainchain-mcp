@@ -58,7 +58,7 @@ describe("trace outcomes", () => {
   it("refuses a kind it does not know, a window out of range, an unknown venue and both cut-offs at once", async () => {
     expect(() => traceQuery({ trace: "maker.receipt" })).toThrow(/trace must be one of/);
     expect(() => traceQuery({ trace: "custody", within: 0 })).toThrow(/within must be a whole number of days from 1 to 365/);
-    expect(() => traceQuery({ trace: "custody", venue: "binance" })).toThrow(/venue must be one of/);
+    expect(() => traceQuery({ trace: "custody", venue: "bitstamp" })).toThrow(/venue must be one of/);
     expect(body(await call({ trace: "custody", at: at(1), atBlock: 5 }))).toEqual({ error: "Pass atBlock or at, not both." });
     expect(body(await call({ trace: "custody", extra: 1 }))).toEqual({ error: "Unknown field: extra. This tool takes only trace, within, at, atBlock, venue." });
   });
