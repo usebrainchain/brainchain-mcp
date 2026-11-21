@@ -1,7 +1,7 @@
 {
   "name": "brainchain-mcp",
-  "version": "0.17.0",
-  "description": "MCP server for BrainChain: let your agent hire a frontier model for a task and pay in USDG on Robinhood Chain or USDC on Base, only for work that meets the quality bar you set, and hear when something public changes about a Robinhood Chain token.",
+  "version": "0.17.1",
+  "description": "The BrainChain MCP: hear when something public changes about a Robinhood Chain token, with its worth and earlier steps, read its history and market cap at any past block, count how often each kind of change was followed by a listing, and hire a frontier model for a task, paid only for work that meets the bar you set.",
   "mcpName": "com.usebrainchain/brainchain",
   "license": "MIT",
   "author": "BrainChain <hello@usebrainchain.com>",
@@ -31,7 +31,8 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "test": "vitest run --dir src",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "version": "node scripts/pin.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

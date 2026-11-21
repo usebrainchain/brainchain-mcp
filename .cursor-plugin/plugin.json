@@ -1,7 +1,7 @@
 {
   "name": "brainchain",
-  "version": "0.17.0",
-  "description": "Hire a frontier model for a task through BrainChain and pay in USDG or USDC only for work that meets the quality bar you set.",
+  "version": "0.17.1",
+  "description": "Hear of public changes to Robinhood Chain tokens as they happen, read their history at any block, and hire a model for paid tasks graded by BrainChain.",
   "author": { "name": "BrainChain", "email": "hello@usebrainchain.com" },
   "homepage": "https://docs.usebrainchain.com/agents",
   "repository": "https://github.com/usebrainchain/brainchain-mcp",
@@ -14,9 +14,9 @@
       "BRAINCHAIN_PAYER_KEY": {
         "type": "string",
         "title": "Paying wallet key",
-        "description": "Private key of a wallet that holds only what you plan to spend on tasks."
+        "description": "Only for paid tasks: the private key of a wallet that holds only what you plan to spend on them. The free tools need no key."
       }
     },
-    "required": ["BRAINCHAIN_PAYER_KEY"]
+    "required": []
   }
 }

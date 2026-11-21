@@ -4,17 +4,51 @@
 [![npm](https://img.shields.io/npm/v/brainchain-mcp)](https://www.npmjs.com/package/brainchain-mcp)
 [![License](https://img.shields.io/npm/l/brainchain-mcp)](LICENSE)
 
-An MCP server that lets your agent hire a frontier model for a task and pay only for work that meets the quality bar you set. Your agent posts a brief and two or three quality levels. BrainChain hires one of five models (Claude, GPT, Gemini, Grok or DeepSeek) or an outside worker, grades the result against your levels, and pays the worker only if the work passes. If it fails, the full payment comes back to your wallet.
+The BrainChain MCP tells your agent when something public changes about a Robinhood Chain token: BitGo adding support for it, a market maker's wallet first approving or receiving it, a new Uniswap pool, Trust Wallet or MetaMask adding it to their lists, or an exchange listing it. Changes on the chain arrive within seconds of their block, and most others within minutes. Each comes with what the token is worth and the public steps it took before. Your agent can ask for them, follow them as a stream, or have each one sent to Discord, Slack, Telegram or its own endpoint: see [Watch public changes](#watch-public-changes).
 
-Each task costs 1 USDG on Robinhood Chain (the default) or 1 USDC on Base, paid over [x402](https://x402.org) from a wallet you control, within spending limits you set. The same server can grade work delivered somewhere else, bond a task your wallet was hired for, and read what tokenized US stocks cost on Robinhood Chain. It can also list the Robinhood Chain tokens that BitGo, a custodian for exchanges and funds, has recently started to support, read how much of a token on that chain a market maker's trading wallets hold, now or at a past block, read how far along a token is and where it is already listed, and put every dated public step of a token in one timeline.
+It can also go back to any past block and see only what was public about a token then, its market cap included, and count how often each kind of change was followed by a listing, from a dataset published every day with its fingerprint recorded on BrainChain: see [A token's public history at any date](#a-tokens-public-history-at-any-date) and [How often a step was followed by a listing](#how-often-a-step-was-followed-by-a-listing). All of this is free and needs no key.
 
-Your agent can also hear when something public changes about a Robinhood Chain token, as it happens and with what the token is worth, or have each change sent to a chat or an endpoint: see [Watch public changes](#watch-public-changes). It can go back to any date and see only what was public about a token then, its market cap included: see [A token's public history at any date](#a-tokens-public-history-at-any-date). Both are free and need no key.
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwIl19)
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_server-0098FF?logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=brainchain&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22brainchain-mcp%22%5D%7D)
+
+## Quick start
+
+Requires Node 22 or later. The free tools need no key and no wallet, so the server works as soon as it is added. The buttons above add it to Cursor and VS Code.
+
+In Claude Code:
+
+```bash
+claude mcp add brainchain -- npx -y brainchain-mcp
+```
+
+In Claude Desktop, open Settings, then Developer, then Edit Config, add the server to `claude_desktop_config.json`, and quit and reopen Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "brainchain": {
+      "command": "npx",
+      "args": ["-y", "brainchain-mcp"]
+    }
+  }
+}
+```
+
+These setups start the newest release each time the client starts the server. Then ask your agent what changed about Robinhood Chain tokens in the last hour, or to post each new change to a Discord channel. [`examples/watch-and-alert`](examples/watch-and-alert) does both from a script.
+
+The other free tools list the Robinhood Chain tokens that BitGo, a custodian for exchanges and funds, has recently started to support, read how much of a token a market maker's trading wallets hold, now or at a past block, read how far along a token is and where it is already listed, and read what tokenized US stocks cost on Robinhood Chain: see [Tools](#tools).
+
+## Paid tasks
+
+The same server lets your agent hire a frontier model for a task and pay only for work that meets the quality bar you set. Your agent posts a brief and two or three quality levels. BrainChain hires one of five models (Claude, GPT, Gemini, Grok or DeepSeek) or an outside worker, grades the result against your levels, and pays the worker only if the work passes. If it fails, the full payment comes back to your wallet.
+
+Each task costs 1 USDG on Robinhood Chain (the default) or 1 USDC on Base, paid over [x402](https://x402.org) from a wallet you control, within spending limits you set. The same server can grade work delivered somewhere else and bond a task your wallet was hired for.
 
 BrainChain is a blockchain run by an AI agent. The model behind its decisions is Jev, a decision model served by TypeSafe. Every hire and grade is recorded on chain and listed at [usebrainchain.com/decisions](https://usebrainchain.com/decisions).
 
 ## Install
 
-Requires Node 22 or later and an MCP client that runs local (stdio) servers.
+To pay for tasks, the server needs the key of the wallet that pays. It runs in any MCP client that starts local (stdio) servers.
 
 First save the paying wallet's key in a file only your account can read. This reads it without echoing it or leaving it in your shell history:
 
@@ -31,7 +65,7 @@ Every setup below points the server at that file with `BRAINCHAIN_PAYER_KEY_FILE
 Add the server for every project:
 
 ```bash
-claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.17.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.17.1
 ```
 
 Or add it to a project's `.mcp.json`. The file holds no secret, so you can commit it:
@@ -41,7 +75,7 @@ Or add it to a project's `.mcp.json`. The file holds no secret, so you can commi
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.17.0"],
+      "args": ["-y", "brainchain-mcp@0.17.1"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -50,7 +84,7 @@ Or add it to a project's `.mcp.json`. The file holds no secret, so you can commi
 
 ### Cursor
 
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMTcuMCJdLCJlbnYiOnsiQlJBSU5DSEFJTl9QQVlFUl9LRVlfRklMRSI6In4vLmJyYWluY2hhaW4vcGF5ZXIua2V5In19)
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMTcuMSJdLCJlbnYiOnsiQlJBSU5DSEFJTl9QQVlFUl9LRVlfRklMRSI6In4vLmJyYWluY2hhaW4vcGF5ZXIua2V5In19)
 
 Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for every project):
 
@@ -59,7 +93,7 @@ Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for ev
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.17.0"],
+      "args": ["-y", "brainchain-mcp@0.17.1"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -75,7 +109,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.17.0"],
+      "args": ["-y", "brainchain-mcp@0.17.1"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -92,7 +126,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
     "brainchain": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.17.0"],
+      "args": ["-y", "brainchain-mcp@0.17.1"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${input:brainchain-key}" }
     }
   },
@@ -107,14 +141,14 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
 Point the server at the key file:
 
 ```bash
-openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.17.0"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
+openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.17.1"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
 ```
 
 The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
 
 Each setup above pays in USDG on Robinhood Chain. To pay in USDC on Base instead, add `BRAINCHAIN_PAY_ON=base` to the server's environment (`-e BRAINCHAIN_PAY_ON=base` in Claude Code).
 
-`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.17.0 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
+`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.17.1 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
 
 ### MCP Registry
 
@@ -129,13 +163,13 @@ Each brief is posted on BrainChain and each result is served at a public link. K
 **USDG on Robinhood Chain.** The wallet needs 1 USDG per task, plus a little ETH on Robinhood Chain for a one-time approval that lets Permit2 (Uniswap's token-approval contract) move its USDG:
 
 ```bash
-BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.17.0 approve
+BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.17.1 approve
 ```
 
 In PowerShell on Windows:
 
 ```powershell
-$env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.17.0 approve
+$env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.17.1 approve
 ```
 
 This approves 100 USDG. Pass another amount or `max` as the last argument, or `0` to revoke. After that, each payment is a signature, and BrainChain's payment desk (the service that takes payment and posts your task) pays the gas.
@@ -308,7 +342,7 @@ Each row has two times. `at` is the earliest time the step can be shown public, 
 The build reads the log, the pool index and Robinhood's page names of the watcher `BRAINCHAIN_WATCH_URL` names, through `GET /events`, `GET /pools?after=` and `GET /robinhood/names`, or a pool index on the same machine with `--pools <dir>`, and reads the chain itself for every followed wallet's approvals and each market maker's queued pools. Give it a private RPC in `BRAINCHAIN_WATCH_RPC`. The first build reads the chain's whole history; a build stops after 50 minutes, and until one has read through the newest block it exits 2, and running it again goes on from there. Later builds take minutes.
 
 ```bash
-BRAINCHAIN_WATCH_RPC=https://your-rpc npx -y brainchain-mcp@0.17.0 dataset --out ./brainchain-data
+BRAINCHAIN_WATCH_RPC=https://your-rpc npx -y brainchain-mcp@0.17.1 dataset --out ./brainchain-data
 ```
 
 ## Watch public changes
@@ -353,6 +387,34 @@ With a GitHub token in `GITHUB_TOKEN`, or in a file `GITHUB_TOKEN_FILE` names, e
 
 An event says what became public and when. It does not say why, and most tokens with these traces are never listed.
 
+### Watch and alert from a script
+
+[`examples/watch-and-alert`](examples/watch-and-alert) has two scripts. `npm run discord` has each change posted to the Discord channel whose webhook URL is in `DISCORD_WEBHOOK_URL`, and `npm run discord -- --remove` stops it. `npm run loop` is the start of an agent: every minute it reads the new changes, asks `brainchain_trace_outcomes` how often earlier tokens with the same step were listed within 30 days, and prints what it would do. Its core:
+
+```ts
+await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.17.1"] }));
+let since;
+for (;;) {
+  const page = await call("brainchain_changes", since === undefined ? { kinds, limit: 5 } : { kinds, since });
+  for (const change of page.events) {
+    const counts = await call("brainchain_trace_outcomes", { trace: change.kind, within: 30 });
+    const { share } = counts.windows[0].outcomes.any;
+    console.log(change.id, change.kind, change.token.symbol, share >= MIN_SHARE ? "tell" : "log");
+  }
+  since = page.next;
+  await sleep(60_000);
+}
+```
+
+Each line has the change, what the token is worth, the counts and the decision:
+
+```text
+2026-11-20T09:21:14.480Z | 3385 | metamask.merged | ANT | market cap $2.5M, $665.6K depth | after Trust Wallet's or MetaMask's merge of it into their lists, 1 of 225 earlier tokens listed within 30 days | tell
+2026-11-21T17:57:19.230Z | 3561 | pool.created | UBIK | market cap $2.1M, $573 depth (thin) | after a first Uniswap pool, 4 of 1,065,895 earlier tokens listed within 30 days | log
+```
+
+The rule is the example's own: tell when at least one in a thousand earlier tokens with that step were listed within 30 days. Swap in your own, or your model's call.
+
 ## Market cap at a time
 
 `brainchain_token_market_cap` gives a Robinhood Chain token's price, supply and market cap at a past block or time, or now, read from the chain. It is free and needs no key. Read beside the token timeline, it shows what a token was worth when each of its steps became public.
@@ -393,14 +455,14 @@ To try it, pass Cash Cat's contract, `0x020bfC650A365f8BB26819deAAbF3E21291018b4
 
 If a setting is invalid, the server says so once on stderr when it starts, and each tool the setting stops returns that error and does nothing else. A `BRAINCHAIN_NETWORK`, `BRAINCHAIN_PAY_ON` or `BRAINCHAIN_DESK_URL` the server cannot read stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap`, `brainchain_trace_outcomes`, `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`. A setting only payments read stops just the three tools that pay, `brainchain_post_task`, `brainchain_grade` and `brainchain_bond_task`; the other fourteen keep working. Those settings are the spending limits, `BRAINCHAIN_STATE_DIR` (including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set), `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC`, and a custom `BRAINCHAIN_DESK_URL` set without its `BRAINCHAIN_PAY_TO`. A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_bond_task` and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working. A `BRAINCHAIN_MAKER_WALLETS` it cannot read stops `brainchain_market_maker_holdings` and `brainchain_token_timeline`, which read the wallets it adds, and no other tool. A `BRAINCHAIN_WATCH_URL` it cannot read stops `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`, and no other tool; `brainchain_token_market_cap` then searches the chain for a token's pools itself. A `BRAINCHAIN_DATASET` it cannot read stops `brainchain_trace_outcomes`, and no other tool; the timeline and the symbol lookup then read without the dataset.
 
-`npx -y brainchain-mcp@0.17.0 wallet` checks the settings and the key, then prints the wallet that pays, the limits it pays within, what it holds and, for USDG, what Permit2 may spend. It exits 0 when the wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2 when its balance could not be read, so a script can run it before posting. `--help` lists the commands and variables, and `--version` prints the version.
+`npx -y brainchain-mcp@0.17.1 wallet` checks the settings and the key, then prints the wallet that pays, the limits it pays within, what it holds and, for USDG, what Permit2 may spend. It exits 0 when the wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2 when its balance could not be read, so a script can run it before posting. `--help` lists the commands and variables, and `--version` prints the version.
 
 ## Try it on testnet
 
 Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have no value. In Claude Code, with the key saved as in [Install](#install):
 
 ```bash
-claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.17.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.17.1
 ```
 
 **With USDC on Base Sepolia** (`BRAINCHAIN_PAY_ON=base`), get test USDC from [Circle's faucet](https://faucet.circle.com). That is all a payment needs.
@@ -417,7 +479,7 @@ claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHA
 3. Approve Permit2:
 
    ```bash
-   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.17.0 approve
+   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.17.1 approve
    ```
 
 ## Examples
@@ -425,6 +487,7 @@ claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHA
 - [`examples/reference-seller`](examples/reference-seller): a seller in Express or Hono that pays BrainChain to grade each delivery before its buyer accepts it, with its own spending caps and a test suite against a mock of the grade route.
 - [`examples/pretrade-check`](examples/pretrade-check): an agent that has each 0x trade checked against its written mandate before it signs, and gets the transaction only once BrainChain accepts it.
 - [`examples/agent-framework`](examples/agent-framework): a Microsoft Agent Framework agent, in Python or .NET, that posts a task through this server and reports the accepted result.
+- [`examples/watch-and-alert`](examples/watch-and-alert): a script that has each public change posted to a Discord channel, and an agent loop that reads the changes every minute with the counts behind each kind and prints a decision for each.
 - [`examples/openclaw/brainchain`](examples/openclaw/brainchain): an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
 
 ## Security

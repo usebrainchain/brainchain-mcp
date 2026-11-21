@@ -71,6 +71,24 @@ jobs:
       - run: npm test
       - run: npm run check -- --sample
 
+  watch-and-alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: examples/watch-and-alert
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: examples/watch-and-alert/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+
   agent-framework:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
@@ -95,7 +113,7 @@ jobs:
       - name: Fetch brainchain-mcp
         shell: bash
         working-directory: ${{ runner.temp }}
-        run: echo | npx -y brainchain-mcp@0.17.0 > /dev/null
+        run: echo | npx -y brainchain-mcp@0.17.1 > /dev/null
       # The samples start brainchain-mcp from npm and list its tools; no model or key is needed for that. They run
       # outside the checkout, where npx would otherwise resolve this repository's unbuilt package of the same name.
       - name: Python sample connects
