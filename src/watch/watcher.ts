@@ -9,6 +9,8 @@ export interface PollContext {
   /** Records what was found: during the baseline, or marked `baseline`, as rows that are never reported as new. Anything already in the log is dropped. */
   record(found: readonly Found[]): Promise<WatchEvent[]>;
   log(message: string): void;
+  /** Aborted when the watcher stops: a poller that makes several requests in a turn makes no more once it is. */
+  readonly signal: AbortSignal;
 }
 
 export interface Poller {
@@ -96,7 +98,7 @@ export class Watcher {
   readonly status = new Map<string, SourceStatus>();
   private readonly options: WatcherOptions;
   private readonly clock: () => number;
-  private stopped = false;
+  private readonly stopping = new AbortController();
   private readonly wakers = new Set<() => void>();
   private loops: Promise<void>[] = [];
   private readonly queue: WatchEvent[] = [];
@@ -184,16 +186,16 @@ export class Watcher {
   }
 
   async stop(): Promise<void> {
-    this.stopped = true;
+    this.stopping.abort();
     for (const wake of this.wakers) wake();
     await Promise.all(this.loops);
     this.options.state.save();
   }
 
   private async loop(poller: Poller): Promise<void> {
-    while (!this.stopped) {
+    while (!this.stopping.signal.aborted) {
       const wait = await this.runOnce(poller);
-      if (this.stopped) break;
+      if (this.stopping.signal.aborted) break;
       await new Promise<void>((resolve) => {
         const done = () => {
           clearTimeout(timer);
@@ -220,6 +222,7 @@ export class Watcher {
         state: source,
         record: (found) => this.record(found, baseline),
         log: (message) => this.say(`${poller.name}: ${message}`),
+        signal: this.stopping.signal,
       });
       if (baseline) {
         source.baselined = true;

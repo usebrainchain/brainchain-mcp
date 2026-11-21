@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+
 import { getAddress } from "viem";
 
 import { robinhoodPageName } from "../dataset/sources.js";
@@ -97,9 +99,10 @@ export function robinhoodPairs(requests: Requests): Poller {
 
 /**
  * How often a page's name is read again: a name rarely changes, and a page that gave none or could not be read is asked
- * again sooner. A read takes at most `perPoll` pages, a second apart, and goes on at once while more are due.
+ * again sooner. A read takes at most `perPoll` pages, a second apart, and goes on at once while more are due. Five pages
+ * keep a turn to about ten seconds, inside the 30 s a host such as Render gives a stopping watcher.
  */
-export const NAME_READS = { named: 24 * 3_600_000, unnamed: 3_600_000, perPoll: 20, gap: 1_000 };
+export const NAME_READS = { named: 24 * 3_600_000, unnamed: 3_600_000, perPoll: 5, gap: 1_000 };
 
 export interface NamesState {
   /** Robinhood's name on each page, "" for a page that gave none, and when it was read. */
@@ -108,7 +111,8 @@ export interface NamesState {
   failed?: Record<string, string>;
 }
 
-const nap = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+/** Waits `ms`, or less if `signal` is aborted first. */
+const nap = (ms: number, signal: AbortSignal) => delay(ms, undefined, { signal }).catch(() => {});
 
 /**
  * Robinhood's own name for the asset on each page its crypto sitemap has listed, for `GET /robinhood/names`: the sitemap
@@ -130,20 +134,29 @@ export function robinhoodNames(symbols: () => readonly string[], fetchImpl: type
       const due = symbols().filter((symbol) => since(failed[symbol]) >= NAME_READS.unnamed && since(names[symbol]?.at) >= (names[symbol]?.name ? NAME_READS.named : NAME_READS.unnamed));
       // Pages never read go first, then the longest unread.
       due.sort((a, b) => (names[a]?.at ?? "").localeCompare(names[b]?.at ?? ""));
-      const batch = due.slice(0, NAME_READS.perPoll);
+      const { signal } = context;
+      let read = 0;
+      let failures = 0;
       let error: unknown;
-      for (const [i, symbol] of batch.entries()) {
-        if (i > 0) await sleep(NAME_READS.gap);
+      // A stop ends the turn between pages. A page it cuts off is left as it was, neither named nor failed, so the state
+      // saved on the way out holds only whole reads and the page is read again after the restart.
+      for (const symbol of due.slice(0, NAME_READS.perPoll)) {
+        if (read > 0) await sleep(NAME_READS.gap, signal);
+        if (signal.aborted) break;
         try {
-          names[symbol] = { name: await robinhoodPageName(symbol, fetchImpl), at: new Date(clock()).toISOString() };
+          const pageName = await robinhoodPageName(symbol, fetchImpl, signal);
+          names[symbol] = { name: pageName, at: new Date(clock()).toISOString() };
           delete failed[symbol];
         } catch (cause) {
+          if (signal.aborted) break;
           error = cause;
+          failures++;
           failed[symbol] = new Date(clock()).toISOString();
         }
+        read++;
       }
-      if (batch.length > 0 && batch.every((symbol) => symbol in failed)) throw error;
-      return due.length > batch.length;
+      if (read > 0 && failures === read) throw error;
+      return due.length > read;
     },
   };
 }

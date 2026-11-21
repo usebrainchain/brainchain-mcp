@@ -179,10 +179,12 @@ export function titleName(title: string, symbol: string): string {
 /**
  * The name Robinhood gives the asset on its page for `symbol`, the page its crypto sitemap lists, from the page's
  * og:title (see `titleName`). Robinhood sends a reader outside the US to its regional page, which has no page for an asset
- * it lists only in the US: then, and for any page without the name, this is "". Only the page's head is read.
+ * it lists only in the US: then, and for any page without the name, this is "". Only the page's head is read; `signal`
+ * cuts the read off.
  */
-export async function robinhoodPageName(symbol: string, fetchImpl: typeof fetch = fetch): Promise<string> {
-  const response = await fetchImpl(`https://robinhood.com/us/en/crypto/${encodeURIComponent(symbol)}/`, { headers: { Accept: "text/html", "User-Agent": "brainchain-mcp" }, signal: AbortSignal.timeout(REQUEST_MS) });
+export async function robinhoodPageName(symbol: string, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<string> {
+  const timeout = AbortSignal.timeout(REQUEST_MS);
+  const response = await fetchImpl(`https://robinhood.com/us/en/crypto/${encodeURIComponent(symbol)}/`, { headers: { Accept: "text/html", "User-Agent": "brainchain-mcp" }, signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
   if (response.status === 404) {
     await response.body?.cancel().catch(() => {});
     return "";
