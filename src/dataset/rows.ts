@@ -1,7 +1,7 @@
 import { getAddress, zeroAddress } from "viem";
 
 import type { WatchEvent } from "../watch/events.js";
-import { VENUE_OUTCOMES, type MakerRef, type OutcomeRow, type StepRow } from "./format.js";
+import { NOTICE_OUTCOMES, VENUE_OUTCOMES, type MakerRef, type OutcomeRow, type StepRow } from "./format.js";
 
 /** A token with a trace: any event about its contract but a new pool, or a step the job's own scans found. */
 export interface Traced {
@@ -90,7 +90,7 @@ export function stepsFromEvents(events: readonly WatchEvent[], listDates: Readon
         add({ step: "aggregator", source: AGGREGATORS[event.kind]!, ...undated(), ref: event.ref });
         break;
       case "venue.announced":
-        add({ step: "announcement", source: event.source, ...(event.at ? dated(event.at, "source") : undated()), ref: event.ref });
+        if (!NOTICE_OUTCOMES[event.source]) add({ step: "announcement", source: event.source, ...(event.at ? dated(event.at, "source") : undated()), ref: event.ref });
         break;
       case "maker.approval": {
         const maker = makerOf(detail);
@@ -150,7 +150,8 @@ export interface TradingStarts {
  * publishes when it had opened by the time the watcher saw the listing; the other exchanges' first market for a token as
  * the watcher matched it, by contract or the venue's own name, dated the same way by the time the venue gives, and one
  * matched by symbol alone tied to a traced token as Robinhood's are, confirmed by the name the same venue gave the symbol
- * in an announcement, or else kept as `unconfirmed`; Robinhood's sitemap and tradable pairs by symbol
+ * in an announcement, or else kept as `unconfirmed`; Kraken's post that a token is available for trading, dated by the
+ * post; Robinhood's sitemap and tradable pairs by symbol
  * (see `attribute`), confirmed by Robinhood's own name for the asset, from its pair list or from `pageNames`, the name
  * on its page, and dated when the watcher first saw them. A page with no such name to compare is kept as `unconfirmed`.
  * One already there when the watcher first read the venue is "listed by" that time.
@@ -167,11 +168,14 @@ export function outcomesFromEvents(events: readonly WatchEvent[], traced: Readon
   for (const event of events) {
     const flags = event.baseline ? { backfill: true as const } : {};
     const { address, symbol } = event.token;
-    if (event.kind === "venue.listed") {
-      const outcome = VENUE_OUTCOMES[event.source];
+    const listing = event.kind === "venue.listed" || (event.kind === "venue.announced" && NOTICE_OUTCOMES[event.source] !== undefined);
+    if (listing) {
+      const outcome = event.kind === "venue.listed" ? VENUE_OUTCOMES[event.source] : NOTICE_OUTCOMES[event.source];
       if (!outcome || !symbol) continue;
       const opens = typeof event.detail.opens === "string" ? Date.parse(event.detail.opens) : NaN;
       const opened = Number.isFinite(opens) && opens <= Date.parse(event.observedAt);
+      // A post that an asset is available for trading is dated by the post.
+      const posted = event.kind === "venue.announced" && event.at ? new Date(event.at).toISOString() : undefined;
       const venueName = typeof event.detail.venueName === "string" ? event.detail.venueName : announced.get(`${event.source}|${symbol.toUpperCase()}`);
       const found = address && isToken(address) ? { token: getAddress(address), match: event.detail.match === "name" ? ("name" as const) : ("contract" as const) } : attribute(symbol, venueName, traced, new Map());
       if (!found) continue;
@@ -179,7 +183,7 @@ export function outcomesFromEvents(events: readonly WatchEvent[], traced: Readon
         token: found.token,
         outcome,
         venue: event.source,
-        ...(opened ? { at: new Date(opens).toISOString(), atFrom: "source" as const } : undated(event)),
+        ...(posted ? { at: posted, atFrom: "source" as const } : opened ? { at: new Date(opens).toISOString(), atFrom: "source" as const } : undated(event)),
         match: found.match,
         ...(found.match === "symbol" ? { unconfirmed: true as const } : {}),
         symbol: symbol.toUpperCase(),

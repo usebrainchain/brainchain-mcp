@@ -3,6 +3,7 @@ import { getAddress, type Address } from "viem";
 
 import { BITGO_START, CustodyError, within, type CustodyAddition, type CustodyBoard } from "../custody.js";
 import type { EventCounts } from "../dataset/counts.js";
+import { NOTICE_OUTCOMES } from "../dataset/format.js";
 import { ANSWER_MS, ChainError, type ChainHistory } from "../history.js";
 import type { CapKept, MarketCapBoard, Pool } from "../marketcap.js";
 import { SightingsError } from "../sightings.js";
@@ -117,9 +118,11 @@ export function eventContext({ log, readers, wallets, times, worth, ms = CONTEXT
       if (matches.length === 1) target = getAddress(matches[0]!.address);
     }
     const context: Record<string, unknown> = { ...(matches ? { matches } : {}), priorEvents };
-    // The counts are about the kind, not the token, so they go with every event of a kind that is a step.
+    // The counts are about the kind, not the token, so they go with every event of a kind that is a step. Kraken's post
+    // that a token is available for trading is a listing, so it has none.
     const counted: Record<string, unknown> = {};
-    const counting = counts
+    const listing = event.kind === "venue.announced" && NOTICE_OUTCOMES[event.source] !== undefined;
+    const counting = counts && !listing
       ? within(COUNTS_MS, counts(event.kind), new LateError("The dataset was not read in time.")).then(
           (found) => void (found && (counted.counts = found)),
           (error: unknown) => say?.(`event ${event.id}: the dataset's counts could not be read: ${describe(error)}`),

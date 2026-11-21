@@ -25,8 +25,6 @@ export interface Notice {
   named: Named[];
   /** Contracts in its text, which match only a token the log knows at that address. */
   contracts?: string[];
-  /** Contracts the text says are on Robinhood Chain, with the asset it names for each. */
-  onChain?: { symbol: string; name: string; contract: string }[];
 }
 
 export interface NoticeSource {
@@ -39,7 +37,7 @@ export interface NoticeSource {
 }
 
 /** The quote currencies and venue names that are never the asset an announcement is about. */
-const NOT_ASSETS = new Set(["USDT", "USDC", "USD", "USD1", "USDE", "FDUSD", "EUR", "TRY", "KRW", "BRL", "GBP", "JPY", "AUD", "BTC", "ETH", "COINBASE", "KRAKEN", "BITHUMB", "BITGET", "UTC", "PST", "PDT", "API", "NEW"]);
+const NOT_ASSETS = new Set(["USDT", "USDC", "USD", "USD1", "USDE", "FDUSD", "EUR", "TRY", "KRW", "BRL", "GBP", "JPY", "AUD", "BTC", "ETH", "KRAKEN", "BITHUMB", "BITGET", "UTC", "API", "NEW"]);
 /** An announcement about a contract that tracks a stock, a fund or a commodity, which no token here is. */
 const OTHER_MARKETS = /\b(?:stocks?|tradfi|xstocks?|equit(?:y|ies)|etfs?|commodit(?:y|ies)|forex)\b/i;
 
@@ -67,17 +65,12 @@ export function namedIn(title: string, { pairs = true } = {}): Named[] {
 }
 
 /**
- * The tokens an announcement names. A contract the text says is on Robinhood Chain settles it, and so does one in it that
- * the log knows. Otherwise the symbol must be one a
+ * The tokens an announcement names. A contract in it that the log knows settles it. Otherwise the symbol must be one a
  * token in the log goes by: with a name beside it, the name must be one the log has for exactly one such token, and a name
  * no such token has rules it out; with none, the token goes by the symbol alone, marked as such.
  */
-export function matchNotice(universe: Universe, notice: Pick<Notice, "named" | "contracts" | "onChain">): Matched[] {
+export function matchNotice(universe: Universe, notice: Pick<Notice, "named" | "contracts">): Matched[] {
   const matched = new Map<string, Matched>();
-  for (const { symbol, name, contract } of notice.onChain ?? []) {
-    const hit = matchAsset(universe, { base: symbol, name, contract });
-    if (hit) matched.set(hit.token.address!.toLowerCase(), hit);
-  }
   for (const contract of notice.contracts ?? []) {
     const known = universe.byAddress.get(contract.toLowerCase());
     if (!known) continue;
@@ -220,53 +213,6 @@ export const KRAKEN_BLOG: NoticeSource = {
   },
 };
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const ZONES: Record<string, number> = { PST: -8, PDT: -7, UTC: 0, GMT: 0 };
-
-/**
- * The earliest update an incident's text dates, as "Nov 12 , 12:09 PST": the page writes no year, so it is the year of
- * `published`, or the one before for a month after it.
- */
-export function firstUpdate(text: string, published: number): number | undefined {
-  const year = new Date(published).getUTCFullYear();
-  const month = new Date(published).getUTCMonth();
-  let first: number | undefined;
-  for (const [, name, day, hour, minute, zone] of text.matchAll(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2}) ?, (\d{1,2}):(\d{2}) (PST|PDT|UTC|GMT)\b/g)) {
-    const m = MONTHS.indexOf(name!);
-    const at = Date.UTC(m > month ? year - 1 : year, m, Number(day), Number(hour) - ZONES[zone!]!, Number(minute));
-    if (first === undefined || at < first) first = at;
-  }
-  return first;
-}
-
-/**
- * Coinbase Exchange's status feed, the Atom feed its status page links: each new pair gets an incident titled "PEARL-USD
- * Markets Open", whose first update says when spot trading in the asset goes live and names it, as in "Spot trading for
- * Pearl (PEARL)", gives its contract for an asset on Robinhood Chain, and whose later updates follow the pair from its
- * auction to full trading. Dated by that first update.
- */
-export const COINBASE_STATUS: NoticeSource = {
-  name: "coinbase-status",
-  venue: "Coinbase",
-  interval: 2 * 60_000,
-  url: "https://status.exchange.coinbase.com/history.atom",
-  accept: "application/atom+xml",
-  parse(body) {
-    if (!body.includes("<feed")) throw new Error("Coinbase's status page did not answer with its feed.");
-    return [...body.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].flatMap(([, entry]) => {
-      const title = plain(tag(entry!, "title"));
-      const base = /^([A-Z0-9]{1,15})-[A-Z0-9]{2,6} Markets Open$/.exec(title)?.[1];
-      const link = /<link[^>]*href="([^"]+)"/.exec(entry!)?.[1];
-      if (!base || !link) return [];
-      const content = plain(plain(tag(entry!, "content")));
-      const published = Date.parse(plain(tag(entry!, "published")));
-      const at = Number.isFinite(published) ? (firstUpdate(content, published) ?? published) : undefined;
-      const onChain = [...content.matchAll(/Robinhood (?:network|chain) contract address for ([^()]{1,60}?) \(([A-Z0-9]{1,15})\) is (0x[0-9a-fA-F]{40})/gi)].map(([, name, symbol, contract]) => ({ symbol: symbol!, name: name!.trim(), contract: contract! }));
-      return [{ id: plain(tag(entry!, "id")) || link, title, url: unescape(link), ...(at !== undefined ? { at } : {}), named: merged([{ symbol: base }, ...namedIn(content, { pairs: false })]), ...(onChain.length ? { onChain } : {}) }];
-    });
-  },
-};
-
 /**
  * Bithumb's notices, from its documented notices endpoint: those filed under 마켓 추가, market added, as in "키네틱(KNTQ)
  * 원화 마켓 추가". The name beside the symbol is Korean, which no list here gives a token, so a notice names its token
@@ -287,4 +233,4 @@ export const BITHUMB_NOTICES: NoticeSource = {
   },
 };
 
-export const NOTICE_SOURCES = [COINBASE_STATUS, KRAKEN_BLOG, BITHUMB_NOTICES, BITGET_NOTICES] as const;
+export const NOTICE_SOURCES = [KRAKEN_BLOG, BITHUMB_NOTICES, BITGET_NOTICES] as const;

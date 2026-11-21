@@ -75,8 +75,8 @@ describe("a chat message", () => {
     expect(listed({ market: "PONSUSDT", type: "perpetual", status: "pre-trading", opens: later, match: "symbol" }, { address: null, symbol: "PONS", name: null } as never)).toBe(
       `Bitget added a perpetual futures market for PONS, PONSUSDT: not trading yet; the venue gives ${later.slice(0, 16).replace("T", " ")} UTC as its start. Matched by symbol only: nothing the venue gives confirms it is this token. https://api.bitget.com/api/v2/spot/public/symbols?symbol=CASHCATUSDT`,
     );
-    expect(line(event({ kind: "venue.status_changed", source: "Coinbase", ref: "https://api.exchange.coinbase.com/products/CASHCAT-USD@2026-11-21T10:00:00Z", detail: { market: "CASHCAT-USD", type: "spot", status: "trading", was: "auction", match: "contract" }, context: {} }))).toBe(
-      "Coinbase's CASHCAT-USD spot market for Cash Cat CASHCAT (0x020b…18b4) is trading now; it was in its opening auction. https://api.exchange.coinbase.com/products/CASHCAT-USD",
+    expect(line(event({ kind: "venue.status_changed", source: "Bitget", ref: "https://api.bitget.com/api/v2/spot/public/symbols?symbol=CASHCATUSDT@2026-11-21T10:00:00Z", detail: { market: "CASHCATUSDT", type: "spot", status: "trading", was: "pre-trading", match: "contract" }, context: {} }))).toBe(
+      "Bitget's CASHCATUSDT spot market for Cash Cat CASHCAT (0x020b…18b4) is trading now; it was not trading yet. https://api.bitget.com/api/v2/spot/public/symbols?symbol=CASHCATUSDT",
     );
     expect(line(event({ kind: "venue.announced", source: "Kraken", ref: "https://blog.kraken.com/product/asset-listings/cashcat", detail: { title: "CASHCAT is available for trading!", match: "name" }, context: {} }))).toBe(
       "Kraken published an announcement that names Cash Cat CASHCAT (0x020b…18b4). https://blog.kraken.com/product/asset-listings/cashcat",

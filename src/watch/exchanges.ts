@@ -267,65 +267,6 @@ const listOf = (value: unknown, venue: string): Record<string, unknown>[] => {
 const json = (body: string) => JSON.parse(body) as unknown;
 const at = (ms: number | undefined) => (ms === undefined ? {} : { opens: ms });
 
-const COINBASE = "https://api.exchange.coinbase.com";
-/** Coinbase Exchange's products, with each asset's name and its contract on Robinhood Chain from its currencies. */
-export const COINBASE_MARKETS: VenueList = {
-  name: "coinbase-markets",
-  venue: "Coinbase",
-  interval: 60_000,
-  async read(get) {
-    const [products, currencies] = await Promise.all([get(`${COINBASE}/products`), get(`${COINBASE}/currencies`)]);
-    const byId = new Map(listOf(json(currencies), "Coinbase").map((currency) => [text(currency.id).toUpperCase(), currency]));
-    return listOf(json(products), "Coinbase").flatMap((product) => {
-      if (product.status === "delisted") return [];
-      const base = text(product.base_currency).toUpperCase();
-      const currency = byId.get(base);
-      const networks = array(currency?.supported_networks).map(record);
-      const robinhood = networks.find(({ id }) => id === "robinhood");
-      const contract = text(robinhood?.contract_address);
-      const status: MarketStatus =
-        product.status !== "online" || product.trading_disabled === true || product.cancel_only === true ? "halted" : product.auction_mode === true ? "auction" : product.post_only === true ? "pre-trading" : "trading";
-      const flags = [["auction_mode", "auction"], ["post_only", "post only"], ["limit_only", "limit only"], ["cancel_only", "cancel only"], ["trading_disabled", "trading disabled"]].filter(([field]) => product[field!] === true).map(([, word]) => word);
-      const id = text(product.id);
-      return [
-        {
-          id,
-          base,
-          quote: text(product.quote_currency).toUpperCase(),
-          type: "spot" as const,
-          status,
-          venueStatus: [text(product.status), ...flags].join(", "),
-          ...(text(currency?.name) ? { name: text(currency?.name) } : {}),
-          ...(contract ? { contract } : {}),
-          ...(networks.length > 0 && !robinhood ? { elsewhere: true } : {}),
-          ref: `${COINBASE}/products/${encodeURIComponent(id)}`,
-        },
-      ];
-    });
-  },
-};
-
-const KRAKEN = "https://api.kraken.com/0/public/AssetPairs";
-const KRAKEN_STATUS: Record<string, MarketStatus> = { online: "trading", limit_only: "trading", post_only: "pre-trading", cancel_only: "halted", reduce_only: "halted", delisted: "halted", maintenance: "halted" };
-/** Kraken's spot pairs. Kraken gives no name or contract for an asset, so its markets are matched by symbol. */
-export const KRAKEN_MARKETS: VenueList = {
-  name: "kraken-markets",
-  venue: "Kraken",
-  interval: 60_000,
-  async read(get) {
-    const answer = record(json(await get(KRAKEN)));
-    if (array(answer.error).length > 0 || typeof answer.result !== "object" || answer.result === null) throw new Error("Kraken did not answer with its markets.");
-    return Object.values(answer.result as Record<string, unknown>)
-      .map(record)
-      .flatMap((pair) => {
-        const [base, quote] = text(pair.wsname).split("/");
-        if (!base || !quote || pair.aclass_base !== "currency") return [];
-        const status = text(pair.status);
-        return [{ id: text(pair.altname), base: base.toUpperCase(), quote: quote.toUpperCase(), type: "spot" as const, status: KRAKEN_STATUS[status] ?? "halted", venueStatus: status, ref: `${KRAKEN}?pair=${encodeURIComponent(text(pair.altname))}` }];
-      });
-  },
-};
-
 const BINANCE_FUTURES = "https://fapi.binance.com/fapi/v1/exchangeInfo";
 const FUTURES_STATUS: Record<string, MarketStatus> = { TRADING: "trading", PENDING_TRADING: "pre-trading" };
 /** Binance's USDⓈ-M futures on crypto assets, dated by the onboard date Binance gives each; stock and commodity contracts are left out. */
@@ -421,8 +362,8 @@ export const BITGET_MARKETS: VenueList = {
   },
 };
 
-export const VENUE_LISTS = [COINBASE_MARKETS, KRAKEN_MARKETS, BINANCE_FUTURES_MARKETS, UPBIT_MARKETS, BITHUMB_MARKETS, BITGET_MARKETS] as const;
+export const VENUE_LISTS = [BINANCE_FUTURES_MARKETS, UPBIT_MARKETS, BITHUMB_MARKETS, BITGET_MARKETS] as const;
 
 /** The hosts the market lists and announcements are read from, each held to this many requests an hour. */
-export const VENUE_HOSTS = ["api.exchange.coinbase.com", "status.exchange.coinbase.com", "api.kraken.com", "blog.kraken.com", "fapi.binance.com", "api.upbit.com", "api.bithumb.com", "api.bitget.com"] as const;
+export const VENUE_HOSTS = ["blog.kraken.com", "fapi.binance.com", "api.upbit.com", "api.bithumb.com", "api.bitget.com"] as const;
 export const VENUE_PER_HOUR = 300;

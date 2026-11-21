@@ -37,12 +37,11 @@ new Uniswap pools for tokens with a public trace, a followed market maker wallet
 token, a market maker's multisig queuing a token's pool for its trading contracts for the first time, pull requests and
 merges that add a Robinhood Chain token in BitGo's, Trust Wallet's and MetaMask's public code, releases of @bitgo/statics
 that include one, the pair list Robinhood serves to API clients and its crypto sitemap, KuCoin's, Gate's, LI.FI's and
-CoinGecko's lists, an exchange adding a market for a token or changing its status, read from the market lists Coinbase,
-Kraken, Binance Futures, Upbit, Bithumb and Bitget publish, and an announcement naming a token in Coinbase Exchange's
-status feed, Kraken's Asset Listings posts, Bithumb's notices or Bitget's announcements. Each event carries the token's
-earlier public steps, what it is worth now and, from the newest published dataset, how often earlier tokens with the same
-step were listed within 7, 30 and 90 days. The first run records what is already public as a baseline and reports none
-of it as new.
+CoinGecko's lists, an exchange adding a market for a token or changing its status, read from the market lists Binance
+Futures, Upbit, Bithumb and Bitget publish, and an announcement naming a token in Kraken's Asset Listings posts,
+Bithumb's notices or Bitget's announcements. Each event carries the token's earlier public steps, what it is worth now
+and, from the newest published dataset, how often earlier tokens with the same step were listed within 7, 30 and 90 days.
+The first run records what is already public as a baseline and reports none of it as new.
 
   --state <dir>          Where the log and the watcher's state are kept (default: BRAINCHAIN_STATE_DIR/watch, or
                          ~/.brainchain/watch). A restart resumes from there.

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { EventLog, type Found } from "./events.js";
-import { BINANCE_FUTURES_MARKETS, BITGET_MARKETS, BITHUMB_MARKETS, CHAIN_START, COINBASE_MARKETS, KRAKEN_MARKETS, marketPoller, matchAsset, universeFrom, universeOf, UPBIT_MARKETS, type VenueList } from "./exchanges.js";
+import { BINANCE_FUTURES_MARKETS, BITGET_MARKETS, BITHUMB_MARKETS, CHAIN_START, marketPoller, matchAsset, universeFrom, universeOf, UPBIT_MARKETS, type VenueList } from "./exchanges.js";
 import { Requests } from "./http.js";
 import { StateFile } from "./state.js";
 import { Watcher } from "./watcher.js";
@@ -40,45 +40,50 @@ function harness(list: VenueList, table: Record<string, () => Response>, tokens:
   return { log, asked, run: () => watcher.runOnce(poller), status: () => watcher.status.get(poller.name)!, venue, news: () => log.query().events.filter(({ kind }) => kind.startsWith("venue.")) };
 }
 
-const COINBASE = "https://api.exchange.coinbase.com";
-const product = (id: string, more: Record<string, unknown> = {}) => ({ id, base_currency: id.split("-")[0], quote_currency: id.split("-")[1], status: "online", auction_mode: false, post_only: false, limit_only: false, cancel_only: false, trading_disabled: false, ...more });
-const currency = (id: string, name: string, networks: { id: string; contract_address?: string }[]) => ({ id, name, supported_networks: networks });
+const BITGET = "https://api.bitget.com/api/v2";
+const SPOT = `${BITGET}/spot/public/symbols`;
+const COINS = `${BITGET}/spot/public/coins`;
+const PERPS = `${BITGET}/mix/market/contracts?productType=USDT-FUTURES`;
+const ok = (data: unknown[]) => json({ code: "00000", data });
+const pair = (base: string, status = "online", quote = "USDT") => ({ symbol: `${base}${quote}`, baseCoin: base, quoteCoin: quote, status, openTime: "" });
+const perp = (base: string, more: Record<string, unknown> = {}) => ({ symbol: `${base}USDT`, baseCoin: base, quoteCoin: "USDT", symbolStatus: "normal", symbolType: "perpetual", isRwa: "NO", launchTime: "", openTime: "", ...more });
+const coin = (name: string, chains: { chain: string; contractAddress: string }[]) => ({ coin: name, chains });
+const bitget = (spot: unknown[], coins: unknown[], perps: unknown[] = []): Record<string, () => Response> => ({ [SPOT]: ok(spot), [COINS]: ok(coins), [PERPS]: ok(perps) });
 
 describe("an exchange's market list", () => {
   it("reports a token's first market on the venue, matched by the contract the venue gives on Robinhood Chain, and nothing it had before", async () => {
-    const products = [product("BTC-USD")];
-    const currencies = [currency("BTC", "Bitcoin", [{ id: "bitcoin" }]), currency("PONS", "Pons", [{ id: "robinhood", contract_address: PONS }])];
-    const table: Record<string, () => Response> = { [`${COINBASE}/products`]: json(products), [`${COINBASE}/currencies`]: json(currencies) };
-    const { run, news, venue } = harness(COINBASE_MARKETS, table);
+    const coins = [coin("BTC", [{ chain: "BTC", contractAddress: "" }]), coin("PONS", [{ chain: "Robinhood", contractAddress: PONS.toLowerCase() }])];
+    const table = bitget([pair("BTC")], coins);
+    const { run, news, venue } = harness(BITGET_MARKETS, table);
     await run();
     expect(venue()).toEqual([]);
-    table[`${COINBASE}/products`] = json([...products, product("PONS-USD", { auction_mode: true })]);
+    table[SPOT] = ok([pair("BTC"), pair("PONS", "gray")]);
     await run();
     expect(news().map(({ kind, token, source, ref, at, detail }) => ({ kind, token, source, ref, at, detail }))).toEqual([
       {
         kind: "venue.listed",
         token: { address: PONS, symbol: "PONS", name: "Pons" },
-        source: "Coinbase",
-        ref: `${COINBASE}/products/PONS-USD`,
+        source: "Bitget",
+        ref: `${SPOT}?symbol=PONSUSDT`,
         at: null,
-        detail: { market: "PONS-USD", type: "spot", quote: "USD", status: "auction", venueStatus: "online, auction", match: "contract", venueName: "Pons" },
+        detail: { market: "PONSUSDT", type: "spot", quote: "USDT", status: "pre-trading", venueStatus: "gray", match: "contract" },
       },
     ]);
-    // A second quote for the same asset is no new listing; the end of its auction is a change of status.
-    table[`${COINBASE}/products`] = json([...products, product("PONS-USD"), product("PONS-USDC", { auction_mode: true })]);
+    // A second quote for the same asset is no new listing; the start of trading is a change of status.
+    table[SPOT] = ok([pair("BTC"), pair("PONS"), pair("PONS", "gray", "USDC")]);
     await run();
     await run();
     expect(news().map(({ kind, detail }) => [kind, detail.status, detail.was])).toEqual([
-      ["venue.listed", "auction", undefined],
-      ["venue.status_changed", "trading", "auction"],
+      ["venue.listed", "pre-trading", undefined],
+      ["venue.status_changed", "trading", "pre-trading"],
     ]);
   });
 
   it("leaves out an asset the venue holds on other chains only, even when a Robinhood Chain token shares its symbol", async () => {
-    const table: Record<string, () => Response> = { [`${COINBASE}/products`]: json([product("BTC-USD")]), [`${COINBASE}/currencies`]: json([currency("CASHCAT", "Cash Cat", [{ id: "solana", contract_address: "So1ana" }])]) };
-    const { run, news } = harness(COINBASE_MARKETS, table);
+    const table = bitget([pair("BTC")], [coin("CASHCAT", [{ chain: "SOL", contractAddress: "So1ana" }])]);
+    const { run, news } = harness(BITGET_MARKETS, table);
     await run();
-    table[`${COINBASE}/products`] = json([product("BTC-USD"), product("CASHCAT-USD")]);
+    table[SPOT] = ok([pair("BTC"), pair("CASHCAT")]);
     await run();
     expect(news()).toEqual([]);
   });
@@ -105,25 +110,21 @@ describe("an exchange's market list", () => {
   });
 
   it("marks a market tied by the symbol alone, and keeps none such from before the watcher began", async () => {
-    const PAIRS = "https://api.kraken.com/0/public/AssetPairs";
-    const pair = (base: string, status = "online") => ({ altname: `${base}USD`, wsname: `${base}/USD`, aclass_base: "currency", base, quote: "ZUSD", status });
-    const table: Record<string, () => Response> = { [PAIRS]: json({ error: [], result: { XXBTZUSD: pair("XBT"), CASHCATUSD: pair("CASHCAT") } }) };
-    const { run, news, venue } = harness(KRAKEN_MARKETS, table);
+    const table = bitget([pair("BTC")], [], [perp("CASHCAT")]);
+    const { run, news, venue } = harness(BITGET_MARKETS, table);
     await run();
     expect(venue()).toEqual([]);
-    table[PAIRS] = json({ error: [], result: { XXBTZUSD: pair("XBT"), CASHCATUSD: pair("CASHCAT"), PONSUSD: pair("PONS", "post_only") } });
+    table[PERPS] = ok([perp("CASHCAT"), perp("PONS", { symbolStatus: "listed" })]);
     await run();
-    expect(news().map(({ token, detail }) => [token, detail.status, detail.match, detail.unconfirmed, detail.candidates])).toEqual([[{ address: null, symbol: "PONS", name: null }, "pre-trading", "symbol", true, 1]]);
+    expect(news().map(({ token, detail }) => [token, detail.type, detail.status, detail.match, detail.unconfirmed, detail.candidates])).toEqual([[{ address: null, symbol: "PONS", name: null }, "perpetual", "pre-trading", "symbol", true, 1]]);
   });
 
   it("confirms a market tied by symbol with the name the same venue gave the asset in an announcement", async () => {
-    const PAIRS = "https://api.kraken.com/0/public/AssetPairs";
-    const pair = (base: string) => ({ altname: `${base}USD`, wsname: `${base}/USD`, aclass_base: "currency", status: "online" });
-    const announced: Found = { kind: "venue.announced", token: { address: PONS, symbol: "PONS", name: "Pons" }, source: "Kraken", ref: "https://blog.kraken.com/x", at: null, detail: { venueName: "Pons", match: "name" } };
-    const table: Record<string, () => Response> = { [PAIRS]: json({ error: [], result: { XXBTZUSD: pair("XBT") } }) };
-    const { run, news } = harness(KRAKEN_MARKETS, table, [known(PONS, "PONS", "Pons"), announced]);
+    const announced: Found = { kind: "venue.announced", token: { address: PONS, symbol: "PONS", name: "Pons" }, source: "Bitget", ref: "https://www.bitget.com/en/support/articles/1", at: null, detail: { venueName: "Pons", match: "name" } };
+    const table = bitget([pair("BTC")], []);
+    const { run, news } = harness(BITGET_MARKETS, table, [known(PONS, "PONS", "Pons"), announced]);
     await run();
-    table[PAIRS] = json({ error: [], result: { XXBTZUSD: pair("XBT"), PONSUSD: pair("PONS") } });
+    table[PERPS] = ok([perp("PONS")]);
     await run();
     expect(news().map(({ kind, token, detail }) => [kind, token.address, detail.match])).toEqual([["venue.listed", PONS, "name"]]);
   });

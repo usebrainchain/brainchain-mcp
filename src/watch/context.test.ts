@@ -121,6 +121,9 @@ describe("an event's context", () => {
     expect((await of(pool("2026-08-07T10:00:00.000Z")).done).counts).toBeUndefined();
     const pair = event({ kind: "robinhood.page_added", token: { address: null, symbol: "NOBODY", name: null }, source: "Robinhood", ref: "x", at: null, detail: {} });
     expect(await of(pair).done).not.toHaveProperty("counts");
+    // Kraken's post that a token is available for trading is a listing, not a step toward one: it asks for no counts.
+    const post = event({ kind: "venue.announced", token: { address: null, symbol: "NOBODY", name: null }, source: "Kraken", ref: "https://blog.kraken.com/x", at: null, detail: {} });
+    expect(await of(post).done).not.toHaveProperty("counts");
     expect(asked).toEqual(["bitgo.merged", "pool.created", "robinhood.page_added"]);
     expect(countsLine(counts)).toBe(" Of 90 earlier tokens with this step, 9 were listed by a venue within 30 days.");
     expect(countsLine({ ...counts, windows: [{ ...counts.windows[0]!, eligible: 4, unknown: 4 }] })).toBe("");

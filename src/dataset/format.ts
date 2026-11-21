@@ -16,18 +16,19 @@ export type Step = (typeof STEPS)[number];
  * What a step can be followed by: a venue taking the token. Bitstamp is not among them: its robots.txt closes its API to
  * automated clients, and its markets sitemap answers a script with a bot check, so nothing a daily build may read shows it.
  */
-export const OUTCOMES = ["robinhood_page", "robinhood_tradable", "kucoin", "gate", "coinbase", "kraken", "binance_futures", "upbit", "bithumb", "bitget"] as const;
+export const OUTCOMES = ["robinhood_page", "robinhood_tradable", "kucoin", "gate", "kraken", "binance_futures", "upbit", "bithumb", "bitget"] as const;
 export type Outcome = (typeof OUTCOMES)[number];
 
 /** The exchanges whose market lists the watcher reads, as its events name them, and the outcome each listing is. */
 export const VENUE_OUTCOMES: Readonly<Record<string, Outcome>> = {
-  Coinbase: "coinbase",
-  Kraken: "kraken",
   "Binance Futures": "binance_futures",
   Upbit: "upbit",
   Bithumb: "bithumb",
   Bitget: "bitget",
 };
+
+/** The exchanges whose announcements are listings, not steps toward one: Kraken posts that an asset is available for trading. */
+export const NOTICE_OUTCOMES: Readonly<Record<string, Outcome>> = { Kraken: "kraken" };
 
 /** The windows the base rates count in, in days. */
 export const WINDOWS = [7, 30, 90] as const;
@@ -178,8 +179,7 @@ export const OUTCOME_WORDS: Record<Outcome, string> = {
   robinhood_tradable: "a tradable pair in the list Robinhood serves to API clients",
   kucoin: "KuCoin listing it on Robinhood Chain",
   gate: "Gate listing it on Robinhood Chain",
-  coinbase: "a market on Coinbase Exchange",
-  kraken: "a market on Kraken",
+  kraken: "Kraken's post that it is available for trading",
   binance_futures: "a futures market on Binance Futures",
   upbit: "a market on Upbit",
   bithumb: "a market on Bithumb",

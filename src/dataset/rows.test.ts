@@ -124,7 +124,7 @@ describe("the exchanges' listings", () => {
     const rows = outcomesFromEvents(
       [
         listed("Binance Futures", { symbol: "PONS" }, { market: "PONSUSDT", match: "symbol", opens: "2026-09-06T06:45:00.000Z" }),
-        listed("Coinbase", { address: PONS, symbol: "PONS", name: "Pons" }, { market: "PONS-USD", match: "contract", venueName: "Pons" }, { baseline: undefined, observedAt: "2026-10-07T16:00:20.000Z" }),
+        listed("Bithumb", { address: PONS, symbol: "PONS", name: "Pons" }, { market: "KRW-PONS", match: "name", venueName: "Pons" }, { baseline: undefined, observedAt: "2026-10-08T08:00:20.000Z" }),
         listed("Upbit", { address: CASHCAT, symbol: "CASHCAT", name: "Cash Cat" }, { market: "KRW-CASHCAT", match: "name", venueName: "Cash Cat" }),
         listed("Bitget", { address: PONS, symbol: "PONS" }, { market: "PONSUSDT", match: "contract", opens: "2026-12-01T00:00:00.000Z" }, { baseline: undefined, observedAt: "2026-11-25T00:00:00.000Z" }),
         listed("Bitstamp", { address: PONS, symbol: "PONS" }, { market: "PONSUSD", match: "contract" }),
@@ -134,7 +134,7 @@ describe("the exchanges' listings", () => {
     );
     expect(rows.map(({ token, outcome, venue, at, by, atFrom, match, unconfirmed, name, tradingStart, market }) => ({ token, outcome, venue, at, by, atFrom, match, unconfirmed, name, tradingStart, market }))).toEqual([
       { token: PONS, outcome: "binance_futures", venue: "Binance Futures", at: "2026-09-06T06:45:00.000Z", by: undefined, atFrom: "source", match: "symbol", unconfirmed: true, name: undefined, tradingStart: "2026-09-06T06:45:00.000Z", market: "PONSUSDT" },
-      { token: PONS, outcome: "coinbase", venue: "Coinbase", at: "2026-10-07T16:00:20.000Z", by: undefined, atFrom: "observed", match: "contract", unconfirmed: undefined, name: "Pons", tradingStart: undefined, market: "PONS-USD" },
+      { token: PONS, outcome: "bithumb", venue: "Bithumb", at: "2026-10-08T08:00:20.000Z", by: undefined, atFrom: "observed", match: "name", unconfirmed: undefined, name: "Pons", tradingStart: undefined, market: "KRW-PONS" },
       { token: CASHCAT, outcome: "upbit", venue: "Upbit", at: undefined, by: BASELINE, atFrom: undefined, match: "name", unconfirmed: undefined, name: "Cash Cat", tradingStart: undefined, market: "KRW-CASHCAT" },
       // Bitget gives a start after the sighting: the market was public when it was seen, and trading opens later.
       { token: PONS, outcome: "bitget", venue: "Bitget", at: "2026-11-25T00:00:00.000Z", by: undefined, atFrom: "observed", match: "contract", unconfirmed: undefined, name: undefined, tradingStart: "2026-12-01T00:00:00.000Z", market: "PONSUSDT" },
@@ -142,15 +142,21 @@ describe("the exchanges' listings", () => {
   });
 
   it("confirm a market tied by symbol with the name the same venue gave it in an announcement, and no other venue's", () => {
-    const announced = (source: string) => event("venue.announced", { address: PONS, symbol: "PONS", name: "Pons" }, { source, at: "2026-09-25T15:00:00.000Z", detail: { venueName: "Pons", match: "name" } });
-    const market = listed("Kraken", { symbol: "PONS" }, { market: "PONSUSD", match: "symbol" });
-    expect(outcomesFromEvents([announced("Kraken"), market], traced, none)).toMatchObject([{ outcome: "kraken", match: "name", name: "Pons" }]);
-    expect(outcomesFromEvents([announced("Bitget"), market], traced, none)).toMatchObject([{ outcome: "kraken", match: "symbol", unconfirmed: true }]);
+    const announced = (source: string) => event("venue.announced", { address: PONS, symbol: "PONS", name: "Pons" }, { source, at: "2026-09-07T10:00:00.000Z", detail: { venueName: "Pons", match: "name" } });
+    const market = listed("Bitget", { symbol: "PONS" }, { market: "PONSUSDT", match: "symbol" });
+    expect(outcomesFromEvents([announced("Bitget"), market], traced, none)).toMatchObject([{ outcome: "bitget", match: "name", name: "Pons" }]);
+    expect(outcomesFromEvents([announced("Bithumb"), market], traced, none)).toMatchObject([{ outcome: "bitget", match: "symbol", unconfirmed: true }]);
+  });
+
+  it("take Kraken's post that a token is available for trading as its listing, dated by the post, and as no step", () => {
+    const post = event("venue.announced", { address: PONS, symbol: "PONS", name: "pons" }, { source: "Kraken", ref: "https://blog.kraken.com/product/asset-listings/pons-is-available-for-trading", at: "2026-09-28T20:21:25.000Z", detail: { venueName: "pons", match: "name" } });
+    expect(outcomesFromEvents([post], traced, none)).toMatchObject([{ token: PONS, outcome: "kraken", venue: "Kraken", at: "2026-09-28T20:21:25.000Z", atFrom: "source", match: "name", backfill: true }]);
+    expect(stepsFromEvents([post], new Map())).toEqual([]);
   });
 
   it("make an announcement naming a token a step, dated by the venue", () => {
-    const rows = stepsFromEvents([event("venue.announced", { address: PONS, symbol: "PONS" }, { source: "Coinbase", ref: "https://status.exchange.coinbase.com/incidents/2", at: "2026-10-06T19:09:00.000Z" }), event("venue.announced", { symbol: "CASHCAT" }, { source: "Bithumb" })], new Map());
-    expect(rows).toEqual([{ token: PONS, step: "announcement", source: "Coinbase", at: "2026-10-06T19:09:00.000Z", atFrom: "source", ref: "https://status.exchange.coinbase.com/incidents/2", observedAt: BASELINE, backfill: true }]);
+    const rows = stepsFromEvents([event("venue.announced", { address: PONS, symbol: "PONS" }, { source: "Bitget", ref: "https://www.bitget.com/en/support/articles/2", at: "2026-09-07T10:00:00.000Z" }), event("venue.announced", { symbol: "CASHCAT" }, { source: "Bithumb" })], new Map());
+    expect(rows).toEqual([{ token: PONS, step: "announcement", source: "Bitget", at: "2026-09-07T10:00:00.000Z", atFrom: "source", ref: "https://www.bitget.com/en/support/articles/2", observedAt: BASELINE, backfill: true }]);
   });
 });
 

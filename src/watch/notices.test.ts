@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { EventLog, type Found } from "./events.js";
 import { universeFrom, universeOf } from "./exchanges.js";
 import { Requests } from "./http.js";
-import { BITGET_NOTICES, BITHUMB_NOTICES, COINBASE_STATUS, firstUpdate, KRAKEN_BLOG, matchNotice, namedIn, noticePoller, type NoticeSource } from "./notices.js";
+import { BITGET_NOTICES, BITHUMB_NOTICES, KRAKEN_BLOG, matchNotice, namedIn, noticePoller, type NoticeSource } from "./notices.js";
 import { StateFile } from "./state.js";
 import { Watcher } from "./watcher.js";
 
@@ -85,22 +85,6 @@ describe("a venue's announcements", () => {
     expect(news().map(({ token, detail }) => [token, detail.unconfirmed])).toEqual([[{ address: null, symbol: "PONS", name: null }, true]]);
   });
 
-  it("read Coinbase Exchange's status feed, dated by a pair's first update and named by it", async () => {
-    const incident = (pair: string, name: string, id: number, updates: string) =>
-      `<entry><id>tag:status.exchange.coinbase.com,2005:Incident/${id}</id><published>2026-10-07T16:30:00-07:00</published><updated>2026-10-07T16:30:00-07:00</updated><link rel="alternate" type="text/html" href="https://status.exchange.coinbase.com/incidents/${id}"/><title>${pair} Markets Open</title><content type="html">${updates
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")}</content></entry>`;
-    const pons = incident("PONS-USD", "Pons", 2, "<p><small>Oct <var data-var='date'> 7</var>, <var data-var='time'>09:15</var> PDT</small><br><strong>Update</strong> - Our PONS-USD trading pair is in full-trading mode.</p><p><small>Oct <var data-var='date'> 6</var>, <var data-var='time'>12:09</var> PDT</small><br><strong>Monitoring</strong> - Spot trading for Pons (PONS) will go live on 7 October 2026. The Robinhood network contract address for Pons (PONS) is 0x39dbed3a2bd333467115de45665cc57f813c4571.</p>");
-    const feed = (...entries: string[]) => () => new Response(`<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">${entries.join("")}<entry><title>Delayed Sends - Hedera</title></entry></feed>`);
-    const table: Record<string, () => Response> = { [COINBASE_STATUS.url]: feed(incident("PEARL-USD", "Pearl", 1, "<p>Spot trading for Pearl (PEARL)</p>")) };
-    const { run, news } = harness(COINBASE_STATUS, table);
-    await run();
-    table[COINBASE_STATUS.url] = feed(pons, incident("PEARL-USD", "Pearl", 1, "<p>Spot trading for Pearl (PEARL)</p>"));
-    await run();
-    expect(news().map(({ token, source, ref, at, detail }) => [token.address, source, ref, at, detail.title, detail.match])).toEqual([[PONS, "Coinbase", "https://status.exchange.coinbase.com/incidents/2", "2026-10-06T19:09:00.000Z", "PONS-USD Markets Open", "contract"]]);
-    expect(firstUpdate("Dec 30 , 23:00 PST Monitoring", Date.parse("2027-01-02T00:00:00Z"))).toBe(Date.parse("2026-12-31T07:00:00Z"));
-  });
-
   it("read Bithumb's market-added notices in Korean time, by symbol alone", async () => {
     const notice = (id: number, category: string, title: string, published_at: string) => ({ categories: [category], title, pc_url: `https://feed.bithumb.com/notice/${id}`, published_at, modified_at: published_at });
     const table: Record<string, () => Response> = { [BITHUMB_NOTICES.url]: json([notice(1, "마켓 추가", "키네틱(KNTQ) 원화 마켓 추가", "2026-11-19 11:58:59")]) };
@@ -129,6 +113,6 @@ describe("a venue's announcements", () => {
     const { run, status } = harness(BITGET_NOTICES, { [BITGET]: () => new Response("<html>busy</html>") });
     await run();
     expect(status().failures).toBe(1);
-    expect(() => COINBASE_STATUS.parse("<html>busy</html>")).toThrow("did not answer with its feed");
+    expect(() => KRAKEN_BLOG.parse("<html>busy</html>")).toThrow("did not answer with its feed");
   });
 });
