@@ -18,7 +18,7 @@ npm run check -- --dry --mandate my-mandate.json --sell USDG --buy WETH --amount
 
 `--sample` runs the checks in Pyodide, the interpreter BrainChain's sandbox uses, on the six recorded quotes in [`fixtures/quotes`](fixtures/quotes) against the sample mandate. It exits 0 because it shows six expected verdicts, four of them refusals. With `--quote` it also asks BrainChain's grade route its price without paying.
 
-`--dry` runs every free check and needs no key. It reads the mandate and the trade as a paid check would, then reads on chain each token's decimals and symbol, what the wallet holds of the sell token, and its USDC on Base. It checks the size of the checks and asks the grade route its price without paying. Then it runs the checks with your mandate on a quote recorded for the sample wallet, since a fresh quote costs 0.01 USDC. Rules about another wallet, chain or token fail on that quote, as they should. The trade flags are optional with `--dry`.
+`--dry` runs every free check and needs no key. It reads the mandate and the trade as a paid check would, then reads on chain each token's decimals and symbol, what the wallet holds of the sell token and of ETH for gas, and its USDC on Base. It checks the size of the checks and asks the grade route its price without paying. Then it runs the checks with your mandate on a quote recorded for the sample wallet, since a fresh quote costs 0.01 USDC. Rules about another wallet, chain or token fail on that quote, as they should. `--dry` takes all three of `--sell`, `--buy` and `--amount`, or none of them to check the mandate alone.
 
 ## Run a paid check
 
@@ -49,6 +49,7 @@ A paid check spends nothing on a trade it can refuse first. Before paying 0x, it
 - refuses a slippage over the mandate's `maxSlippageBps`;
 - reads each token's `decimals()` and `symbol()` on chain, and refuses a mandate that says otherwise, naming its file;
 - checks that the wallet holds the amount it sells;
+- checks that the wallet holds ETH on the mandate's chain for the gas of the approval and the trade, at the node's current gas price;
 - checks that the wallet holds at least 0.26 USDC on Base, and says how much is missing;
 - checks that the checks fit the grade route;
 - checks that the chain's node answers with the mandate's chain id.
@@ -60,7 +61,7 @@ Once the quote arrives, it:
 - reads 0x's Settler registry at the quote's block;
 - runs the checks itself, and pays BrainChain only if every rule passes.
 
-The paid run prints the SHA-256 of the checks' template and of the mandate, which `verify` prints too. After the verdict it prints the trade and every rule line as BrainChain's run printed them, then the transactions to sign. It prints them only when BrainChain accepted the grade this run paid for and printed the same rule lines as the local run. When the wallet has not yet approved the sell token, the first is the approval, to AllowanceHolder for exactly the amount sold, and the second is the trade. Each is JSON with `to`, `data`, `value` and `chainId`, ready to sign. A trade whose gas at 0x's price could cost more than 0.0001 ETH is not printed.
+The paid run prints the SHA-256 of the checks' template and of the mandate, which `verify` prints too. After the verdict it prints the trade and every rule line as BrainChain's run printed them, then the transactions to sign. It prints them only when BrainChain accepted the grade this run paid for and printed the same rule lines as the local run. When the wallet has not yet approved the sell token, the first is the approval, to AllowanceHolder for exactly the amount sold, and the second is the trade. Each is JSON with `to`, `data`, `value` and `chainId`, ready to sign. The trade's `gas` and `gasPrice` are 0x's estimates, and a wallet may set its own. A trade whose gas at 0x's price could cost more than 0.0001 ETH is not printed.
 
 | Exit code | `npm run check` | `npm run verify` |
 | --- | --- | --- |
@@ -103,8 +104,9 @@ The checks read the trade from the calldata, the part the wallet signs: Allowanc
 
 The grade has two levels: every rule passes, or one does not. A run that fails is refused at full confidence, whatever the models say. A run that passes is read by two models: Jev, the model BrainChain grades with, and a second one. BrainChain accepts the trade when the lower of their two probabilities reaches its bar, 80% today.
 
-## What it does not check
+## What it does not check or protect
 
+- **Trades placed ahead of yours.** The accepted quote and its transaction are public from the moment BrainChain accepts the trade, before the agent signs it. Anyone can see the trade and try to trade ahead of it. The minimum out bounds what they can take, since the trade reverts rather than pay out less. Submit the transaction through a private RPC, and keep the slippage tight.
 - **Whether the trade is a good one.** The mandate bounds the minimum out against 0x's own quote, so a poor price that 0x quotes still passes within the slippage. A price floor would need a market price, and the sandbox has no network.
 - **The registry read and the time of receipt.** Before the grade, the agent reads `ownerOf(2)` and `prev(2)` on 0x's Settler registry (`0x00000000000004533Fe15556B1E086BB1A72cEae`) at the block 0x quoted at, and records when the quote arrived. On a chain with one Settler, `prev(2)` reverts and the previous Settler is recorded as the zero address, which never counts. The checks hold both to the signed quote but cannot repeat the read. Anyone can repeat it from the record, at that block.
 - **Freshness at grading time.** 0x asks verifiers to reject a signature more than 60 seconds old. The checks give the same answer whenever they run, so anyone can run them again from the record, which rules out the grading clock. The agent's client enforces the 60 seconds when the quote arrives instead. If a verdict outlasts the quote, the transaction can revert; it cannot pay out less than the checked minimum.
@@ -183,7 +185,7 @@ A delivery is about 8,000 characters and the checks are about 20,000, inside the
 
 ## Measured
 
-Twelve checks were run through the grade route on 2026-11-21, each paid for: 0.25 USDC to BrainChain per grade and 0.01 USDC to 0x for each quote bought, all on Base. Every quote was bought through 0x's gateway minutes before it was graded. The requests, the full replies and what the checks printed are in [`measured.json`](measured.json), six of the earlier deliveries in [`fixtures/quotes`](fixtures/quotes), and four records in [`fixtures/records`](fixtures/records).
+Thirteen checks of ours were run through the grade route on 2026-11-21, each paid for: 0.25 USDC to BrainChain per grade and 0.01 USDC to 0x for each quote bought, all on Base. Every quote was bought through 0x's gateway minutes before it was graded. The requests, the full replies and what the checks printed are in [`measured.json`](measured.json), six of the earlier deliveries in [`fixtures/quotes`](fixtures/quotes), and four records in [`fixtures/records`](fixtures/records).
 
 This version's delivery, one base64 string, through `npm run check` and a tampered copy of a quote:
 
@@ -191,6 +193,7 @@ This version's delivery, one base64 string, through `npm run check` and a tamper
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Command line | Sell 5 USDG for WETH at 50 bps slippage | Accepted | Accepted, 98% | 98% | 100% | 8.8 s | [1004](https://usebrainchain.com/decision?id=1004) |
 | Command line | The same trade again, with the run's rule lines and the approval printed | Accepted | Accepted, 98% | 98% | 100% | 40.1 s | [1007](https://usebrainchain.com/decision?id=1007) |
+| At the maximum | The same trade at 100 bps slippage, the mandate's maximum | Accepted | Accepted, 98% | 98% | 100% | 7.4 s | [1017](https://usebrainchain.com/decision?id=1017) |
 | Tampered | 1004's quote with one byte of its route changed and its body digest recomputed, sent without the client's own checks, which refuse it | Refused on signature | Refused on signature | 0% | 0% | 5.9 s | [1005](https://usebrainchain.com/decision?id=1005) |
 
 Decision [1003](https://usebrainchain.com/decision?id=1003), the same trade as 1004, passed every rule and was refused at 55% by Jev under an earlier wording of the levels.
