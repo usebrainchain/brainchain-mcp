@@ -1,8 +1,8 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { EventLog } from "./events.js";
 import { Requests } from "./http.js";
@@ -123,6 +123,66 @@ describe("Robinhood's page names", () => {
     now += NAME_READS.unnamed;
     await run();
     expect(status().failures).toBe(0);
+  });
+
+  describe("when the watcher stops", () => {
+    const symbols = Array.from({ length: NAME_READS.perPoll }, (_, i) => `T${i}`);
+    const saved = (dir: string) => (JSON.parse(readFileSync(join(dir, "state.json"), "utf8")) as { sources: Record<string, NamesState> }).sources["robinhood-names"];
+
+    it("ends the turn after the page in hand, without waiting out the gap", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "brainchain-watch-"));
+      const asked: string[] = [];
+      let stopped: Promise<void> | undefined;
+      const fetchImpl = (async (input: RequestInfo | URL) => {
+        asked.push(String(input));
+        await new Promise((resolve) => setImmediate(resolve));
+        stopped ??= watcher.stop();
+        return titled("Token T0", "T0")();
+      }) as typeof fetch;
+      const poller = robinhoodNames(() => symbols, fetchImpl);
+      const watcher = new Watcher({ log: new EventLog(dir), state: new StateFile(dir), pollers: [poller], say: () => {} });
+
+      const started = Date.now();
+      watcher.start();
+      await vi.waitFor(() => expect(stopped).toBeDefined());
+      await stopped;
+      expect(Date.now() - started).toBeLessThan(NAME_READS.gap);
+      expect(asked).toEqual([page("T0")]);
+      expect(saved(dir)).toEqual({ names: { T0: { name: "Token T0", at: expect.any(String) } }, failed: {}, baselined: true });
+    });
+
+    it("leaves a page it cuts off unread, neither named nor failed, and reads it after the restart", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "brainchain-watch-"));
+      const asked: string[] = [];
+      let stopped: Promise<void> | undefined;
+      const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        asked.push(String(input));
+        if (asked.length === 1) return titled("Token T0", "T0")();
+        // The second page is in flight when the stop comes, and the stop aborts it as it would a real request.
+        await new Promise((resolve) => setImmediate(resolve));
+        stopped = watcher.stop();
+        const signal = init!.signal!;
+        return new Promise<Response>((_, reject) => {
+          if (signal.aborted) reject(signal.reason);
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      }) as typeof fetch;
+      const poller = robinhoodNames(() => symbols, fetchImpl, { sleep: async () => {} });
+      const watcher = new Watcher({ log: new EventLog(dir), state: new StateFile(dir), pollers: [poller], say: () => {} });
+
+      watcher.start();
+      await vi.waitFor(() => expect(stopped).toBeDefined());
+      await stopped;
+      expect(asked).toEqual([page("T0"), page("T1")]);
+      expect(saved(dir)).toEqual({ names: { T0: { name: "Token T0", at: expect.any(String) } }, failed: {}, baselined: true });
+
+      const { requests, asked: again } = routes(Object.fromEntries(symbols.map((symbol) => [page(symbol), titled(`Token ${symbol}`, symbol)])));
+      const restarted = robinhoodNames(() => symbols, requests.fetchFor("robinhood-names"), { sleep: async () => {} });
+      const state = new StateFile(dir);
+      await new Watcher({ log: new EventLog(dir), state, pollers: [restarted], say: () => {} }).runOnce(restarted);
+      expect(again.map(({ url }) => url)).toEqual(symbols.slice(1).map(page));
+      expect((state.source("robinhood-names") as NamesState).names!.T1).toEqual({ name: "Token T1", at: expect.any(String) });
+    });
   });
 });
 

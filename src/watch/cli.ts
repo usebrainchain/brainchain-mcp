@@ -376,6 +376,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   const stop = async () => {
     if (stopping) return;
     stopping = true;
+    const stoppedAt = Date.now();
     say("Stopping: finishing the reads in progress and saving the state.");
     served?.close();
     deliveries.stop();
@@ -389,6 +390,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     }
     log.close();
     release();
+    say(`Stopped in ${((Date.now() - stoppedAt) / 1000).toFixed(1)} s with the state saved.`);
     process.exit(0);
   };
   process.on("SIGINT", stop);
