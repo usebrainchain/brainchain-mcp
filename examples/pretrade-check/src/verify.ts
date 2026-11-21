@@ -175,7 +175,9 @@ export async function verify(target: string, mandateFile: string, io: VerifyIo):
     io.log(
       earlier
         ? `\nVerdict: earlier form. This decision was made before the delivery became one string, so this version cannot vouch for it (failed: ${failed.join(", ")}).`
-        : `\nVerdict: mismatch on ${failed.join(", ")}. Do not rely on this decision.`,
+        : failed.join() === "mandate"
+          ? "\nVerdict: mismatch on mandate. The mandate you gave differs from the one these checks carried."
+          : `\nVerdict: mismatch on ${failed.join(", ")}. Do not rely on this decision.`,
     );
   } else if (skipped) {
     io.log("\nVerdict: not verified. BrainChain publishes the delivery only for work it accepts, so this decision cannot be run again.");

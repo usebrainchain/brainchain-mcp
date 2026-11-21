@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { checkFunds, checkHolding, checkTokens } from "../src/preflight.ts";
+import { checkFunds, checkGas, checkHolding, checkTokens } from "../src/preflight.ts";
 import { USDC_BASE } from "../src/shared.ts";
 
 import { MANDATE, node } from "./helpers.ts";
@@ -39,5 +39,17 @@ describe("what the wallet holds", () => {
     await expect(checkHolding(MANDATE, USDG, 5_000_000n, MANDATE.wallet, node(onChain))).resolves.toBe("21.639954 USDG on chain 4663, enough to sell 5 USDG");
     await expect(checkHolding(MANDATE, USDG, 22_000_000n, MANDATE.wallet, node(onChain))).rejects.toThrow("holds 21.639954 USDG on chain 4663, and the trade sells 22 USDG. Nothing was paid.");
     await expect(checkHolding(MANDATE, ETH, 10n ** 15n, MANDATE.wallet, node({}, { balance: 298_803_918_768_000n }))).rejects.toThrow("holds 0.000298803918768 ETH on chain 4663, and the trade sells 0.001 ETH.");
+  });
+});
+
+describe("the wallet's ETH for gas", () => {
+  it("covers the approval and the trade at the node's gas price, besides any ETH sold", async () => {
+    await expect(checkGas(MANDATE, MANDATE.wallet, node({}, { balance: 298_803_918_768_000n, gasPrice: 22_500_000n }))).resolves.toBe(
+      "0.000298803918768 ETH on chain 4663, about 0.0000135 needed for the gas of the approval and the trade",
+    );
+    await expect(checkGas(MANDATE, MANDATE.wallet, node({}, { balance: 10_000_000_000_000n, gasPrice: 22_500_000n }))).rejects.toThrow(
+      "holds 0.00001 ETH on chain 4663, and the approval and the trade need about 0.0000135 ETH for gas at the current price. Add 0.0000035 ETH on chain 4663. Nothing was paid.",
+    );
+    await expect(checkGas(MANDATE, MANDATE.wallet, node({}, { balance: 10n ** 15n, gasPrice: 22_500_000n }), 10n ** 15n)).rejects.toThrow("besides the 0.001 ETH it sells. Add 0.0000135 ETH on chain 4663.");
   });
 });

@@ -2,7 +2,7 @@
 // wallet can pay for a check.
 import { basename } from "node:path";
 
-import { erc20Abi, formatUnits, type Address, type PublicClient } from "viem";
+import { erc20Abi, formatEther, formatUnits, type Address, type PublicClient } from "viem";
 
 import type { Mandate } from "./mandate.ts";
 import { messageOf, same, USDC_BASE } from "./shared.ts";
@@ -53,4 +53,20 @@ export async function checkHolding(mandate: Mandate, sell: Mandate["tokens"][num
   const shown = (units: bigint) => `${formatUnits(units, sell.decimals)} ${sell.symbol}`;
   if (held < amount) throw new Error(`The wallet ${wallet} holds ${shown(held)} on chain ${mandate.chain}, and the trade sells ${shown(amount)}. Nothing was paid.`);
   return `${shown(held)} on chain ${mandate.chain}, enough to sell ${shown(amount)}`;
+}
+
+/** Gas an approval and a trade take together, with room to spare: the measured trades took 250,000 to 460,000. */
+const GAS_FOR_TRADE = 600_000n;
+
+/** Whether the wallet holds the chain's ETH for the gas of the approval and the trade, besides any ETH it sells. */
+export async function checkGas(mandate: Mandate, wallet: Address, client: PublicClient, selling = 0n): Promise<string> {
+  const [held, price] = await Promise.all([client.getBalance({ address: wallet }), client.getGasPrice()]).catch((error: unknown) => {
+    throw new Error(`The wallet's ETH and the gas price could not be read on chain ${mandate.chain}: ${messageOf(error)}`, { cause: error });
+  });
+  const gas = GAS_FOR_TRADE * price;
+  const sold = selling > 0n ? `, besides the ${formatEther(selling)} ETH it sells` : "";
+  if (held < gas + selling) {
+    throw new Error(`The wallet ${wallet} holds ${formatEther(held)} ETH on chain ${mandate.chain}, and the approval and the trade need about ${formatEther(gas)} ETH for gas at the current price${sold}. Add ${formatEther(gas + selling - held)} ETH on chain ${mandate.chain}. Nothing was paid.`);
+  }
+  return `${formatEther(held)} ETH on chain ${mandate.chain}, about ${formatEther(gas)} needed for the gas of the approval and the trade${sold}`;
 }

@@ -7,7 +7,7 @@ import { encodeFunctionData, erc20Abi } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 import { DEFAULT_DESK, GRADE_PAYMENT, gradeId, type Verdict } from "../src/desk.ts";
-import { describeTrade, loadAccount, Refusal, report, run, toSign, tradeOf, unfillable, type Io, untrustedReasons } from "../src/main.ts";
+import { describeTrade, loadAccount, noLiquidity, Refusal, report, run, toSign, tradeOf, unfillable, type Io, untrustedReasons } from "../src/main.ts";
 import { checksFor, CHECKS_TEMPLATE, mandateText, pretradeCheck, sha256 } from "../src/request.ts";
 import { runLocally, type Run } from "../src/sandbox.ts";
 import { GATEWAY, quoteQuery, type SignedQuote } from "../src/zerox.ts";
@@ -67,6 +67,21 @@ describe("a quote that passes the checks", () => {
     expect(unfillable(recorded("native").quote)).toBe("The wallet holds 298803918768000 base units of 0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee, and the trade needs 1000000000000000. The transaction would revert.");
     expect(unfillable({ ...quote, response: { ...quote.response, body: '{"liquidityAvailable":false}' } })).toBe("0x found no liquidity for this trade.");
     expect(unfillable(quote)).toBeUndefined();
+  });
+});
+
+describe("a quote 0x has no liquidity for", () => {
+  const t = tradeOf(MANDATE, MANDATE.wallet, { sell: "USDG", buy: "WETH", amount: "5" });
+  const tokens = { "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168": {}, "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73": {} };
+
+  it("names another chain where both tokens are contracts, as for a mandate set to the wrong chain", async () => {
+    const io = { connect: async () => node(tokens) };
+    await expect(noLiquidity(t, io)).resolves.toBe("0x found no liquidity for this trade on Robinhood Chain, chain 4663. Both tokens are also contracts on Base, chain 8453: if the trade is meant for that chain, set chain to 8453 in the mandate.");
+  });
+
+  it("names only the chain it asked about when it can tell nothing more", async () => {
+    await expect(noLiquidity(t, { connect: async () => node({}) })).resolves.toBe("0x found no liquidity for this trade on Robinhood Chain, chain 4663.");
+    await expect(noLiquidity(t, { connect: async () => Promise.reject(new Error("down")) })).resolves.toBe("0x found no liquidity for this trade on Robinhood Chain, chain 4663.");
   });
 });
 
@@ -149,7 +164,7 @@ describe("the command line's exit codes", { timeout: 90_000 }, () => {
   // the payments it signs.
   const account = { ...privateKeyToAccount(generatePrivateKey()), address: MANDATE.wallet };
   const tokens = { "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168": { decimals: 6, symbol: "USDG", balanceOf: 21_639_954n }, "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73": { decimals: 18, symbol: "WETH" } };
-  const robinhood = node({ ...tokens, "0x00000000000004533Fe15556B1E086BB1A72cEae": { ownerOf: registry.settler, prev: registry.previous } }, { block: registry.block });
+  const robinhood = node({ ...tokens, "0x00000000000004533Fe15556B1E086BB1A72cEae": { ownerOf: registry.settler, prev: registry.previous } }, { block: registry.block, balance: 298_803_918_768_000n });
   const base = (usdc: bigint) => node({ [USDC_BASE]: { balanceOf: usdc } });
   const challenge = (accepts: Record<string, unknown>[]) => ({ "payment-required": Buffer.from(JSON.stringify({ x402Version: 2, resource: { url: "https://x.test/" }, accepts })).toString("base64") });
   const usdc = { scheme: "exact", network: "eip155:8453", asset: GRADE_PAYMENT.asset, maxTimeoutSeconds: 300, extra: { name: "USD Coin", version: "2" } };
@@ -345,7 +360,7 @@ describe("a dry run", { timeout: 90_000 }, () => {
       }) as typeof fetch,
       now: () => quote.receivedAt * 1000,
       env: {},
-      connect: async (chainId) => (chainId === 8453 ? node({ [USDC_BASE]: { balanceOf: 300_000n } }) : node(tokens)),
+      connect: async (chainId) => (chainId === 8453 ? node({ [USDC_BASE]: { balanceOf: 300_000n } }) : node(tokens, { balance: 298_803_918_768_000n })),
       account: async () => {
         throw new Error("a dry run reads no key");
       },
@@ -356,12 +371,23 @@ describe("a dry run", { timeout: 90_000 }, () => {
   it("checks everything free, with no key, pays nothing and exits 0", async () => {
     const s = setup();
     expect(await run(["--dry", "--mandate", MANDATE_FILE, "--sell", "USDG", "--buy", "WETH", "--amount", "5"], s.io)).toBe(0);
-    for (const step of ["mandate", "trade", "checks", "node", "tokens", "holds", "funds", "route"]) expect(s.out()).toMatch(new RegExp(`^ {2}ok {4}${step}: `, "m"));
+    for (const step of ["mandate", "trade", "checks", "node", "tokens", "holds", "gas", "funds", "route"]) expect(s.out()).toMatch(new RegExp(`^ {2}ok {4}${step}: `, "m"));
+    expect(s.out()).toContain("ok    gas: 0xd937E50Ee21E66f7640F1a7887399e63055290fe holds 0.000298803918768 ETH on chain 4663, about 0.0000135 needed for the gas of the approval and the trade");
     expect(s.out()).toContain("ok    route: BrainChain would grade this request for 0.25 USDC on Base, 0.25 USDG on Robinhood Chain");
     expect(s.out()).toContain("  13 of 13 rules pass.");
     expect(s.out()).toContain("Nothing was paid.");
     expect(s.calls).toEqual([`POST ${DEFAULT_DESK}/x402/grades`]);
     expect(s.errors).toEqual([]);
+  });
+
+  it.each([
+    [["--amount", "5"], "--dry checks a trade with all of --sell, --buy and --amount, or none of them; --sell and --buy are missing."],
+    [["--sell", "USDG", "--buy", "WETH"], "--dry checks a trade with all of --sell, --buy and --amount, or none of them; --amount is missing."],
+    [["--slippage-bps", "50"], "--dry checks a trade with all of --sell, --buy and --amount, or none of them; --sell, --buy and --amount are missing."],
+  ])("says exactly which trade flags are missing for %j", async (flags, message) => {
+    const s = setup();
+    expect(await run(["--dry", "--mandate", MANDATE_FILE, ...flags], s.io)).toBe(1);
+    expect(s.errors).toEqual([message]);
   });
 
   it("checks the mandate alone when no trade is given", async () => {

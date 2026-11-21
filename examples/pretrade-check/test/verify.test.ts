@@ -191,6 +191,7 @@ describe("verify, on records of this version", { timeout: 90_000 }, () => {
     const other = recordOf(elsewhere, run);
     const a = await verified(other.url, other.routes);
     expect(a.marks).toMatchObject({ checks: "ok", mandate: "FAIL", rerun: "skip" });
+    expect(a.out).toContain("Verdict: mismatch on mandate. The mandate you gave differs from the one these checks carried.");
     const edited = { ...request, checks: { language: "python" as const, code: request.checks.code.replace("_FRESH_SECONDS = 60", "_FRESH_SECONDS = 600") } };
     const changed = recordOf(edited, run);
     const b = await verified(changed.url, changed.routes);

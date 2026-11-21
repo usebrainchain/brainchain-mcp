@@ -87,15 +87,17 @@ const CALLS: Abi = [...erc20Abi, ...parseAbi(["function ownerOf(uint256) view re
 
 /**
  * A node that answers eth_call from a table of contract address, then function name, then result; any other call
- * reverts. `balance` is every address's native balance.
+ * reverts. The table's addresses have code, `balance` is every address's ETH and `gasPrice` the node's gas price.
  */
-export function node(answers: Record<string, Record<string, unknown>>, options: { block?: number; balance?: bigint } = {}): PublicClient {
+export function node(answers: Record<string, Record<string, unknown>>, options: { block?: number; balance?: bigint; gasPrice?: bigint } = {}): PublicClient {
   const table = Object.fromEntries(Object.entries(answers).map(([address, results]) => [address.toLowerCase(), results]));
   return createPublicClient({
     transport: custom({
       async request({ method, params }: { method: string; params: unknown[] }) {
         if (method === "eth_blockNumber") return numberToHex(options.block ?? 1);
         if (method === "eth_getBalance") return numberToHex(options.balance ?? 0n);
+        if (method === "eth_gasPrice") return numberToHex(options.gasPrice ?? 22_500_000n);
+        if (method === "eth_getCode") return (params[0] as string).toLowerCase() in table ? "0x6080" : "0x";
         if (method !== "eth_call") throw new Error(`no ${method} here`);
         const { to, data } = params[0] as { to: string; data: Hex };
         const { functionName } = decodeFunctionData({ abi: CALLS, data });

@@ -11,16 +11,18 @@ import { privateKeyToAccount } from "viem/accounts";
 import { deskUrl, payGrade, priceOf, type Paid, type Verdict } from "./desk.ts";
 import { parseMandate, readMandate, tokenOf, type Mandate } from "./mandate.ts";
 import { checksFor, CHECKS_TEMPLATE, mandateText, MAX_CHECKS, pretradeCheck, sha256, type GradeRequest, type Registry } from "./request.ts";
-import { checkFunds, checkHolding, checkTokens } from "./preflight.ts";
+import { checkFunds, checkGas, checkHolding, checkTokens } from "./preflight.ts";
 import { ruleLines, runLines, runLocally, type Run } from "./sandbox.ts";
-import { same } from "./shared.ts";
+import { listOf, same } from "./shared.ts";
 import { fetchRecord, recordState } from "./verify.ts";
-import { ALLOWANCE_HOLDER, buyQuote, checkQuote, connect, readSettlers, zeroxPayer, type SignedQuote, type Trade } from "./zerox.ts";
+import { ALLOWANCE_HOLDER, buyQuote, checkQuote, connect, RPCS, readSettlers, zeroxPayer, type SignedQuote, type Trade } from "./zerox.ts";
 
 const CHAINS: Record<number, string> = { 4663: "Robinhood Chain", 8453: "Base" };
 export const SAMPLE_MANDATE = fileURLToPath(new URL("../fixtures/mandate.json", import.meta.url));
 const SAMPLES = fileURLToPath(new URL("../fixtures/quotes/", import.meta.url));
 const BASE = 8453;
+/** 0x's placeholder for a chain's native token. */
+const NATIVE = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 /** The most gas a transaction printed here may cost, at 0x's gas price: about 15 times what the measured quotes cost. */
 export const MAX_GAS_COST = 100_000_000_000_000n;
 
@@ -106,7 +108,10 @@ export const describeTrade = (mandate: Mandate, trade: Trade): string => {
  */
 export function tradeOf(mandate: Mandate, wallet: `0x${string}`, args: { sell?: string; buy?: string; amount?: string; slippage?: string }): Trade {
   const listed = mandate.tokens.map((t) => t.symbol).join(", ");
-  if (!args.sell || !args.buy || !args.amount) throw new Error("A trade needs --sell, --buy and --amount. See --help.");
+  if (!args.sell || !args.buy || !args.amount) {
+    const missing = (["sell", "buy", "amount"] as const).filter((name) => !args[name]).map((name) => `--${name}`);
+    throw new Error(`A trade needs --sell, --buy and --amount; ${listOf(missing)} ${missing.length === 1 ? "is" : "are"} missing.`);
+  }
   const sell = tokenOf(mandate, args.sell);
   if (!sell) throw new Refusal(`The mandate does not list ${args.sell}, so it cannot be sold. It lists ${listed}.`);
   const buy = tokenOf(mandate, args.buy);
@@ -132,10 +137,27 @@ export function tradeOf(mandate: Mandate, wallet: `0x${string}`, args: { sell?: 
 /** What a quote within the mandate can still fail on: 0x has no route for it, or the wallet cannot cover it. */
 export function unfillable(quote: SignedQuote): string | undefined {
   const body = JSON.parse(quote.response.body) as { liquidityAvailable?: boolean; issues?: { balance?: { token: string; actual: string; expected: string } | null } };
-  if (body.liquidityAvailable === false) return "0x found no liquidity for this trade.";
+  if (body.liquidityAvailable === false) return NO_LIQUIDITY;
   const short = body.issues?.balance;
   if (short) return `The wallet holds ${short.actual} base units of ${short.token}, and the trade needs ${short.expected}. The transaction would revert.`;
   return undefined;
+}
+
+const NO_LIQUIDITY = "0x found no liquidity for this trade.";
+
+/**
+ * Where a trade 0x found no liquidity for may belong instead: another chain this client knows a node for, on which
+ * both its tokens are contracts too, as for a mandate whose chain was set by mistake.
+ */
+export async function noLiquidity(trade: Trade, io: Pick<Io, "connect">): Promise<string> {
+  const here = `0x found no liquidity for this trade on ${chainName(trade.chainId)}, chain ${trade.chainId}.`;
+  const tokens = [trade.sellToken, trade.buyToken].filter((token) => !same(token, NATIVE));
+  for (const chainId of Object.keys(RPCS).map(Number).filter((id) => id !== trade.chainId)) {
+    const client = await io.connect(chainId, undefined, "CHAIN_RPC").catch(() => undefined);
+    const found = client && (await Promise.all(tokens.map((address) => client.getCode({ address }).then((code) => code !== undefined && code !== "0x", () => false))));
+    if (found && tokens.length > 0 && found.every(Boolean)) return `${here} Both tokens are also contracts on ${chainName(chainId)}, chain ${chainId}: if the trade is meant for that chain, set chain to ${chainId} in the mandate.`;
+  }
+  return here;
 }
 
 /** Buys the quote, checks it on arrival and here, and pays BrainChain to grade it only if the checks pass here. */
@@ -150,7 +172,7 @@ export async function checkTrade(mandate: Mandate, trade: Trade, account: Privat
     // A quote that is unsigned, signed by another key or already stale is never worth a grade.
     checkQuote(quote);
     const why = unfillable(quote);
-    if (why) throw new Error(why);
+    if (why) throw new Error(why === NO_LIQUIDITY ? await noLiquidity(trade, io) : why);
     registry = await readSettlers(quote, client);
     request = pretradeCheck({ quote, registry, mandate, trade: describeTrade(mandate, trade) });
     local = await runLocally(request);
@@ -276,7 +298,9 @@ async function preflight(mandate: Mandate, file: string, wallet: `0x${string}`, 
   if (checks.length > MAX_CHECKS) throw new Error(`With the mandate ${basename(file)} the checks are ${checks.length.toLocaleString("en-US")} characters; the grade route takes ${MAX_CHECKS.toLocaleString("en-US")}.`);
   const client = await io.connect(mandate.chain, io.env.CHAIN_RPC, "CHAIN_RPC");
   const tokens = await checkTokens(mandate, client, file);
-  const holding = trade && (await checkHolding(mandate, tokenOf(mandate, trade.sellToken)!, trade.sellAmount, wallet, client));
+  const sell = trade && tokenOf(mandate, trade.sellToken)!;
+  const holding = trade && sell && (await checkHolding(mandate, sell, trade.sellAmount, wallet, client));
+  const gas = await checkGas(mandate, wallet, client, trade && sell && same(sell.address, NATIVE) ? trade.sellAmount : 0n);
   const funds = await checkFunds(wallet, mandate.chain === BASE ? client : await io.connect(BASE, io.env.BASE_RPC, "BASE_RPC"));
   return {
     client,
@@ -285,6 +309,7 @@ async function preflight(mandate: Mandate, file: string, wallet: `0x${string}`, 
       ["node", `answers on ${chainName(mandate.chain)}, chain ${mandate.chain}`],
       ["tokens", `as on chain: ${tokens.join("; ")}`],
       ...(holding ? [["holds", `${wallet} holds ${holding}`] as [string, string]] : []),
+      ["gas", `${wallet} holds ${gas}`],
       ["funds", `${wallet} holds ${funds}`],
     ],
   };
@@ -296,7 +321,10 @@ async function dryRun(values: Values, io: Io): Promise<number> {
   const { file, mandate } = await mandateOf(values, io, "--dry");
   line("ok", "mandate", `${basename(file)}: ${mandate.tokens.map((t) => t.symbol).join(", ")} on ${chainName(mandate.chain)} for wallet ${mandate.wallet}, until ${mandate.validUntil}`);
   const desk = deskUrl(io.env.BRAINCHAIN_DESK_URL);
-  const trade = TRADE_FLAGS.some((name) => values[name] !== undefined) ? tradeOf(mandate, mandate.wallet, tradeArgs(values)) : undefined;
+  const given = TRADE_FLAGS.filter((name) => values[name] !== undefined);
+  const missing = ["sell", "buy", "amount"].filter((name) => values[name] === undefined).map((name) => `--${name}`);
+  if (given.length > 0 && missing.length > 0) throw new Error(`--dry checks a trade with all of --sell, --buy and --amount, or none of them; ${listOf(missing)} ${missing.length === 1 ? "is" : "are"} missing.`);
+  const trade = given.length > 0 ? tradeOf(mandate, mandate.wallet, tradeArgs(values)) : undefined;
   if (trade) line("ok", "trade", `${describeTrade(mandate, trade)}, within the mandate`);
   else line("skip", "trade", "give --sell, --buy and --amount to check a trade too");
   for (const [step, text] of (await preflight(mandate, file, mandate.wallet, trade, io)).lines) line("ok", step, text);

@@ -7,3 +7,6 @@ export const same = (a: string, b: string): boolean => a.toLowerCase() === b.toL
 
 /** An error's message, viem's short one where it has it: viem's full message can quote a node's URL. */
 export const messageOf = (error: unknown): string => (error instanceof BaseError ? error.shortMessage : error instanceof Error ? error.message : String(error));
+
+/** Items as a sentence lists them: "a", "a and b", "a, b and c". */
+export const listOf = (items: string[]): string => (items.length < 3 ? items.join(" and ") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`);
