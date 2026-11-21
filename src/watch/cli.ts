@@ -15,6 +15,7 @@ import { sightingsReader, tokenSightings } from "../sightings.js";
 import { bitGoLists, bitGoMerges, bitGoPullRequests, bitGoReleases } from "./bitgo.js";
 import { chainFirsts, chainKept, chainPoller } from "./chain.js";
 import { chainTurn, createdIn, eventContext, loadWorth, saveWorth, worthOf } from "./context.js";
+import { CallIndex } from "./calls.js";
 import { Deliveries } from "./deliver.js";
 import { EventLog, type WatchEvent } from "./events.js";
 import { marketPoller, universeFrom, VENUE_HOSTS, VENUE_LISTS, VENUE_PER_HOUR } from "./exchanges.js";
@@ -51,7 +52,8 @@ The first run records what is already public as a baseline and reports none of i
                          a private RPC set), GET /pools?after= (the whole pool index a page at a time, which
                          brainchain-mcp dataset reads), GET /robinhood/names (Robinhood's name for the asset on each
                          crypto page, read from the US pages when the watcher runs in the US, which the dataset reads
-                         too), and GET /health. Point BRAINCHAIN_WATCH_URL at it.
+                         too), GET /calls?caller= and GET /calls/:grade (the calls made with brainchain_call, read
+                         from BrainChain's DecisionLog), and GET /health. Point BRAINCHAIN_WATCH_URL at it.
   --print                Write each new event to stdout as one line of JSON.
   --trust-proxy          Behind Cloudflare and a proxy such as Render's, take a client's address from CF-Connecting-IP, or
                          else from the X-Forwarded-For entry before the proxy's own.
@@ -294,7 +296,8 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   const adminToken = env.BRAINCHAIN_WATCH_ADMIN_TOKEN?.trim() || undefined;
   if (adminToken && !/^[\w-]{32,100}$/.test(adminToken)) throw new Error("BRAINCHAIN_WATCH_ADMIN_TOKEN must be 32 to 100 letters, digits, - or _.");
   const names = () => (state.source("robinhood-names") as NamesState).names ?? {};
-  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, trustProxy: args.trustProxy }) : undefined;
+  const calls = new CallIndex({ dir, ...(env.BRAINCHAIN_WATCH_BRAIN ? { brain: env.BRAINCHAIN_WATCH_BRAIN } : {}), say });
+  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, calls, trustProxy: args.trustProxy }) : undefined;
   let ticking = false;
   const deliver = () => {
     if (ticking) return;
@@ -355,6 +358,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       github: { token, ...(requests.github ? { limit: requests.github.limit, remaining: requests.github.remaining, reset: new Date(requests.github.reset).toISOString() } : {}) },
       watches: deliveries.active,
       deliveries: deliveries.report(),
+      calls: calls.status(),
       waiting,
       sources,
       requests: stats,
@@ -370,6 +374,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   }
   watcher.start();
   deliveries.start();
+  calls.start();
   if (rpc) void poolIndex.fill(privateReader(fillRequests.fetchFor("pools"), rpc));
   else say("No private RPC is set, so the pool index is not filled and each token's pools are searched for as they are needed.");
 
@@ -380,6 +385,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     say("Stopping: finishing the reads in progress and saving the state.");
     served?.close();
     deliveries.stop();
+    calls.stop();
     await watcher.stop();
     clearTimeout(saving);
     poolIndex.close();

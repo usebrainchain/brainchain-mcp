@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { isIP } from "node:net";
 
 import { BASES } from "./chain.js";
+import type { CallIndex } from "./calls.js";
 import type { Deliveries } from "./deliver.js";
 import { DEFAULT_LIMIT, knownKind, matches, MAX_FILTERS, MAX_LIMIT, type EventLog, type Query, type WatchEvent } from "./events.js";
 import { DeliveryError } from "./net.js";
@@ -138,6 +139,8 @@ export interface ServeOptions {
   health: () => Health;
   adminToken?: string;
   deliveries?: Deliveries;
+  /** The calls read from BrainChain's DecisionLog, for `GET /calls`; a watcher without them answers 404 there. */
+  calls?: Pick<CallIndex, "of" | "get">;
   /** Behind a proxy that appends the client's address to X-Forwarded-For, such as Render's, take the address from there. */
   trustProxy?: boolean;
   limits?: ServeLimits;
@@ -273,7 +276,7 @@ export interface Served {
  * /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
  * /watches/:id` with the watch's manage token. Nothing lists watches. Every address is held to `perMinute` requests.
  */
-export function serveEvents({ log, pools, names, health, adminToken, deliveries, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
+export function serveEvents({ log, pools, names, health, adminToken, deliveries, calls, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
   const perMinute = new Window(limits.perMinute, 60_000);
   const creations = new Window(limits.watchesPerHour, 3_600_000);
   const streams = new Set<{ response: ServerResponse; address: string; wanted: Pick<Query, "kinds" | "tokens">; cursor: number }>();
@@ -350,6 +353,18 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       const read = names();
       return send(response, 200, { readAt: new Date(clock()).toISOString(), pages: Object.keys(read).length, names: Object.fromEntries(Object.entries(read).sort(([a], [b]) => a.localeCompare(b))) }, OPEN);
     }
+    const grade = /^\/calls\/(0x[0-9a-fA-F]{64})$/.exec(url.pathname)?.[1];
+    if ((url.pathname === "/calls" || grade) && reading) {
+      if (!calls) throw new HttpError(404, "This watcher does not read calls.");
+      if (grade) {
+        const call = calls.get(grade);
+        if (!call) throw new HttpError(404, "No call is recorded with that grade.");
+        return send(response, 200, call, OPEN);
+      }
+      const caller = url.searchParams.get("caller") ?? "";
+      if (!/^0x[0-9a-fA-F]{40}$/.test(caller)) throw new HttpError(400, "caller must be the 0x address of the wallet that paid for the calls.");
+      return send(response, 200, { readAt: new Date(clock()).toISOString(), caller, calls: calls.of(caller) }, OPEN);
+    }
     if (url.pathname === "/watches" && method === "POST") {
       if (!deliveries) throw new HttpError(404, "This watcher sends no events.");
       if (!creations.take(address, clock())) throw new HttpError(429, `An address can make ${limits.watchesPerHour} watches an hour.`);
@@ -381,8 +396,8 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       if (!status) throw gone();
       return send(response, 200, status);
     }
-    if (["/events", "/events/stream", "/pools", "/robinhood/names", "/health", "/health/live", "/watches"].includes(url.pathname) || id !== undefined) throw new HttpError(405, "That method is not served here.");
-    throw new HttpError(404, "Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /health, POST /watches and GET or DELETE /watches/:id.");
+    if (["/events", "/events/stream", "/pools", "/robinhood/names", "/calls", "/health", "/health/live", "/watches"].includes(url.pathname) || id !== undefined || grade !== undefined) throw new HttpError(405, "That method is not served here.");
+    throw new HttpError(404, "Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls/:grade, GET /health, POST /watches and GET or DELETE /watches/:id.");
   }
 
   const server = createServer((request, response) => {

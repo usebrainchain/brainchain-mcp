@@ -11,13 +11,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CHANGES_NAME, CHANGES_TOOL, changesQuery, createWatch, HOSTED_WATCH_URL, readChanges, removeWatch, UNWATCH_NAME, WATCH_NAME, WATCH_TOOL, watchUrl } from "../changes.js";
 import { createServer } from "../server.js";
 import { callTool, type Desk } from "../tools.js";
+import type { IndexedCall } from "../calls.js";
 import { discordRelay, githubEvery, githubToken, watchArgs } from "./cli.js";
 import { useGitHubToken } from "../github.js";
 import { Deliveries } from "./deliver.js";
 import { EventLog, KINDS, type Found } from "./events.js";
 import type { Post } from "./net.js";
 import { INDEX_FROM, PoolIndex, type IndexedPool } from "./pools.js";
-import { clientOf, eventsQuery, keyOf, MAX_POOLS, SERVE_LIMITS, serveEvents, type PageNames, type PoolLookup } from "./serve.js";
+import { clientOf, eventsQuery, keyOf, MAX_POOLS, SERVE_LIMITS, serveEvents, type PageNames, type PoolLookup, type ServeOptions } from "./serve.js";
 
 const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
 const found = (kind: Found["kind"], ref: string, token: Found["token"] = { address: CASHCAT, symbol: "CASHCAT", name: "Cash Cat" }): Found => ({ kind, token, source: "x", ref, at: null, detail: {} });
@@ -39,7 +40,7 @@ function poster(status = 204) {
   return { posts, post };
 }
 
-async function serving({ healthy = true, trustProxy = false, limits = SERVE_LIMITS, post = poster().post, pools = undefined as PoolLookup | undefined, names = undefined as PageNames | undefined } = {}) {
+async function serving({ healthy = true, trustProxy = false, limits = SERVE_LIMITS, post = poster().post, pools = undefined as PoolLookup | undefined, names = undefined as PageNames | undefined, calls = undefined as ServeOptions["calls"] } = {}) {
   const where = dir();
   const log = new EventLog(where);
   settled(log, [{ ...found("bitgo.merged", "old"), observedAt: "2026-11-18T00:00:00.000Z", baseline: true }]);
@@ -47,7 +48,7 @@ async function serving({ healthy = true, trustProxy = false, limits = SERVE_LIMI
   settled(log, [{ ...found("pool.created", "0xabc"), observedAt: "2026-11-19T11:00:00.000Z" }]);
   settled(log, [{ ...found("robinhood.pair_added", "pairs#PONS", { address: null, symbol: "PONS", name: "Pons" }), observedAt: "2026-11-19T12:00:00.000Z" }]);
   const deliveries = new Deliveries({ dir: where, log, post, check: async () => {} });
-  const served = serveEvents({ log, ...(pools ? { pools } : {}), ...(names ? { names } : {}), health: () => ({ ok: healthy, sources: {} }), deliveries, trustProxy, limits, clock: () => Date.parse("2026-11-19T13:00:00Z") });
+  const served = serveEvents({ log, ...(pools ? { pools } : {}), ...(names ? { names } : {}), ...(calls ? { calls } : {}), health: () => ({ ok: healthy, sources: {} }), deliveries, trustProxy, limits, clock: () => Date.parse("2026-11-19T13:00:00Z") });
   await new Promise<void>((resolve) => served.server.listen(0, "127.0.0.1", resolve));
   close = () => served.close();
   return { base: new URL(`http://127.0.0.1:${(served.server.address() as AddressInfo).port}`), log, served, deliveries };
@@ -577,5 +578,25 @@ describe("the watcher's GitHub token", () => {
     writeFileSync(file, "not a token at all");
     expect(githubToken({ GITHUB_TOKEN_FILE: file })).toEqual({ token: false, note: expect.stringMatching(/^GITHUB_TOKEN is not a GitHub token.*Fix it and restart the watcher\.$/) });
     useGitHubToken(undefined);
+  });
+});
+
+describe("calls", () => {
+  const call = { grade: `0x${"ab".repeat(32)}`, payer: "0xFe4d9d7c5c530c9652A46D0BF6178b041Bc2F858", token: "0x020bfC650A365f8BB26819deAAbF3E21291018b4" } as never as IndexedCall;
+  const calls = { of: (caller: string) => (caller.toLowerCase() === call.payer.toLowerCase() ? [call] : []), get: (grade: string) => (grade === call.grade ? call : undefined) };
+
+  it("are served by the wallet that paid for them, and one by its grade", async () => {
+    const { base } = await serving({ calls });
+    const listed = await fetch(new URL(`/calls?caller=${call.payer.toLowerCase()}`, base));
+    expect([listed.status, await listed.json()]).toEqual([200, { readAt: "2026-11-19T13:00:00.000Z", caller: call.payer.toLowerCase(), calls: [call] }]);
+    expect(await (await fetch(new URL(`/calls/${call.grade}`, base))).json()).toEqual(call);
+    expect((await fetch(new URL(`/calls/0x${"cd".repeat(32)}`, base))).status).toBe(404);
+    expect(await (await fetch(new URL("/calls?caller=me", base))).json()).toEqual({ error: "caller must be the 0x address of the wallet that paid for the calls." });
+    expect((await fetch(new URL("/calls", base), { method: "POST" })).status).toBe(405);
+  });
+
+  it("answer 404 on a watcher that does not read them", async () => {
+    const { base } = await serving();
+    expect((await fetch(new URL(`/calls?caller=${call.payer}`, base))).status).toBe(404);
   });
 });
