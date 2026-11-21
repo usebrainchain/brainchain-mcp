@@ -418,6 +418,7 @@ claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHA
 ## Examples
 
 - [`examples/reference-seller`](examples/reference-seller): a seller in Express or Hono that pays BrainChain to grade each delivery before its buyer accepts it, with its own spending caps and a test suite against a mock of the grade route.
+- [`examples/pretrade-check`](examples/pretrade-check): checks a trade an agent got from 0x against its written mandate before the agent signs it: BrainChain's sandbox verifies 0x's signature and the calldata, and the transaction is printed only once the trade is accepted.
 - [`examples/agent-framework`](examples/agent-framework): a Microsoft Agent Framework agent, in Python or .NET, that posts a task through this server and reports the accepted result.
 - [`examples/openclaw/brainchain`](examples/openclaw/brainchain): an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
 
