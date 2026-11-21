@@ -118,7 +118,7 @@ export function datasetReader(value: string | undefined, fetchImpl: typeof fetch
     if (latest && clock() < latest.until) return latest.manifest;
     const reading = (async () => {
       const path = await place.newest(clock());
-      if (!path) throw new DatasetError(`No dataset was published in the last ${DAYS_BACK} days at ${place.name}.`);
+      if (!path) throw new DatasetError(`No dataset was published in the last ${DAYS_BACK} days at ${place.name}, so there is nothing to count yet: counts appear once one is. ${DATASET_SETTING} points the tools at a directory or another address that holds one.`);
       const bytes = await place.read(path);
       if (!bytes) throw new DatasetError(`The dataset's ${path} could not be read at ${place.name}.`);
       return { path, manifest: JSON.parse(bytes.toString("utf8")) as Manifest, bytes };

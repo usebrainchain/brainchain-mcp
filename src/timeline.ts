@@ -2,7 +2,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { isAddressEqual, type Address, type Hash } from "viem";
 
 import { BY_SYMBOL, readCustodyHistory, readListedTokens, TOKEN_INPUT, within, type CustodyBoard, type CustodyToken } from "./custody.js";
-import type { Dataset, DatasetRef } from "./dataset/published.js";
+import { DatasetError, type Dataset, type DatasetRef } from "./dataset/published.js";
 import { blockOf, inTurn, type ChainHistory, type Moment } from "./history.js";
 import { firstApprovalsIn, MARKET_MAKERS, who, type Approval, type MakerWallet } from "./makers.js";
 import { firstQueued, otherSide, queuedKept, type QueuedPool } from "./queued.js";
@@ -36,7 +36,7 @@ export const TIMELINE_TOOL: Tool = {
     "With a cut-off, an undated step whose `by` is after it goes to `withheld`: it is public now, and nothing shows whether it was public by then, so it is named rather than left out. " +
     "Robinhood, Bitstamp, KuCoin, Gate, LI.FI and CoinGecko publish no date for a listing, so brainchain_token_sightings reads them and they are not steps here. " +
     "`deployed` says whether a contract is at the address, `token` holds its `contract` and the `name` and `symbol` it gives itself, and `unread` names a source that could not be read just now: BitGo, Trust Wallet or MetaMask. `readAt` is when the answer was made. " +
-    "When the BrainChain MCP dataset can be read, the pools and the followed wallets' approvals up to its head block come from it, so the chain is read only for the blocks after, and `dataset` names the day read, its `headBlock` and the SHA-256 of its `manifest`. " +
+    "When the BrainChain MCP dataset can be read, the pools and the followed wallets' approvals up to its head block come from it, so the chain is read only for the blocks after, and `dataset` names the day read, its `headBlock` and the SHA-256 of its `manifest`. When the dataset cannot be read, `datasetMissing` says why and every step is read live. " +
     "The tool answers one request at a time, in turn with the other tools that read the chain. The first answer for a token can take half a minute; an answer that is not ready after 45 seconds says so, and asking again goes on from where it stopped. " +
     "The first answer after the server starts also reads BitGo's history, with about a dozen of the 60 requests an hour GitHub allows one IP address without a key; the server keeps what it worked out, and later answers read only BitGo's changes since. If that history is not read within 45 seconds, `unread` names BitGo, and asking again goes on from where it stopped. " +
     "A server whose operator set GITHUB_TOKEN reads GitHub with that token's allowance. " +
@@ -80,6 +80,8 @@ export interface TimelineBoard {
   readAt: string;
   /** The published dataset whose steps were read first, so the chain was read only for the blocks after its head. */
   dataset?: DatasetRef;
+  /** Why the dataset was not read, when it was looked for: the chain's whole history was read instead. */
+  datasetMissing?: string;
   until?: { block: number; at: string };
   deployed: boolean;
   steps: Step[];
@@ -157,7 +159,17 @@ async function createdBy(reader: ChainHistory, token: Address, transaction: Hash
  */
 export async function tokenTimeline(readers: TimelineReaders, token: Address, wallets: readonly MakerWallet[], times: Map<string, Promise<bigint>>, until?: Moment, now = new Date()): Promise<TimelineBoard> {
   const attempt = <T>(reading: Promise<T>) => reading.then((value) => ({ value }), () => undefined);
-  const read = readers.dataset ? await within(DATASET_MS, readers.dataset(), new Error("late")).then((dataset) => knownOf(dataset, token), () => undefined) : undefined;
+  let datasetMissing: string | undefined;
+  const read = readers.dataset
+    ? await within(DATASET_MS, readers.dataset(), new DatasetError(`The dataset was not read within ${DATASET_MS / 1000} seconds.`)).then(
+        (dataset) => knownOf(dataset, token),
+        (error: unknown) => {
+          // A dataset's own words are written for the reader; any other failure, such as a network error, is said plainly.
+          datasetMissing = `${error instanceof DatasetError ? error.message : "The dataset could not be read just now."} Every step was read live, from the chain's whole history.`;
+          return undefined;
+        },
+      )
+    : undefined;
   const [chain, custody, listed, sightings] = await Promise.all([
     readers.chain(async (reader) => {
       const newest = await reader.getBlockNumber();
@@ -234,6 +246,7 @@ export async function tokenTimeline(readers: TimelineReaders, token: Address, wa
     token: { contract: token, ...(readiness.token.name ? { name: readiness.token.name } : {}), ...(readiness.token.symbol ? { symbol: readiness.token.symbol } : {}) },
     readAt: now.toISOString(),
     ...(read ? { dataset: read.ref } : {}),
+    ...(datasetMissing ? { datasetMissing } : {}),
     ...(cut ? { until: { block: cut.block, at: new Date(cut.time).toISOString() } } : {}),
     deployed: readiness.deployed,
     steps: steps.filter(known).sort(inOrder),

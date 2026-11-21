@@ -34,7 +34,7 @@ export const TRACE_OUTCOMES_TOOL: Tool = {
     "To count only what was public at a point in the past, pass `at`, a time in ISO 8601 such as 2026-09-01T00:00:00Z, or `atBlock`: each row counts from the time its source dates it. `cut` gives the time used. " +
     "`venue` keeps one venue: robinhood (both of its sources), robinhood_page, robinhood_tradable, kucoin or gate. " +
     "`dataset` names what was read: its `date`, the `headBlock` it reaches, `readAt` and `manifest`, the SHA-256 of that day's manifest, which BrainChain inscribes on its chain; every file read is checked against the manifest first. " +
-    "The dataset is built once a day by `brainchain-mcp dataset` and read from its public repository, or from BRAINCHAIN_DATASET. Free, no key and no payment. Not advice.",
+    "The dataset is built once a day by `brainchain-mcp dataset` and read from its public repository, or from the directory or address BRAINCHAIN_DATASET names. Counts appear once a dataset has been published there: until then, or while it cannot be read, the tool says so and counts nothing. Free, no key and no payment. Not advice.",
   annotations: { readOnlyHint: true, openWorldHint: true },
   inputSchema: {
     type: "object",

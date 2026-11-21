@@ -49,7 +49,7 @@ describe("the published dataset", () => {
     write(dir, day("2026-11-20", { "events.jsonl": "{}\n" }));
     await expect(datasetReader(dir).load()).rejects.toThrow(/events.jsonl does not match the SHA-256 its manifest of 2026-11-20 gives/);
     expect(() => datasetReader("data/here")).toThrow(DatasetError);
-    await expect(datasetReader(mkdtempSync(join(tmpdir(), "data-"))).load()).rejects.toThrow(/No dataset was published in the last 7 days/);
+    await expect(datasetReader(mkdtempSync(join(tmpdir(), "data-"))).load()).rejects.toThrow(/No dataset was published in the last 7 days at local directory, so there is nothing to count yet: counts appear once one is\. BRAINCHAIN_DATASET points the tools at a directory or another address that holds one\./);
   });
 
   it("looks for the newest manifest on GitHub a day at a time, and keeps what it found", async () => {
