@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { CustodyBoard, CustodyToken } from "./custody.js";
 import type { StepRow } from "./dataset/format.js";
-import { DatasetError, type Dataset } from "./dataset/published.js";
+import { DatasetError, UnpublishedError, type Dataset } from "./dataset/published.js";
 import type { ChainHistory } from "./history.js";
 import { configuredMakers, MARKET_MAKERS, type Approval, type MakerWallet } from "./makers.js";
 import type { QueuedPool } from "./queued.js";
@@ -263,6 +263,10 @@ describe("tokenTimeline", () => {
     ]);
     const unpublished = await timeline({ ...readers, dataset: async () => Promise.reject(new DatasetError("No dataset was published in the last 7 days at x.")) });
     expect(unpublished.datasetMissing).toBe("No dataset was published in the last 7 days at x. Every step was read live, from the chain's whole history.");
+    // The reader's own error says what that means for a count; the timeline counts nothing, so it says only the fact.
+    const none = await timeline({ ...readers, dataset: async () => Promise.reject(new UnpublishedError("https://data.test/")) });
+    expect(none.datasetMissing).toBe("No dataset was published in the last 7 days at https://data.test/. Every step was read live, from the chain's whole history.");
+    expect(new UnpublishedError("x").message).toBe("No dataset was published in the last 7 days at x, so there is nothing to count yet: counts appear once one is. BRAINCHAIN_DATASET points the tools at a directory or another address that holds one.");
     expect(board.datasetMissing).toBeUndefined();
     expect((await timeline(sources().readers)).datasetMissing).toBeUndefined();
   });
