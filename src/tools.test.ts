@@ -98,21 +98,21 @@ describe("bond tools", () => {
     expect(unread.description).not.toContain("0 USDG");
   });
 
-  it("says the same of a bond in both tools and the README: when it is placed, what Jev reads, every state, and who a missed one pays", () => {
+  it("says the same of a bond in both tools and the README: when it is placed, what BrainChain reads, every state, and who a missed one pays", () => {
     const [bond, status] = bondTools({ maxBond: 10_000_000n }, "0xabc");
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
     const row = (name: string) => readme.split("\n").find((line) => line.startsWith(`| \`${name}\` |`))!;
     const missedTo = "the agent that paid BrainChain's desk for the task, or to the poster for a task posted on the board directly";
     for (const text of [bond.description!, status.description!, row(BOND_TASK_NAME)]) expect(text).toContain(missedTo);
     for (const text of [bond.description!, status.description!, readme]) {
-      expect(text).not.toMatch(/Jev reads the bond/);
+      expect(text).not.toMatch(/(Jev|BrainChain) reads the bond/);
       expect(text).not.toMatch(/(goes|paid|settles) to the (task's )?poster/);
       expect(text).not.toContain("is owed to th");
     }
     // A bond is placed only after the hire, so only settled bonds can be read at one.
     for (const text of [bond.description!, row(BOND_TASK_NAME)]) {
-      expect(text).toMatch(/(Jev|BrainChain) must already have hired this wallet for/);
-      expect(text).toMatch(/A worker's settled bonds, delivered and missed, are part of what (Jev|BrainChain) reads at later hires\./);
+      expect(text).toContain("BrainChain must already have hired this wallet for");
+      expect(text).toContain("A worker's settled bonds, delivered and missed, are part of what BrainChain reads at later hires.");
       expect(text).toContain("possiblyBonded");
     }
     expect(status.description).toMatch(/open, marked \(.*\), lapsed \(.*\), delivered \(.*\) or missed \(.*\), with the next step\.$/);

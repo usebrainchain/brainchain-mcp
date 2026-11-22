@@ -1,0 +1,78 @@
+// The licence exam, as BrainChain's GET /exams describes it: an agent pays for a
+// sitting, delivers each item once inside the sitting's time, and holds a licence
+// when enough are accepted; GET /exams gives the count and pass mark. Every message
+// is signed with personal_sign by the wallet that holds the agent's ERC-8004 id.
+import { keccak256, toBytes } from "viem";
+
+import type { Guidance } from "./payments.js";
+
+/** How many of a record's entries one read returns, counted from the first. */
+export const RECORD_PAGE = 20;
+/** The desk's cap on the work for one item of a sitting, as GET /exams states it. */
+export const MAX_WORK_BYTES = 48_000;
+/** What a sitting's fee buys, in the words of GET /exams `sitting.refunds`. */
+export const REFUNDS =
+  "The fee pays for the sitting, pass or fail. If BrainChain cannot open a paid sitting, or cannot judge enough of it to decide, the sitting is void: it does not count against the agent, and the payment goes back to the paying wallet.";
+
+export const sittingMessage = (chainId: number, agent: { chainId: number; id: string }, examClass: string, at: number): string =>
+  `BrainChain exam v1\nchain ${chainId}\nagent ${agent.chainId}:${agent.id}\nclass ${examClass}\nat ${at}`;
+
+export const resultMessage = (chainId: number, sitting: string, index: number, text: string): string =>
+  `BrainChain exam result v1\nchain ${chainId}\nsitting ${sitting.toLowerCase()}\nitem ${index}\nhash ${keccak256(toBytes(text))}`;
+
+export const briefsMessage = (chainId: number, sitting: string, at: number): string => `BrainChain exam briefs v1\nchain ${chainId}\nsitting ${sitting.toLowerCase()}\nat ${at}`;
+
+const utc = (seconds: number) => new Date(seconds * 1000).toISOString().replace(".000Z", "Z");
+const list = (numbers: number[]) => (numbers.length < 2 ? numbers.join("") : `${numbers.slice(0, -1).join(", ")} and ${numbers.at(-1)}`);
+
+/**
+ * For each item that passed every hidden case and was still not accepted, what the judges answered and how sure
+ * they were. An answer to accept counts only at the exam's bar or above, so the bar is named when the sitting
+ * gives it. Older sittings kept only the confidence, or nothing, and say only what they kept.
+ */
+function refusedDespiteCases(items: { index?: unknown; accepted?: unknown; right?: unknown; of?: unknown; judges?: unknown; confidenceBps?: unknown }[], bar: number | undefined): string {
+  return items
+    .flatMap((item) => (item.accepted === false && typeof item.right === "number" && item.right === item.of && typeof item.confidenceBps === "number" ? [{ ...item, confidenceBps: item.confidenceBps }] : []))
+    .map(({ index, judges, confidenceBps }) => {
+      const sure = `${confidenceBps / 100}%`;
+      const said =
+        judges === "refuse"
+          ? `the judges refused it, ${sure} sure`
+          : judges === "accept"
+            ? `the judges accepted it at ${sure}${bar !== undefined && confidenceBps < bar ? `, under the ${bar / 100}% bar` : ""}`
+            : `the judges were ${sure} sure of their answer`;
+      return ` Item ${String(index)} answered every hidden case right and was not accepted: ${said}.`;
+    })
+    .join("");
+}
+
+/** What a sitting's state means for the agent sitting it, and when to look again. */
+export function sittingGuidance(view: Record<string, unknown>, now = Date.now()): Guidance {
+  const items = Array.isArray(view.items) ? (view.items as { index?: unknown; state?: unknown; accepted?: unknown }[]) : [];
+  const accepted = `${items.filter((item) => item.accepted === true).length} of ${items.length} items accepted`;
+  const bar = typeof view.barBps === "number" ? view.barBps : undefined;
+  if (view.state === "passed") {
+    const expiresAt = (view.licence as { licence?: { expiresAt?: unknown } } | undefined)?.licence?.expiresAt;
+    const until = typeof expiresAt === "number" ? ` It is valid until ${utc(expiresAt)}, as long as the agent's id keeps the same owner and build.` : "";
+    return { done: true, next: `Passed: ${accepted}. The signed licence is in \`licence\`.${until}${refusedDespiteCases(items, bar)}` };
+  }
+  if (view.state === "failed") {
+    const mark = typeof view.passMark === "number" ? `, and a pass takes ${view.passMark}` : "";
+    return { done: true, next: `Failed: ${accepted}${mark}. brainchain_exam_info says how long the agent waits before it may sit again.${refusedDespiteCases(items, bar)}` };
+  }
+  if (view.state === "void") {
+    const id = typeof view.sitting === "string" ? ` ${view.sitting}` : "";
+    return { done: true, next: `${REFUNDS} The agent may sit again now with brainchain_sit_exam. If the payment has not arrived, write to hello@usebrainchain.com with the sitting id${id}.` };
+  }
+  if (view.state !== "open") return { done: false, next: `BrainChain reads the sitting as ${typeof view.state === "string" ? view.state : "not yet open"}. Read it again after retryAfterSeconds.`, retryAfterSeconds: 60 };
+  const open = items.flatMap((item) => (item.state === "open" && typeof item.index === "number" ? [item.index] : []));
+  const deadline = typeof view.deadline === "number" ? view.deadline : undefined;
+  if (open.length === 0) return { done: false, next: "Every item is delivered or missed, and BrainChain is judging what was delivered. Read the sitting again after retryAfterSeconds.", retryAfterSeconds: 30 };
+  if (deadline !== undefined && now / 1000 > deadline) {
+    return { done: false, next: `The sitting's time ran out at ${utc(deadline)}, so ${open.length === 1 ? `item ${list(open)} was` : `items ${list(open)} were`} missed. Read the sitting again after retryAfterSeconds for the outcome.`, retryAfterSeconds: 60 };
+  }
+  const by = deadline === undefined ? "" : ` before ${utc(deadline)}`;
+  // A sitting read without its briefs says where they are, for an agent that does not hold them.
+  const briefs = Array.isArray(view.briefs) ? "" : " brainchain_exam_status with briefs: true reads the briefs.";
+  return { done: false, next: `Deliver ${open.length === 1 ? "item" : "items"} ${list(open)} with brainchain_exam_submit${by}. Each item takes one delivery, so send the finished work.${briefs}` };
+}

@@ -18,7 +18,7 @@ using OpenAI;
 const string Instructions = """
     You hand scoped work to BrainChain, which hires a worker and grades the result.
     Post the user's brief with brainchain_post_task. Then read the task with brainchain_get_task, calling Wait with the
-    seconds the reply asks for between reads, until done is true or next says Jev did not accept the work.
+    seconds the reply asks for between reads, until done is true or next says BrainChain did not accept the work.
     Accepted: report the result and the decision page. Not accepted: report that at once, with the order id. The
     refund is sent when the dispute window closes, hours later, and a read of the order after that gives its
     transaction. If Wait says to stop, report where the task stands and its order id. Never post the same brief
@@ -35,7 +35,7 @@ var settings = Environment.GetEnvironmentVariables()
 
 // npx is a .cmd script on Windows, which only cmd.exe starts. Its first run downloads the server, hence the longer
 // timeout.
-string[] server = ["npx", "-y", "brainchain-mcp@0.20.0"];
+string[] server = ["npx", "-y", "brainchain-mcp@0.21.1"];
 await using var brainchain = await McpClient.CreateAsync(new StdioClientTransport(new()
 {
     Name = "brainchain",

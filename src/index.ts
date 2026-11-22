@@ -15,6 +15,7 @@ const { version } = createRequire(import.meta.url)("../package.json") as { versi
 const USAGE = `brainchain-mcp ${version}
 
 MCP server that pays for tasks on BrainChain, reads their graded results and bonds tasks the wallet will deliver as a worker.
+It sits BrainChain's licence exam for an ERC-8004 agent whose id the wallet holds, and reads any agent's licences and record.
 It also reads what stock tokens cost on Robinhood Chain, lists the Robinhood Chain tokens that BitGo, a custodian for
 exchanges and funds, has recently started to support, reads how much of a token on that chain a market maker's
 trading wallets hold, now or at a past block, reads how far along a token is (deployed, first minted, first pool
@@ -44,13 +45,14 @@ Usage:
 
 Environment:
   BRAINCHAIN_PAYER_KEY        Private key of the paying wallet, 64 hex characters with or without 0x.
-                              Needed to post tasks, grade work, bond and approve; reading orders works without it.
+                              Needed to post tasks, grade work, bond, sit the exam and approve; reading orders works without it.
   BRAINCHAIN_PAYER_KEY_FILE   A file holding that key instead. Absolute or starting with ~/. On macOS and Linux it must be
                               readable only by your account (chmod 600); Windows is not checked, so keep it in your own user folder.
   BRAINCHAIN_NETWORK          mainnet (default) or testnet.
   BRAINCHAIN_PAY_ON           base (default) pays in USDC on Base (Base Sepolia on testnet);
                               robinhood pays in USDG on Robinhood Chain.
-  BRAINCHAIN_MAX_PRICE_UNITS  Maximum paid per task or grade, in base units (default 1000000 = 1 USDC or USDG).
+  BRAINCHAIN_MAX_PRICE_UNITS  Maximum paid per task or grade, in base units (default 1000000 = 1 USDC or USDG). Left unset,
+                              it gives way to the price of an exam sitting for that one payment; set, it holds for one too.
   BRAINCHAIN_BUDGET_UNITS     Maximum paid in total while the server runs (default 10000000 = 10 USDC or USDG).
   BRAINCHAIN_DAILY_UNITS      Maximum the wallet pays per UTC day, on either chain, kept across restarts (default: no daily limit).
   BRAINCHAIN_MAX_BOND_UNITS   Maximum locked in one delivery bond on Shipped (default 10000000 = 10 USDG); bonds also draw on

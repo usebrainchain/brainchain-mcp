@@ -50,6 +50,9 @@ const PRESETS = {
   },
 } as const;
 
+/** BrainChain's own chain, which every message an agent signs for the licence exam names. */
+const BRAINCHAIN_ID = { mainnet: 274663, testnet: 274630 } as const;
+
 /**
  * Delivery bonds on Shipped, which lives on Robinhood Chain only. The ProofIndex
  * is named once BrainChain deploys it; until then bonds are closed.
@@ -73,7 +76,7 @@ const BONDS: Record<"mainnet" | "testnet", BondsConfig | undefined> = {
     proofIndex: "0x0fb02559e704549794EdF3FBBBe91DB88bB849ee",
     rpc: "https://rpc.mainnet.chain.robinhood.com",
     chain: "Robinhood Chain",
-    brainchain: { rpc: "https://rpc.usebrainchain.com", chainId: 274663, board: "0x44b8464342Bbfb9B565FAE494DfDefa37D33A211", retired: ["0x8385bb4b8990411CcdD8e851B2676da1A4C1f3C4"] },
+    brainchain: { rpc: "https://rpc.usebrainchain.com", chainId: BRAINCHAIN_ID.mainnet, board: "0x44b8464342Bbfb9B565FAE494DfDefa37D33A211", retired: ["0x8385bb4b8990411CcdD8e851B2676da1A4C1f3C4"] },
   },
   testnet: undefined,
 };
@@ -110,6 +113,8 @@ export interface Config {
   token: string;
   /** The most this server pays for one task or grade, in the asset's smallest unit. */
   maxPrice: bigint;
+  /** Whether the operator set that limit. An exam sitting can cost more than the default, which gives way to its price; a limit that was set does not. */
+  maxPriceSet: boolean;
   /** The most this server process pays in total, in the asset's smallest unit. */
   budget: bigint;
   /** The most the wallet pays per UTC day across restarts, servers and payment chains, when set. */
@@ -121,12 +126,22 @@ export interface Config {
   maxBond: bigint;
   /** Shipped's registry and BrainChain's index for bonds; absent on a network without them. */
   bonds?: BondsConfig;
+  /** BrainChain's own chain id, which the messages signed for the licence exam name. */
+  brainchainId: number;
+  /** The chain agents' ERC-8004 ids are on: Robinhood Chain, whichever chain the server pays on. */
+  identityChainId: number;
 }
 
 export function formatUnits(units: bigint): string {
   const whole = units / 10n ** BigInt(DECIMALS);
   const fraction = (units % 10n ** BigInt(DECIMALS)).toString().padStart(DECIMALS, "0").replace(/0+$/, "");
   return fraction ? `${whole}.${fraction}` : `${whole}`;
+}
+
+/** An amount as a price is shown: at least two decimals, and every digit it has, so 900000 is 0.90. */
+export function formatMoney(units: bigint): string {
+  const [whole, cents = ""] = formatUnits(units).split(".");
+  return `${whole}.${cents.padEnd(2, "0")}`;
 }
 
 /** MCP clients often pass optional variables as empty strings; those count as unset. */
@@ -239,14 +254,18 @@ export function resolveConfig(given: Record<string, string | undefined>, { payme
     chain: preset.chain,
     token: preset.token,
     maxPrice,
+    maxPriceSet: envString(env, "BRAINCHAIN_MAX_PRICE_UNITS") !== undefined,
     budget,
     ...(daily !== undefined ? { daily } : {}),
     stateDir: envDirectory(env, "BRAINCHAIN_STATE_DIR", join(homedir(), ".brainchain")),
     maxBond,
     ...(bonds ? { bonds } : {}),
+    brainchainId: BRAINCHAIN_ID[name],
+    identityChainId: Number(PRESETS[name].robinhood.network.split(":")[1]),
     terms: {
       cost: cost(PRICE.task),
       gradeCost: cost(PRICE.grade),
+      budget: `${formatUnits(budget)} ${preset.token}`,
       ...(refuses.task ? { refuses } : {}),
       chain: preset.chain,
       finalAfter: preset.finalAfter,

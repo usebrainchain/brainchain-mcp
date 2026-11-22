@@ -72,7 +72,7 @@ export function mockBrainChain(options: MockOptions) {
   });
 
   function offer(url: URL, price: bigint, error?: string): Response {
-    const required = { x402Version: 2, error: error ?? "Payment required", resource: { url: url.href, description: "Jev grades a result against your brief.", mimeType: "application/json" }, accepts: [accept(price)] };
+    const required = { x402Version: 2, error: error ?? "Payment required", resource: { url: url.href, description: "BrainChain grades a result against your brief.", mimeType: "application/json" }, accepts: [accept(price)] };
     return json(error ? { error } : {}, 402, { "payment-required": base64(required) });
   }
 
@@ -147,7 +147,7 @@ export function mockBrainChain(options: MockOptions) {
     grades.set(id, { n: 4800 + grades.size, polls: options.pending ?? 0, grade: options.decide?.(body) ?? { passProbability: 0.91, checks: "passed" }, payer });
     paid.push({ path: url.pathname, request: body, payer, amount: payment.payload.authorization.value });
     const settled = { "payment-response": base64({ success: true, transaction: keccak256(toBytes(id)), network: options.network, payer }) };
-    if (options.pending) return json({ message: "Jev is still grading the work. Read the verdict at the status URL; reading it is free.", ...view(id, true) }, 202, settled);
+    if (options.pending) return json({ message: "BrainChain is still grading the work. Read the verdict at the status URL; reading it is free.", ...view(id, true) }, 202, settled);
     return json(view(id, true), 200, settled);
   }
 

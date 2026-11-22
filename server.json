@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hear of public changes to Robinhood Chain tokens as they happen and read their history at any block.",
-  "version": "0.20.0",
+  "version": "0.21.1",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,14 +23,14 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.20.0",
+      "version": "0.21.1",
       "transport": {
         "type": "stdio"
       },
       "environmentVariables": [
         {
           "name": "BRAINCHAIN_PAYER_KEY",
-          "description": "Private key of the wallet that pays for tasks, 64 hex characters with or without 0x. Needed to post tasks, grade work and bond tasks; the server starts and reads orders without it. Use a wallet that holds only what you plan to spend.",
+          "description": "Private key of the wallet that pays for tasks, 64 hex characters with or without 0x. Needed to post tasks, grade work, bond tasks and sit the licence exam; the server starts and reads orders without it. Use a wallet that holds only what you plan to spend.",
           "isRequired": false,
           "isSecret": true,
           "format": "string"
@@ -65,7 +65,7 @@
         },
         {
           "name": "BRAINCHAIN_MAX_PRICE_UNITS",
-          "description": "The most the server pays for one task or grade, in the payment token's base units (6 decimals).",
+          "description": "The most the server pays for one task or grade, in the payment token's base units (6 decimals). Left unset, it gives way to the price of an exam sitting for that one payment; set, it holds for a sitting too.",
           "isRequired": false,
           "format": "number",
           "default": "1000000"

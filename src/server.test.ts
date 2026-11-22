@@ -23,13 +23,30 @@ import { TRACE_OUTCOMES_NAME } from "./outcomes.js";
 import { gradeGuidance, guidance } from "./payments.js";
 import { hasGitHubToken } from "./github.js";
 import { approvalFailure, approvalUnconfirmed, approveCommand, cliCommand, createServer, INSTRUCTIONS, pastedKey, payerAccount, terminalHint, walletExitCode, walletReport, type ServerOptions } from "./server.js";
-import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_GRADE_NAME, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, POST_TASK_NAME } from "./tools.js";
+import {
+  AGENT_RECORD_NAME,
+  BOND_STATUS_NAME,
+  BOND_TASK_NAME,
+  EXAM_INFO_NAME,
+  EXAM_STATUS_NAME,
+  EXAM_SUBMIT_NAME,
+  GET_GRADE_NAME,
+  GET_TASK_NAME,
+  GET_TASK_TOOL,
+  GRADE_NAME,
+  LICENCES_NAME,
+  POST_TASK_NAME,
+  SIT_EXAM_NAME,
+} from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
 const KEY = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const task = { title: "Explain a Merkle proof", brief: "In two paragraphs.", levels: ["Accurate and complete", "Accurate"] };
 const order = `0x${"ab".repeat(32)}`;
 const grade = { brief: "Sort 3, 1 and 2.", result: "1, 2, 3" };
+const sitting = { agentId: "20424", price: "5000000" };
+const delivery = { sitting: order, item: 0, text: "def f(x):\n    return x" };
+const EXAM_TOOLS = [EXAM_INFO_NAME, SIT_EXAM_NAME, EXAM_SUBMIT_NAME, EXAM_STATUS_NAME, LICENCES_NAME, AGENT_RECORD_NAME];
 
 async function connect(env: Record<string, string | undefined>, options: ServerOptions = {}) {
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
@@ -62,7 +79,7 @@ describe("the server", () => {
     expect(client.getServerVersion()).toMatchObject({ name: "brainchain", title: "BrainChain" });
     expect(client.getInstructions()).toBe(INSTRUCTIONS);
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, TIMELINE_NAME, MARKET_CAP_NAME, TRACE_OUTCOMES_NAME, CALL_NAME, CALLS_NAME, CHANGES_NAME, WATCH_NAME, UNWATCH_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]);
+    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, TIMELINE_NAME, MARKET_CAP_NAME, TRACE_OUTCOMES_NAME, CALL_NAME, CALLS_NAME, CHANGES_NAME, WATCH_NAME, UNWATCH_NAME, BOND_TASK_NAME, BOND_STATUS_NAME, ...EXAM_TOOLS]);
 
     const post = await client.callTool({ name: POST_TASK_NAME, arguments: task });
     expect(post.isError).toBe(true);
@@ -75,6 +92,34 @@ describe("the server", () => {
     expect(get.isError).toBe(false);
     expect(JSON.parse(text(get))).toMatchObject({ order, done: false });
     expect(reads).toEqual([`https://brain.testnet.usebrainchain.com/x402/tasks/${order}`]);
+  });
+
+  it("reads the licence exam without a key, and asks for the key before it signs for a sitting, a delivery or the briefs", async () => {
+    const reads: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      reads.push(String(input));
+      return new Response(JSON.stringify({ price: "5.00 USD a sitting", pool: { inUse: [order] } }));
+    }) as typeof fetch;
+    const client = await connect({ BRAINCHAIN_NETWORK: "testnet" }, { fetch: fetchImpl });
+    expect(JSON.parse(text(await client.callTool({ name: EXAM_INFO_NAME, arguments: {} })))).toEqual({ price: "5.00 USD a sitting", pool: { inUse: 1 } });
+    // The price in units is read from the desk's offer, which needs no key either.
+    expect(reads.sort()).toEqual(["https://brain.testnet.usebrainchain.com/exams", "https://brain.testnet.usebrainchain.com/x402/exams"]);
+    for (const call of [
+      { name: SIT_EXAM_NAME, arguments: sitting },
+      { name: EXAM_SUBMIT_NAME, arguments: delivery },
+      { name: EXAM_STATUS_NAME, arguments: { sitting: order, briefs: true } },
+    ]) {
+      const result = await client.callTool(call);
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain("No paying key is set");
+      expect(text(result)).toContain("stop and tell your operator");
+    }
+    expect(reads).toHaveLength(2);
+
+    const { address } = privateKeyToAccount(`0x${KEY}`);
+    const { tools } = await (await connect({ BRAINCHAIN_PAYER_KEY: KEY })).listTools();
+    expect(tools.find((tool) => tool.name === SIT_EXAM_NAME)!.description).toContain(`pays exactly that from this server's wallet ${address} on Base. If the desk asks more than \`price\`, nothing is signed.`);
+    expect(INSTRUCTIONS).toContain(`call ${SIT_EXAM_NAME} again with the same agentId and class`);
   });
 
   it("reports a setting it cannot read once at startup, in the post tool's description, and from every tool but the premiums", async () => {
@@ -90,7 +135,7 @@ describe("the server", () => {
       expect(logged[0]).toContain(problem);
 
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(19);
+      expect(tools).toHaveLength(25);
       const description = tools.find((tool) => tool.name === POST_TASK_NAME)!.description!;
       expect(description.startsWith(`Invalid setting: ${problem}`)).toBe(true);
       expect(description).not.toMatch(/USDG|USDC/);
@@ -107,6 +152,12 @@ describe("the server", () => {
         { name: CALL_NAME, arguments: { token: "0x020bfC650A365f8BB26819deAAbF3E21291018b4" } },
         { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } },
         { name: BOND_STATUS_NAME, arguments: { task: "12" } },
+        { name: EXAM_INFO_NAME, arguments: {} },
+        { name: SIT_EXAM_NAME, arguments: sitting },
+        { name: EXAM_SUBMIT_NAME, arguments: delivery },
+        { name: EXAM_STATUS_NAME, arguments: { sitting: order } },
+        { name: LICENCES_NAME, arguments: { agentId: sitting.agentId } },
+        { name: AGENT_RECORD_NAME, arguments: { agentId: sitting.agentId } },
       ]) {
         const result = await client.callTool(call);
         expect(result.isError).toBe(true);
@@ -190,16 +241,20 @@ describe("the server", () => {
       expect(logged[0]).toContain(problem);
 
       const { tools } = await client.listTools();
-      for (const name of [POST_TASK_NAME, GRADE_NAME, BOND_TASK_NAME]) {
+      for (const name of [POST_TASK_NAME, GRADE_NAME, BOND_TASK_NAME, SIT_EXAM_NAME]) {
         expect(tools.find((tool) => tool.name === name)!.description).toMatch(/^Invalid setting: /);
         expect(tools.find((tool) => tool.name === name)!.description).toContain(problem);
       }
-      for (const name of [GET_TASK_NAME, GET_GRADE_NAME, BOND_STATUS_NAME, PREMIUMS_NAME]) expect(tools.find((tool) => tool.name === name)!.description).not.toContain("Invalid setting");
+      // Delivering an exam item signs and pays nothing, so a setting only payments read leaves it alone.
+      for (const name of [GET_TASK_NAME, GET_GRADE_NAME, BOND_STATUS_NAME, PREMIUMS_NAME, EXAM_INFO_NAME, EXAM_SUBMIT_NAME, EXAM_STATUS_NAME, LICENCES_NAME, AGENT_RECORD_NAME]) {
+        expect(tools.find((tool) => tool.name === name)!.description).not.toContain("Invalid setting");
+      }
 
       for (const call of [
         { name: POST_TASK_NAME, arguments: task },
         { name: GRADE_NAME, arguments: grade },
         { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } },
+        { name: SIT_EXAM_NAME, arguments: sitting },
       ]) {
         const result = await client.callTool(call);
         expect(result.isError).toBe(true);
@@ -236,8 +291,8 @@ describe("the server", () => {
       expect(logged).toHaveLength(1);
       expect(logged[0]).toContain(problem);
       const { tools } = await client.listTools();
-      // Reading a bond needs the key too, so all four tools lead with the problem.
-      for (const name of [POST_TASK_NAME, GRADE_NAME, BOND_TASK_NAME, BOND_STATUS_NAME]) {
+      // Reading a bond and delivering an exam item need the key too, so all six tools lead with the problem.
+      for (const name of [POST_TASK_NAME, GRADE_NAME, BOND_TASK_NAME, BOND_STATUS_NAME, SIT_EXAM_NAME, EXAM_SUBMIT_NAME]) {
         expect(tools.find((tool) => tool.name === name)!.description).toMatch(/^Invalid setting: /);
         expect(tools.find((tool) => tool.name === name)!.description).toContain(problem);
       }
@@ -247,6 +302,8 @@ describe("the server", () => {
         { name: GRADE_NAME, arguments: grade },
         { name: BOND_TASK_NAME, arguments: { task: "12", amount: "5" } },
         { name: BOND_STATUS_NAME, arguments: { task: "12" } },
+        { name: SIT_EXAM_NAME, arguments: sitting },
+        { name: EXAM_SUBMIT_NAME, arguments: delivery },
       ]) {
         for (const network of ["mainnet", "testnet"]) {
           const result = await (await connect({ ...env, BRAINCHAIN_NETWORK: network }, { fetch: fetchImpl })).callTool(call);
@@ -291,7 +348,7 @@ describe("the server", () => {
         expect(logged).toEqual([`brainchain-mcp has an invalid setting: ${problem}`]);
 
         const { tools } = await client.listTools();
-        for (const [name, valid] of [[POST_TASK_NAME, task], [GRADE_NAME, grade], [BOND_TASK_NAME, { task: "12", amount: "5" }]] as const) {
+        for (const [name, valid] of [[POST_TASK_NAME, task], [GRADE_NAME, grade], [BOND_TASK_NAME, { task: "12", amount: "5" }], [SIT_EXAM_NAME, sitting]] as const) {
           expect(tools.find((tool) => tool.name === name)!.description).toMatch(new RegExp(`^Invalid setting: ${problem.replace(/[.]/g, "\\.")} Until .* this tool only returns that error\\. `));
           // A call that is wrong in itself gets the same answer: the tool returns that error and nothing else.
           for (const sent of [valid, {}, { task: "0", extra: true }]) {
@@ -323,8 +380,11 @@ describe("the server", () => {
       }
     }
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-    expect(readme).toContain("A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working.");
-    expect(readme).toContain("A setting only payments read stops just the four tools that pay, `brainchain_post_task`, `brainchain_grade`, `brainchain_call` and `brainchain_bond_task`; the other fifteen keep working.");
+    expect(readme).toContain(
+      "A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task`, `brainchain_sit_exam`, `brainchain_exam_submit`, which signs each delivery, and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working, as do the tools that read the exam, a sitting, an agent's licences and its record.",
+    );
+    expect(readme).toContain("A setting only payments read stops just the five tools that pay, `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_sit_exam`; the other twenty keep working.");
+    expect(readme).toContain("`brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_sit_exam` spend from the wallet");
     expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap`, `brainchain_trace_outcomes`, `brainchain_calls`, `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`.");
     expect(readme).toContain("`BRAINCHAIN_STATE_DIR` (including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set)");
     expect(readme).not.toContain("the task and bond tools return the error");
@@ -399,6 +459,11 @@ describe("the server", () => {
     const { done: gradeDone, next: gradeNext, ...verdict } = decided!;
     expect(gradeGuidance(verdict)).toEqual({ done: gradeDone, next: gradeNext });
     expect(section).toContain("are examples");
+  });
+
+  it("names the model behind BrainChain's decisions where the README introduces them", () => {
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    expect(readme).toContain("BrainChain is a blockchain run by an AI agent. The model behind its decisions is Jev, a decision model served by TypeSafe.");
   });
 
   it("tells an agent to leave the key alone", () => {

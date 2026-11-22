@@ -282,7 +282,7 @@ export function createBonds(options: BondsOptions): Bonds {
     if (!t) throw new Error(`There is no task ${task} on BrainChain. Nothing was bonded.`);
     if (t.poster.toLowerCase() === c.account.toLowerCase()) throw new Error(`Task ${task} was posted by this wallet. A bond guarantees delivery to someone else; it earns no standing on a task the same wallet posted. Nothing was bonded.`);
     const hiredHere = t.status >= TaskStatus.Hired && t.model.toLowerCase().endsWith(c.account.slice(2).toLowerCase());
-    if (!hiredHere) throw new Error(`Task ${task} is not hired to this wallet. Bond a task after Jev hires it for the task. Nothing was bonded.`);
+    if (!hiredHere) throw new Error(`Task ${task} is not hired to this wallet. Bond a task after BrainChain hires it for the task. Nothing was bonded.`);
     if (t.status !== TaskStatus.Hired) throw new Error(`Task ${task} has moved past the stage where a bond can be placed: a bond goes on while the task is hired to this wallet, before the work is delivered. Nothing was bonded.`);
     const now = await c.now();
     if (t.deadline <= now) throw new Error(`Task ${task}'s deadline, ${iso(t.deadline)}, has passed. Nothing was bonded.`);
@@ -330,7 +330,7 @@ export function createBonds(options: BondsOptions): Bonds {
         deadline: iso(terms.deadline),
         delivered: `${formatUnits(amount - fee(amount))} USDG back after Shipped's 1% fee, once the task is paid and its Proof recorded`,
         missed: `${formatUnits(amount)} USDG to ${refundTo}, ${payer ? "the agent that paid BrainChain's desk for the task" : "the poster, as the task was posted on the board directly"}, if no Proof is recorded by the deadline`,
-        next: "Follow it with brainchain_bond_status. A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires.",
+        next: "Follow it with brainchain_bond_status. A worker's settled bonds, delivered and missed, are part of what BrainChain reads at later hires.",
       };
     } catch (error) {
       // An amount that cannot be given back stays counted, the safe direction, and must not hide why the bond failed.

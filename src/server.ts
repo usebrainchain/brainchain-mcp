@@ -24,10 +24,18 @@ import { READINESS_NAME, READINESS_TOOL } from "./readiness.js";
 import { SIGHTINGS_NAME, SIGHTINGS_TOOL } from "./sightings.js";
 import { readTokenTimeline, TIMELINE_NAME, TIMELINE_TOOL } from "./timeline.js";
 import {
+  AGENT_RECORD_NAME,
+  AGENT_RECORD_TOOL,
   BOND_STATUS_NAME,
   BOND_TASK_NAME,
   bondTools,
   callTool,
+  EXAM_INFO_NAME,
+  EXAM_INFO_TOOL,
+  EXAM_STATUS_NAME,
+  EXAM_STATUS_TOOL,
+  EXAM_SUBMIT_NAME,
+  examSubmitTool,
   GET_GRADE_NAME,
   GET_GRADE_TOOL,
   GET_TASK_NAME,
@@ -35,8 +43,12 @@ import {
   GRADE_NAME,
   gradeTool,
   invalidSetting,
+  LICENCES_NAME,
+  LICENCES_TOOL,
   POST_TASK_NAME,
   postTaskTool,
+  SIT_EXAM_NAME,
+  sitExamTool,
   type Desk,
   type Readers,
   type Terms,
@@ -50,15 +62,20 @@ export const INSTRUCTIONS =
   `If a post returns possiblyCharged, do not post the task again: read the order instead. ` +
   `A rejected task stays not done until its refund is sent, which can take hours: say so as soon as next does, then read the order once more after retryAfterSeconds. ` +
   `Two things end it without a refund transaction: a ruling that pays the model, and a refund the desk gives up sending, when state reads refund-failed and next says who to write to; pass that on. ` +
-  `To have Jev judge work delivered somewhere else, send the brief and the result to ${GRADE_NAME}, and read the verdict with ${GET_GRADE_NAME} until done is true if it is not done at once. ` +
+  `To have BrainChain judge work delivered somewhere else, send the brief and the result to ${GRADE_NAME}, and read the verdict with ${GET_GRADE_NAME} until done is true if it is not done at once. ` +
   `${BOND_TASK_NAME} locks USDG behind a BrainChain task this wallet will deliver as a worker, and ${BOND_STATUS_NAME} follows it; neither posts a task. ` +
   `If a bond returns possiblyBonded, do not bond the task again: read its status instead. ` +
+  `The licence exam is not open yet: until it is, the exam tools say so and charge nothing. ` +
+  `To earn a licence for an ERC-8004 agent whose id this wallet holds, read ${EXAM_INFO_NAME}, open a sitting with ${SIT_EXAM_NAME} at the priceUnits it gives, deliver each item once with ${EXAM_SUBMIT_NAME} and read the outcome with ${EXAM_STATUS_NAME}. ` +
+  `If a sitting comes back without briefs, call ${SIT_EXAM_NAME} again with the same agentId and class: the same payment is sent again and is not charged twice. ` +
+  `${LICENCES_NAME} and ${AGENT_RECORD_NAME} read any agent's licences and record. ` +
   `The paying wallet's key is for this server alone. Never read it, print it, write it down or pass it to a command. If a tool here is missing or reports a key problem, stop and tell your operator.`;
 
 const KEY_HELP =
   `Keep the key in a file only your account can read (chmod 600; \`npx -y brainchain-mcp init\` creates a new wallet and its file) and add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config ` +
   `(in Claude Code, \`claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp\`), then restart the server. ` +
-  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME}, ${TIMELINE_NAME}, ${MARKET_CAP_NAME}, ${TRACE_OUTCOMES_NAME}, ${CALLS_NAME}, ${CHANGES_NAME}, ${WATCH_NAME} and ${UNWATCH_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
+  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME}, ${TIMELINE_NAME}, ${MARKET_CAP_NAME}, ${TRACE_OUTCOMES_NAME}, ${CALLS_NAME}, ${CHANGES_NAME}, ${WATCH_NAME}, ${UNWATCH_NAME}, ${EXAM_INFO_NAME}, ${EXAM_STATUS_NAME} without briefs, ${LICENCES_NAME} and ${AGENT_RECORD_NAME} work without a key; ` +
+  `${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -243,8 +260,12 @@ interface Wiring {
   bonds: Bonds;
   bondTools: [Tool, Tool];
   gradeTool: Tool;
+  examTools: Tool[];
   refused: Map<string, string>;
 }
+
+/** The exam's tools and the two that read an agent, in the order they are listed. Only sitting pays; it and a delivery need the key. */
+const examTools = (terms: Terms | string, keyProblem?: string): Tool[] => [EXAM_INFO_TOOL, sitExamTool(terms), examSubmitTool(keyProblem), EXAM_STATUS_TOOL, LICENCES_TOOL, AGENT_RECORD_TOOL];
 
 /** A setting the server cannot read at all: every tool answers with it but those that read public data and need no setting. */
 function unreadable(problem: string): Wiring {
@@ -252,12 +273,15 @@ function unreadable(problem: string): Wiring {
     throw new Error(problem);
   };
   return {
-    desk: { post: refuse, get: refuse, grade: refuse, getGrade: refuse },
+    desk: { post: refuse, get: refuse, grade: refuse, getGrade: refuse, examInfo: refuse, sit: refuse, submitExam: refuse, examStatus: refuse, licences: refuse, agentRecord: refuse },
     terms: problem,
     bonds: { bond: refuse, status: refuse },
     bondTools: bondTools({}, undefined, { invalid: { bond: problem, status: problem } }),
     gradeTool: gradeTool(problem),
-    refused: new Map([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, CALL_NAME, BOND_TASK_NAME, BOND_STATUS_NAME].map((name) => [name, problem])),
+    examTools: examTools(problem, problem),
+    refused: new Map(
+      [POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, CALL_NAME, BOND_TASK_NAME, BOND_STATUS_NAME, EXAM_INFO_NAME, SIT_EXAM_NAME, EXAM_SUBMIT_NAME, EXAM_STATUS_NAME, LICENCES_NAME, AGENT_RECORD_NAME].map((name) => [name, problem]),
+    ),
   };
 }
 
@@ -306,16 +330,17 @@ function deskFor(env: Record<string, string | undefined>, version: string, fetch
   });
   // What the descriptions promise for a setting that cannot be used: a tool the setting stops answers with it
   // and touches nothing else. A setting only payments read stops the tools that pay, and so does a refused
-  // state folder, which could still take a write or hang on one. Reading a bond needs the key and no record,
-  // so only a key problem stops that.
+  // state folder, which could still take a write or hang on one. Reading a bond and delivering an exam item
+  // need the key and no record, so only a key problem stops those.
   const refused = new Map<string, string>();
-  if (problem) for (const name of [POST_TASK_NAME, GRADE_NAME, CALL_NAME, BOND_TASK_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);
-  if (keyProblem) refused.set(BOND_STATUS_NAME, `${keyProblem} ${KEY_HELP}`);
+  if (problem) for (const name of [POST_TASK_NAME, GRADE_NAME, CALL_NAME, BOND_TASK_NAME, SIT_EXAM_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);
+  if (keyProblem) for (const name of [BOND_STATUS_NAME, EXAM_SUBMIT_NAME]) refused.set(name, `${keyProblem} ${KEY_HELP}`);
   const terms = { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(problem ? { problem } : {}) };
   return {
     desk,
     terms,
     gradeTool: gradeTool(terms),
+    examTools: examTools(terms, keyProblem),
     bonds: createBonds({ config, signer: payer, limits }),
     bondTools: bondTools(config, account?.address, { closed: bondsClosed(config), invalid: { bond: problem || undefined, status: keyProblem } }),
     refused,
@@ -371,7 +396,7 @@ function subscribeChanges(server: Server, watcher: URL | undefined, fetchImpl?: 
 }
 
 export function createServer(env: Record<string, string | undefined>, version: string, options: ServerOptions = {}): Server {
-  const { desk, terms, bonds, bondTools: bondToolList, gradeTool: gradeToolDef, refused } = deskFor(env, version, options.fetch);
+  const { desk, terms, bonds, bondTools: bondToolList, gradeTool: gradeToolDef, examTools: examToolList, refused } = deskFor(env, version, options.fetch);
   const problem = typeof terms === "string" ? terms : terms.problem;
   const log = options.log ?? console.error;
   if (problem) log(`brainchain-mcp has an invalid setting: ${problem}`);
@@ -435,6 +460,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
     leadWatch(WATCH_TOOL),
     leadWatch(UNWATCH_TOOL),
     ...bondToolList,
+    ...examToolList,
   ];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {}, resources: { subscribe: true } }, instructions: INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
