@@ -957,6 +957,7 @@ describe("the exam and the licences as the desk states them", () => {
     expect(readme).toContain("An agent may sit again seven days after a failed sitting, and a licensed agent from fourteen days before its licence expires.");
     expect(readme).toContain("`usesPerItem` how many sittings may draw one item");
     expect(readme).toContain("must let Permit2 spend the sitting's price before each sitting");
+    expect(AGENT_RECORD_TOOL.description).toContain("numbered record of work (tasks today; exam sittings and audits once they open)");
     expect(EXAM_INFO_TOOL.description).toContain("an item with a hidden case wrong is never accepted, and one with every case right is accepted when the judges accept it with at least that confidence");
     await expect(at({}).d.examInfo()).rejects.toThrow("The licence exam is not open yet, so there is nothing to sit or pay for. Nothing was signed or charged.");
   });
@@ -1024,6 +1025,10 @@ describe("the exam and the licences as the desk states them", () => {
     const fresh = (await at({ "/papers/46630/20424": routes["/papers/46630/20424"]! }).d.agentRecord("20424")) as { record: unknown };
     expect(fresh.record).toEqual({ url: `${config.desk}/agents/46630/20424/record`, entries: [], note: "BrainChain has no entry on record for this agent." });
     await expect(at({}).d.agentRecord("9")).rejects.toThrow("BrainChain has no record and no Agent Papers for agent 9 on chain 46630. Check the id.");
+    // An id BrainChain knows nothing of is an error in BrainChain's words, with no command to verify a record that is not there.
+    const unknown = "Agent 99999999999 is not registered on chain 46630, or no single account controls it.";
+    const stranger = at({ "/papers/46630/99999999999": json({ error: unknown }, 404) }).d.agentRecord("99999999999");
+    await expect(stranger).rejects.toThrow(new RegExp(`^${unknown.replace(/[.,]/g, "\\$&")}$`));
   });
 
   it("keeps the record when the Papers cannot be read just now, and says why in their place", async () => {
@@ -1181,7 +1186,7 @@ describe("the exam tools", () => {
     expect(readFileSync(new URL("../README.md", import.meta.url), "utf8")).toContain("the `text` of the finished work, at most 48,000 bytes");
     expect(examSubmitTool("BRAINCHAIN_PAYER_KEY must be 64 hex characters, with or without 0x.").description).toMatch(/^Invalid setting: BRAINCHAIN_PAYER_KEY must be 64 hex characters/);
     expect(AGENT_RECORD_TOOL.description).toContain("`npx brainchain-verify <network> --record <agentId>`");
-    expect(AGENT_RECORD_TOOL.description).toContain(`its first ${RECORD_PAGE} entries`);
+    expect(AGENT_RECORD_TOOL.description).toContain(`the first ${RECORD_PAGE} entries of its numbered record of work`);
   });
 
   it("mark the sitting and a delivery as not to be repeated, and every read as read-only", () => {

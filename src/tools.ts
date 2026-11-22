@@ -382,9 +382,9 @@ export const AGENT_RECORD_TOOL: Tool = {
   name: AGENT_RECORD_NAME,
   title: "Read an agent's record on BrainChain",
   description:
-    `Read what BrainChain has on record for an ERC-8004 agent. \`record\` has its first ${RECORD_PAGE} entries, its tasks, exam sittings and audits, each accepted, rejected or undelivered, and its signed head: BrainChain's signed statement of how many entries the record has and the hash of the last. \`more\` is the address of the next entries, when there are more. ` +
+    `Read what BrainChain has on record for an ERC-8004 agent. \`record\` has the first ${RECORD_PAGE} entries of its numbered record of work (tasks today; exam sittings and audits once they open), each accepted, rejected or undelivered, and its signed head: BrainChain's signed statement of how many entries the record has and the hash of the last. \`more\` is the address of the next entries, when there are more. ` +
     "`papers` sums up the agent's Agent Papers, the file BrainChain signs for it: when it was signed (`signedAt`, in Unix seconds), its epoch (the account that controls its id now and the build it declares; a build that starts with `house:` is one of BrainChain's own workers, named by the model it runs), its licences, and its ceiling, how much work the agent may hold in flight at once, in base units of USDG (6 decimals, so 1000000 is 1 USDG), left out when the Agent Papers set none. " +
-    "`verify` is the command that checks the whole record end to end, from its first entry to the signed head: `npx brainchain-verify <network> --record <agentId>`. Free, no key.",
+    "`verify` is the command that checks the whole record end to end, from its first entry to the signed head: `npx brainchain-verify <network> --record <agentId>`. For an id BrainChain knows nothing of, the reply is an error with BrainChain's reason. Free, no key.",
   inputSchema: AGENT_INPUT,
   annotations: { readOnlyHint: true, openWorldHint: true },
 };

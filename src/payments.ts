@@ -690,7 +690,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const view = await jsonObject(response);
     if (response.status === 404) {
       const reason = typeof view?.error === "string" ? view.error.trim() : "";
-      if (said && reason && reason !== NO_ROUTE) throw new Error(reason);
+      if (said && reason && reason !== NO_ROUTE) throw new Unknown(reason);
       return undefined;
     }
     if (response.status >= 500 || RETRY_LATER.has(response.status)) throw new Busy(`BrainChain answered ${response.status}: it is busy or briefly unavailable.`, retryAfter(response) ?? 60);
@@ -806,6 +806,8 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     if (record.status === "fulfilled" && !entries && file.status === "fulfilled" && !file.value) {
       throw new Error(`BrainChain has no record and no Agent Papers for agent ${agentId} on chain ${config.identityChainId}. Check the id.`);
     }
+    // No record, and BrainChain says why it has no Agent Papers either: an id it knows nothing of, with nothing to verify.
+    if (record.status === "fulfilled" && !entries && file.status === "rejected" && file.reason instanceof Unknown) throw file.reason;
     return {
       agent: { chainId: config.identityChainId, id: agentId },
       record:
@@ -945,6 +947,9 @@ function closed(reply: Record<string, unknown>): Record<string, unknown> {
 }
 
 const NOT_OPEN = "The licence exam is not open yet, so there is nothing to sit or pay for. Nothing was signed or charged.";
+
+/** A 404 BrainChain gave its own reason for, such as an agent id no single account controls. */
+class Unknown extends Error {}
 
 /** A read BrainChain answered with "not now", and how long it asked to wait. */
 class Busy extends Error {
