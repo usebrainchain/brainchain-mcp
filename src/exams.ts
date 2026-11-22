@@ -1,7 +1,7 @@
 // The licence exam, as BrainChain's GET /exams describes it: an agent pays for a
-// sitting of five items, delivers each once inside the sitting's time, and
-// holds a licence when four are accepted. Every message is signed with
-// personal_sign by the wallet that holds the agent's ERC-8004 id.
+// sitting, delivers each item once inside the sitting's time, and holds a licence
+// when enough are accepted; GET /exams gives the count and pass mark. Every message
+// is signed with personal_sign by the wallet that holds the agent's ERC-8004 id.
 import { keccak256, toBytes } from "viem";
 
 import type { Guidance } from "./payments.js";
@@ -30,7 +30,7 @@ const list = (numbers: number[]) => (numbers.length < 2 ? numbers.join("") : `${
  * they were. An answer to accept counts only at the exam's bar or above, so the bar is named when the sitting
  * gives it. Older sittings kept only the confidence, or nothing, and say only what they kept.
  */
-function notAcceptedWithEveryCaseRight(items: { index?: unknown; accepted?: unknown; right?: unknown; of?: unknown; judges?: unknown; confidenceBps?: unknown }[], bar: number | undefined): string {
+function refusedDespiteCases(items: { index?: unknown; accepted?: unknown; right?: unknown; of?: unknown; judges?: unknown; confidenceBps?: unknown }[], bar: number | undefined): string {
   return items
     .flatMap((item) => (item.accepted === false && typeof item.right === "number" && item.right === item.of && typeof item.confidenceBps === "number" ? [{ ...item, confidenceBps: item.confidenceBps }] : []))
     .map(({ index, judges, confidenceBps }) => {
@@ -53,12 +53,12 @@ export function sittingGuidance(view: Record<string, unknown>, now = Date.now())
   const bar = typeof view.barBps === "number" ? view.barBps : undefined;
   if (view.state === "passed") {
     const expiresAt = (view.licence as { licence?: { expiresAt?: unknown } } | undefined)?.licence?.expiresAt;
-    const until = typeof expiresAt === "number" ? ` It is valid until ${utc(expiresAt)}, as long as the agent's id keeps the same controller and build.` : "";
-    return { done: true, next: `Passed: ${accepted}. The signed licence is in \`licence\`.${until}${notAcceptedWithEveryCaseRight(items, bar)}` };
+    const until = typeof expiresAt === "number" ? ` It is valid until ${utc(expiresAt)}, as long as the agent's id keeps the same owner and build.` : "";
+    return { done: true, next: `Passed: ${accepted}. The signed licence is in \`licence\`.${until}${refusedDespiteCases(items, bar)}` };
   }
   if (view.state === "failed") {
     const mark = typeof view.passMark === "number" ? `, and a pass takes ${view.passMark}` : "";
-    return { done: true, next: `Failed: ${accepted}${mark}. brainchain_exam_info says how long the agent waits before it may sit again.${notAcceptedWithEveryCaseRight(items, bar)}` };
+    return { done: true, next: `Failed: ${accepted}${mark}. brainchain_exam_info says how long the agent waits before it may sit again.${refusedDespiteCases(items, bar)}` };
   }
   if (view.state === "void") {
     const id = typeof view.sitting === "string" ? ` ${view.sitting}` : "";

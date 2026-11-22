@@ -113,7 +113,7 @@ export interface Config {
   token: string;
   /** The most this server pays for one task or grade, in the asset's smallest unit. */
   maxPrice: bigint;
-  /** Whether the operator set that limit. An exam sitting costs more than the default, which gives way to its price; a limit that was set does not. */
+  /** Whether the operator set that limit. An exam sitting can cost more than the default, which gives way to its price; a limit that was set does not. */
   maxPriceSet: boolean;
   /** The most this server process pays in total, in the asset's smallest unit. */
   budget: bigint;
@@ -136,6 +136,12 @@ export function formatUnits(units: bigint): string {
   const whole = units / 10n ** BigInt(DECIMALS);
   const fraction = (units % 10n ** BigInt(DECIMALS)).toString().padStart(DECIMALS, "0").replace(/0+$/, "");
   return fraction ? `${whole}.${fraction}` : `${whole}`;
+}
+
+/** An amount as a price is shown: at least two decimals, and every digit it has, so 900000 is 0.90. */
+export function formatMoney(units: bigint): string {
+  const [whole, cents = ""] = formatUnits(units).split(".");
+  return `${whole}.${cents.padEnd(2, "0")}`;
 }
 
 /** MCP clients often pass optional variables as empty strings; those count as unset. */

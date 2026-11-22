@@ -96,7 +96,7 @@ export function bondTools(
         lead(invalid.bond) +
         `Lock USDG on Shipped behind a BrainChain task from ${where}, as the worker that will deliver it. BrainChain must already have hired this wallet for the task. ` +
         `If the task is paid and its Proof is recorded by the bond's deadline, which is set after the task's and comes back in the reply, the bond less Shipped's 1% fee is credited to the wallet on Shipped's registry, where the worker CLI's \`bond claim\` collects it; if not, the bond goes to ${MISSED_TO}. ` +
-        `A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires. ` +
+        `A worker's settled bonds, delivered and missed, are part of what BrainChain reads at later hires. ` +
         `The amount is at least the task's bounty and ${formatUnits(MIN_BOND)} USDG, at most ${cap} per task, and counts against this server's budget and daily limit like a post. ` +
         `The wallet needs the USDG and a little ETH on Robinhood Chain. Never bond a task this wallet posted or paid for. Returns the bond, its transaction and its deadline; follow it with ${BOND_STATUS_NAME}. ` +
         `If the reply says possiblyBonded, the bond may have been placed and could not be confirmed: read the task with ${BOND_STATUS_NAME} and do not bond it again.`,
@@ -195,7 +195,7 @@ const GRADE_INPUT: Tool["inputSchema"] = {
 export function gradeTool(terms: Terms | string): Tool {
   const about =
     `Have BrainChain grade work delivered somewhere else, such as a job on another agent market, against the brief it answered. ` +
-    `Returns the verdict: whether the work passes, the probability it reaches a passing level (the lower of what Jev and a second model each give), and a public decision record. ` +
+    `Returns the verdict: whether the work passes, the panel's probability that the work reaches a passing level, and a public decision record. ` +
     `The brief is published in the record, and the result once it is accepted, so never include credentials or text that cannot be published. ` +
     `This tool only grades: nothing is paid to the worker and no task is posted. `;
   return {
@@ -301,8 +301,8 @@ export const EXAM_INFO_TOOL: Tool = {
 export function sitExamTool(terms: Terms | string): Tool {
   const about =
     `Open a sitting of BrainChain's licence exam for an ERC-8004 agent. ${EXAM_NOT_OPEN}` +
-    `This server's wallet signs the request, so it must hold the agent's id on Robinhood Chain (Robinhood Chain testnet on testnet): as the id's controller, as its registered wallet, or, for an id bound to an NFT, as the holder of that NFT. ` +
-    `Paying in USDG, the tool pays by transfer authorization when BrainChain's payment desk offers it, which needs no approval. Otherwise the wallet must allow Permit2 to spend the sitting's price before each sitting; if it has not, the tool says how, and nothing is charged. ` +
+    `This server's wallet signs the request, so it must hold the agent's id on Robinhood Chain (Robinhood Chain testnet on testnet): as the id's owner, as its registered wallet, or, for an id bound to an NFT, as the holder of that NFT. ` +
+    `When it pays in USDG, the tool uses a transfer authorization if BrainChain's payment desk offers one, which needs no approval. Otherwise the wallet must allow Permit2 to spend the sitting's price before each sitting; if it has not, the tool says how, and nothing is charged. ` +
     `A sitting is a set of items drawn when it opens, each a brief that asks for one piece of work, with one deadline for all of them. Enough accepted items make a pass, and a pass earns a licence BrainChain signs. ${EXAM_INFO_NAME} gives the counts, the pass mark, the time allowed and the price. ` +
     `${REFUNDS} `;
   return {
@@ -315,7 +315,7 @@ export function sitExamTool(terms: Terms | string): Tool {
           about +
           `\`price\` is the most the agent agrees to pay, in base units: pass the \`priceUnits\` ${EXAM_INFO_NAME} gives. The tool reads the price from BrainChain's payment desk again and pays exactly that from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}. If the desk asks more than \`price\`, nothing is signed. ` +
           `A sitting can cost more than this server's default limit per payment, so for this one payment the limit is the desk's price. A limit the operator set in BRAINCHAIN_MAX_PRICE_UNITS still holds. ` +
-          `The payment counts against the budget and the daily limit, and a price above that limit, the daily limit or this server's budget of ${terms.budget} per run is refused with nothing charged. ` +
+          `The payment counts against the budget and the daily limit, and a price above BRAINCHAIN_MAX_PRICE_UNITS (when set), the daily limit or the budget (${terms.budget} per run) is refused with nothing charged. ` +
           `BrainChain refuses a sitting it cannot open before anything is signed: when the wallet does not hold the id, a licence is still valid or a failed sitting is too recent. The reply then gives BrainChain's reason, and nothing was charged. ` +
           `An agent that already has a sitting gets that one back instead of a second: with its briefs, marked duplicate, when it is open and this wallet sits it, or with where it stands when it is paid for and not open yet. ` +
           `The desk takes only so many unpaid requests from one address a minute. Past that, the reply says to call again after retryAfterSeconds, and nothing was signed. ` +
@@ -368,9 +368,9 @@ export const LICENCES_TOOL: Tool = {
   title: "Read an agent's BrainChain licences",
   description:
     "List an ERC-8004 agent's BrainChain licences, each with its state, the licence BrainChain signed, its expiry and its audit counts. Audits are tasks BrainChain gives a licensed agent that it cannot tell from any other. " +
-    "A licence ties the agent's id to its epoch: the account that controls the id and its build, the version the controller declares for it in the identity registry. A build that starts with `house:` is one of BrainChain's own workers, named by the model it runs. " +
-    "A licence past its expiry reads expired, whatever else was true of it. Before that it reads suspended after two failed audits in the last three, lapsed while the id has another controller or build than the licence was earned with, and valid otherwise. " +
-    "`registry` says whether BrainChain could read the identity registry for this answer. When it reads `read`, `epoch` is the id's controller and build by a reading at most a minute old, null when no single account controls the id, and every state is held to it. " +
+    "A licence ties the agent's id to its owner, the account that controls the id, and its build, the version the owner declares for it in the identity registry; the two together are its `epoch`. A build that starts with `house:` is one of BrainChain's own workers, named by the model it runs. " +
+    "A licence past its expiry reads expired, whatever else was true of it. Before that it reads suspended after two failed audits in the last three, lapsed while the id has another owner or build than the licence was earned with, and valid otherwise. " +
+    "`registry` says whether BrainChain could read the identity registry for this answer. When it reads `read`, `epoch` is the id's owner (`controller`) and build by a reading at most a minute old, null when no single account owns the id, and every state is held to it. " +
     "When it reads `unreadable`, `epoch` is null and the states are from BrainChain's last own reading, up to ten minutes old. " +
     "A licence that is not valid carries BrainChain's `reason`, and for a lapsed one `next` says the id's current holder may sit for a licence of its own. An agent that never passed has no licences. " +
     "While the licence exam is not open, the tool says so and lists none. Free, no key.",
@@ -380,10 +380,10 @@ export const LICENCES_TOOL: Tool = {
 
 export const AGENT_RECORD_TOOL: Tool = {
   name: AGENT_RECORD_NAME,
-  title: "Read an agent's record on BrainChain",
+  title: "Read an agent's Agent Papers",
   description:
     `Read what BrainChain has on record for an ERC-8004 agent. \`record\` has the first ${RECORD_PAGE} entries of its numbered record of work (tasks today; exam sittings and audits once they open), each accepted, rejected or undelivered, and its signed head: BrainChain's signed statement of how many entries the record has and the hash of the last. \`more\` is the address of the next entries, when there are more. ` +
-    "`papers` sums up the agent's Agent Papers, the file BrainChain signs for it: when it was signed (`signedAt`, in Unix seconds), its epoch (the account that controls its id now and the build it declares; a build that starts with `house:` is one of BrainChain's own workers, named by the model it runs), its licences, and its ceiling, how much work the agent may hold in flight at once, in base units of USDG (6 decimals, so 1000000 is 1 USDG), left out when the Agent Papers set none. " +
+    "`papers` sums up its Agent Papers, the file BrainChain signs for it: owner and declared build (`epoch`; a build that starts with `house:` is one of BrainChain's own workers, named by the model it runs), licences, and how much paid work it may hold at once (`ceiling`, in base units of USDG, and `holdsAtOnce`, such as \"up to 2.25 USDG of paid work at once\"; both left out when the Agent Papers set none), with `signedAt`, when BrainChain signed it, in Unix seconds. " +
     "`verify` is the command that checks the whole record end to end, from its first entry to the signed head: `npx brainchain-verify <network> --record <agentId>`. For an id BrainChain knows nothing of, the reply is an error with BrainChain's reason. Free, no key.",
   inputSchema: AGENT_INPUT,
   annotations: { readOnlyHint: true, openWorldHint: true },

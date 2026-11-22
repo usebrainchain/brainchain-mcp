@@ -3,7 +3,7 @@ import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { wrapFetchWithPayment, x402Client, type PaymentRequirements } from "@x402/fetch";
 import { keccak256, parseAbi, RpcRequestError, toBytes } from "viem";
 
-import { formatUnits, MAX_TIMEOUT_SECONDS, PRICE, REPOST_AFTER_MINUTES, type Config } from "./config.js";
+import { formatMoney, formatUnits, MAX_TIMEOUT_SECONDS, PRICE, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { briefsMessage, RECORD_PAGE, resultMessage, sittingGuidance, sittingMessage } from "./exams.js";
 import { createLimits, type Hold, type Limits } from "./limits.js";
 import type { Desk, GradeRequest, SittingRequest, TaskRequest } from "./tools.js";
@@ -260,21 +260,23 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const [funds, quoted] = await Promise.all([options.funds ? until(deadline, options.funds()).catch(() => undefined) : undefined, quotedPrice(kind, deadline)]);
     const needed = quoted ?? price;
     const what = kind === "exam" ? "sitting" : kind;
+    // A sitting's amounts are shown as prices are, with two decimals; a task's and a grade's as they always were.
+    const shown = kind === "exam" ? formatMoney : formatUnits;
     const again = kind === "task" ? "post again" : kind === "grade" ? "send it again" : "sit again";
     // `approve` with no amount lets Permit2 spend 100 USDG, more than a task or a grade costs. A sitting's approval is
     // its exact price, the smallest that works, so it is used up by that sitting and asked for again before the next.
     const unapproved =
       kind === "exam"
-        ? `Permit2 is not yet approved to spend this wallet's ${config.token} for the ${formatUnits(needed)} ${config.token} this sitting costs, and needs to be before each sitting. ` +
+        ? `Permit2 is not yet approved to spend this wallet's ${config.token} for the ${formatMoney(needed)} ${config.token} this sitting costs; each sitting needs its own approval. ` +
           `Ask your operator to run \`${approveCommand} ${formatUnits(needed)}\`; it allows exactly this sitting's price, and needs a little ETH on ${config.chain}. Nothing was charged.`
         : `Permit2 is not yet approved to spend this wallet's ${config.token}. Ask your operator to run \`${approveCommand}\` once with the key this server uses; it needs a little ETH on ${config.chain}. Nothing was charged.`;
     if (funds && funds.balance < needed) {
-      return `The paying wallet holds ${formatUnits(funds.balance)} ${config.token} on ${config.chain}; a ${what} costs ${formatUnits(needed)}. Nothing was charged. Send at least ${formatUnits(needed - funds.balance)} ${config.token} to ${account().address} on ${config.chain}, then ${again}.`;
+      return `The paying wallet holds ${shown(funds.balance)} ${config.token} on ${config.chain}; a ${what} costs ${shown(needed)}. Nothing was charged. Send at least ${shown(needed - funds.balance)} ${config.token} to ${account().address} on ${config.chain}, then ${again}.`;
     }
     if (funds && permit2 && funds.allowance !== undefined && funds.allowance < needed) return unapproved;
     // The wallet's own figures win over the desk's code; without them the code says which it was.
     if (!funds && /insufficient_(balance|funds)$/.test(code)) {
-      return `The paying wallet holds less than the ${formatUnits(needed)} ${config.token} a ${what} costs on ${config.chain}. Nothing was charged. Send ${config.token} to ${account().address} on ${config.chain}, then ${again}.`;
+      return `The paying wallet holds less than the ${shown(needed)} ${config.token} a ${what} costs on ${config.chain}. Nothing was charged. Send ${config.token} to ${account().address} on ${config.chain}, then ${again}.`;
     }
     if (permit2 && funds?.allowance === undefined && /allowance/.test(code)) return unapproved;
     return code ? `The desk refused the payment: ${sentence(code)} Nothing was charged.` : "The desk refused the payment. Nothing was charged.";
@@ -534,7 +536,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
    */
   async function follow(key: string, sitting: Unopened, first: Response | Error, signal: AbortSignal): Promise<unknown> {
     unopened.set(key, sitting);
-    const price = `${formatUnits(sitting.hold?.amount ?? 0n)} ${config.token}`;
+    const price = `${formatMoney(sitting.hold?.amount ?? 0n)} ${config.token}`;
     // A sitting is named only as the desk names it: a payment it has not answered for may have bought nothing to read.
     const named = (id: unknown) => (typeof id === "string" && /^0x[0-9a-fA-F]{64}$/.test(id) ? { sitting: id.toLowerCase(), statusUrl: `${config.desk}/exams/${id.toLowerCase()}` } : {});
     const uncharged = async (why: string): Promise<never> => {
@@ -554,7 +556,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
         const given = named(reply.sitting);
         const cancelled = given.sitting !== undefined && given.sitting !== sitting.id;
         if (cancelled) await unreserve(sitting);
-        return { ...reply, ...given, price: cancelled ? `0 ${config.token}` : price, ...(cancelled ? { duplicate: true } : {}), ...sittingGuidance(reply) };
+        return { ...reply, ...given, price: cancelled ? `${formatMoney(0n)} ${config.token}` : price, ...(cancelled ? { duplicate: true } : {}), ...sittingGuidance(reply) };
       }
       const said = typeof reply.error === "string" ? reply.error.trim() : "";
       if (/Nothing was charged/.test(said)) {
@@ -606,17 +608,17 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
       throw new Error(`The desk at ${config.desk} gave no price for a sitting on ${config.chain}, so nothing was signed. It may be out of reach, or the exam may not be open on this network; brainchain_exam_info shows which. Nothing was charged.`);
     }
     // `price` is given in base units, so amounts are said in the token and in base units.
-    const amount = (units: bigint) => `${formatUnits(units)} ${config.token} (${units} base units)`;
+    const amount = (units: bigint) => `${formatMoney(units)} ${config.token} (${units} base units)`;
     if (price > request.price) {
       throw new Error(
         `A sitting costs ${amount(price)}, more than the ${amount(request.price)} passed as price, so nothing was signed. To pay the new price, call brainchain_sit_exam again with price "${price}". Nothing was charged.`,
       );
     }
     const over = (what: string, setting: string) =>
-      `A sitting costs ${formatUnits(price)} ${config.token}, more than ${what} (${setting}). Ask your operator to raise ${setting} and restart the server. Nothing was charged.`;
-    if (config.maxPriceSet && price > config.maxPrice) throw new Error(over(`the ${formatUnits(config.maxPrice)} ${config.token} this server may pay at once`, "BRAINCHAIN_MAX_PRICE_UNITS"));
-    if (price > config.budget) throw new Error(over(`this server's budget of ${formatUnits(config.budget)} ${config.token} per run`, "BRAINCHAIN_BUDGET_UNITS"));
-    if (config.daily !== undefined && price > config.daily) throw new Error(over(`this wallet's daily limit of ${formatUnits(config.daily)} ${config.token}`, "BRAINCHAIN_DAILY_UNITS"));
+      `A sitting costs ${formatMoney(price)} ${config.token}, more than ${what} (${setting}). Ask your operator to raise ${setting} and restart the server. Nothing was charged.`;
+    if (config.maxPriceSet && price > config.maxPrice) throw new Error(over(`the ${formatMoney(config.maxPrice)} ${config.token} this server may pay at once`, "BRAINCHAIN_MAX_PRICE_UNITS"));
+    if (price > config.budget) throw new Error(over(`this server's budget of ${formatMoney(config.budget)} ${config.token} per run`, "BRAINCHAIN_BUDGET_UNITS"));
+    if (config.daily !== undefined && price > config.daily) throw new Error(over(`this wallet's daily limit of ${formatMoney(config.daily)} ${config.token}`, "BRAINCHAIN_DAILY_UNITS"));
 
     const agent = { chainId: config.identityChainId, id: request.agentId };
     const at = Math.floor(Date.now() / 1000);
@@ -784,7 +786,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     if (lapsed.length === 0) return view;
     return {
       ...view,
-      next: `Agent ${agentId}'s ${lapsed.join(" and ")} licence has lapsed: the id now has another controller or build than the licence was earned under. The id's current holder may sit for a licence of its own with brainchain_sit_exam.`,
+      next: `Agent ${agentId}'s ${lapsed.join(" and ")} licence has lapsed: the id now has another owner or build than the licence was earned under. The id's current holder may sit for a licence of its own with brainchain_sit_exam.`,
     };
   }
 
@@ -820,7 +822,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
         file.status === "rejected"
           ? unread(papersUrl, file.reason)
           : papers
-            ? { url: papersUrl, signedAt: papers.at, epoch: papers.epoch, licences: papers.licences, ...(papers.ceiling === undefined ? {} : { ceiling: papers.ceiling }) }
+            ? { url: papersUrl, signedAt: papers.at, epoch: papers.epoch, licences: papers.licences, ...(papers.ceiling === undefined ? {} : { ceiling: papers.ceiling, ...atOnce(papers.ceiling) }) }
             : { url: papersUrl, note: "BrainChain serves no Agent Papers for this agent." },
       verify: typeof papers?.verify === "string" ? papers.verify : `npx brainchain-verify ${config.name} --record ${agentId}`,
     };
@@ -947,6 +949,12 @@ function closed(reply: Record<string, unknown>): Record<string, unknown> {
 }
 
 const NOT_OPEN = "The licence exam is not open yet, so there is nothing to sit or pay for. Nothing was signed or charged.";
+
+/** The ceiling in words, from its amount in base units of USDG. */
+function atOnce(ceiling: unknown): { holdsAtOnce?: string } {
+  const units = (ceiling as { units?: unknown } | null)?.units;
+  return typeof units === "string" && /^\d+$/.test(units) ? { holdsAtOnce: `up to ${formatMoney(BigInt(units))} USDG of paid work at once` } : {};
+}
 
 /** A 404 BrainChain gave its own reason for, such as an agent id no single account controls. */
 class Unknown extends Error {}

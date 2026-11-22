@@ -330,7 +330,7 @@ export function createBonds(options: BondsOptions): Bonds {
         deadline: iso(terms.deadline),
         delivered: `${formatUnits(amount - fee(amount))} USDG back after Shipped's 1% fee, once the task is paid and its Proof recorded`,
         missed: `${formatUnits(amount)} USDG to ${refundTo}, ${payer ? "the agent that paid BrainChain's desk for the task" : "the poster, as the task was posted on the board directly"}, if no Proof is recorded by the deadline`,
-        next: "Follow it with brainchain_bond_status. A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires.",
+        next: "Follow it with brainchain_bond_status. A worker's settled bonds, delivered and missed, are part of what BrainChain reads at later hires.",
       };
     } catch (error) {
       // An amount that cannot be given back stays counted, the safe direction, and must not hide why the bond failed.

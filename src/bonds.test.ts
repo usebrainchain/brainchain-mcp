@@ -169,7 +169,7 @@ describe("bond", () => {
       deadline: "2027-01-19T08:00:00.000Z",
       delivered: "4.95 USDG back after Shipped's 1% fee, once the task is paid and its Proof recorded",
       missed: `5 USDG to ${POSTER}, the poster, as the task was posted on the board directly, if no Proof is recorded by the deadline`,
-      next: "Follow it with brainchain_bond_status. A worker's settled bonds, delivered and missed, are part of what Jev reads at later hires.",
+      next: "Follow it with brainchain_bond_status. A worker's settled bonds, delivered and missed, are part of what BrainChain reads at later hires.",
     });
     expect(limits.spent()).toBe(USDG(5));
   });
