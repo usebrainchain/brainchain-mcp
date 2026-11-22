@@ -277,11 +277,14 @@ const EXAM_SUBMIT_INPUT: Tool["inputSchema"] = {
 };
 const AGENT_INPUT: Tool["inputSchema"] = { type: "object", properties: { agentId: AGENT_ID }, required: ["agentId"], additionalProperties: false };
 
+const EXAM_NOT_OPEN = "The licence exam is not open yet: until it is, the exam tools say so and charge nothing. ";
+
 export const EXAM_INFO_TOOL: Tool = {
   name: EXAM_INFO_NAME,
   title: "Read BrainChain's licence exam",
   description:
     `What BrainChain's licence exam for ERC-8004 agents covers and costs, as BrainChain states it. Read it before ${SIT_EXAM_NAME}. ` +
+    `${EXAM_NOT_OPEN}` +
     `\`price\` is the price of a sitting in dollars, and \`priceUnits\` the same price in base units of the token this server pays in (6 decimals, so 1000000 is 1 USDC on Base or 1 USDG on Robinhood Chain), read from the offer of BrainChain's payment desk, the service that takes payment: pass it to ${SIT_EXAM_NAME} as \`price\`. It is left out when the desk offers no sitting on that chain. ` +
     "`classes` are the kinds of work an agent can be examined in. `sitting.items` is how many items a sitting has and `sitting.hardItems` how many of them are hard ones, `sitting.passMark` how many accepted items make a pass, `sitting.minutes` the time allowed and `sitting.licenceDays` how long a licence lasts. " +
     "`sitting.levels` are the levels each item is graded against, best first, and `sitting.passes` is the level an item must reach to be accepted. " +
@@ -297,8 +300,9 @@ export const EXAM_INFO_TOOL: Tool = {
 /** Sitting the exam: the one paid tool whose price can be above the limit per payment, so it says how far that limit moves. */
 export function sitExamTool(terms: Terms | string): Tool {
   const about =
-    `Open a sitting of BrainChain's licence exam for an ERC-8004 agent. This server's wallet signs the request, so it must hold the agent's id on Robinhood Chain (Robinhood Chain testnet on testnet), as the id's controller or as its registered wallet. ` +
-    `Paying in USDG, the wallet must also allow Permit2 to spend the sitting's price, before each sitting; if it has not, the tool says how, and nothing is charged. ` +
+    `Open a sitting of BrainChain's licence exam for an ERC-8004 agent. ${EXAM_NOT_OPEN}` +
+    `This server's wallet signs the request, so it must hold the agent's id on Robinhood Chain (Robinhood Chain testnet on testnet): as the id's controller, as its registered wallet, or, for an id bound to an NFT, as the holder of that NFT. ` +
+    `Paying in USDG, the tool pays by transfer authorization when BrainChain's payment desk offers it, which needs no approval. Otherwise the wallet must allow Permit2 to spend the sitting's price before each sitting; if it has not, the tool says how, and nothing is charged. ` +
     `A sitting is a set of items drawn when it opens, each a brief that asks for one piece of work, with one deadline for all of them. Enough accepted items make a pass, and a pass earns a licence BrainChain signs. ${EXAM_INFO_NAME} gives the counts, the pass mark, the time allowed and the price. ` +
     `${REFUNDS} `;
   return {
@@ -330,7 +334,7 @@ export function examSubmitTool(invalid?: string): Tool {
     title: "Deliver one item of an exam sitting",
     description:
       (invalid ? invalidSetting(invalid) : "") +
-      `Deliver the work for one item of a sitting opened with ${SIT_EXAM_NAME}. This server's wallet signs it, and BrainChain takes it only from the wallet that opened the sitting. ` +
+      `Deliver the work for one item of a sitting opened with ${SIT_EXAM_NAME}. ${EXAM_NOT_OPEN}This server's wallet signs it, and BrainChain takes it only from the wallet that opened the sitting. ` +
       `An item takes one delivery: once sent, the work cannot be replaced or sent again, so send only finished work, before the sitting's deadline. ` +
       `Free. Returns the item's state; read its outcome with ${EXAM_STATUS_NAME}.`,
     inputSchema: EXAM_SUBMIT_INPUT,
@@ -343,6 +347,7 @@ export const EXAM_STATUS_TOOL: Tool = {
   title: "Read an exam sitting",
   description:
     "Read a sitting of the licence exam: its state (open, passed, failed or void), its deadline, each item's state and outcome, and on a pass the licence BrainChain signed, with its expiry. " +
+    EXAM_NOT_OPEN +
     `${REFUNDS} For a void sitting, \`next\` says where to write if the payment has not arrived. ` +
     "Each item's work is run on hidden cases, inputs whose expected answers the agent never sees, and read by the judges, Jev and the other models on BrainChain's grading panel. " +
     "A judged item carries how many hidden cases it answered right (`right` of `of`), the judges' answer (`judges`: accept or refuse), how sure they were of it in basis points (`confidenceBps`, 5000 is 50%) and its `decision` on BrainChain, so an item refused with every case right explains itself. " +
@@ -368,7 +373,7 @@ export const LICENCES_TOOL: Tool = {
     "`registry` says whether BrainChain could read the identity registry for this answer. When it reads `read`, `epoch` is the id's controller and build by a reading at most a minute old, null when no single account controls the id, and every state is held to it. " +
     "When it reads `unreadable`, `epoch` is null and the states are from BrainChain's last own reading, up to ten minutes old. " +
     "A licence that is not valid carries BrainChain's `reason`, and for a lapsed one `next` says the id's current holder may sit for a licence of its own. An agent that never passed has no licences. " +
-    "While BrainChain does not serve licences on their own, the reply lists those in the agent's Agent Papers, the file BrainChain signs for it, with `source: papers`, `signedAt` and the epoch they were signed with, and has no `registry`. Free, no key.",
+    "While the licence exam is not open, the tool says so and lists none. Free, no key.",
   inputSchema: AGENT_INPUT,
   annotations: { readOnlyHint: true, openWorldHint: true },
 };

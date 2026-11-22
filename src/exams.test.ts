@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { resolveConfig } from "./config.js";
 import { briefsMessage, MAX_WORK_BYTES, RECORD_PAGE, resultMessage, sittingGuidance, sittingMessage } from "./exams.js";
 import { createDesk, orderIdOf } from "./payments.js";
+import { INSTRUCTIONS } from "./server.js";
 import {
   AGENT_RECORD_NAME,
   AGENT_RECORD_TOOL,
@@ -162,6 +163,59 @@ describe("sitting the exam", () => {
     expect(reply).toMatchObject({ sitting: seen[0]!.id, price: "5 test USDC" });
   });
 
+  describe("in USDG, when the desk offers both a transfer authorization and Permit2", () => {
+    const permit2 = { scheme: "exact", network: config.network, amount: PRICE, asset: config.asset, payTo: config.payTo, maxTimeoutSeconds: 300, extra: { assetTransferMethod: "permit2" } };
+    const authorization = { ...permit2, extra: { name: "Global Dollar", version: "1" } };
+    /** A desk whose offer lists `offers` in that order, and that answers a paid request with `paid`. */
+    function offering(offers: unknown[], paid: (sent: Paid) => Response = opened) {
+      const required = Buffer.from(JSON.stringify({ x402Version: 2, resource: { url: exams }, accepts: offers })).toString("base64");
+      const seen: Paid[] = [];
+      const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(input, init);
+        const header = req.headers.get("payment-signature");
+        if (!header) return new Response("{}", { status: 402, headers: { "payment-required": required } });
+        const sent = { header, body: await req.text(), id: orderIdOf(JSON.parse(Buffer.from(header, "base64").toString("utf8")) as { payload: unknown }) };
+        seen.push(sent);
+        return paid(sent);
+      }) as typeof fetch;
+      return { fetchImpl, seen };
+    }
+    const payload = (sent: Paid) => (JSON.parse(Buffer.from(sent.header, "base64").toString("utf8")) as { payload: Record<string, unknown> }).payload;
+
+    it("pays a sitting by transfer authorization, which needs no approval, even when Permit2 is offered first", async () => {
+      const { fetchImpl, seen } = offering([permit2, authorization]);
+      expect(await desk(fetchImpl).sit(request)).toMatchObject({ price: "5 test USDG" });
+      expect(seen).toHaveLength(1);
+      expect(payload(seen[0]!)).toHaveProperty("authorization");
+      expect(payload(seen[0]!)).not.toHaveProperty("permit2Authorization");
+    });
+
+    it("pays through Permit2 when that is all the desk offers", async () => {
+      const { fetchImpl, seen } = offering([permit2]);
+      await desk(fetchImpl).sit(request);
+      expect(payload(seen[0]!)).toHaveProperty("permit2Authorization");
+    });
+
+    it("never asks for a Permit2 approval for a sitting paid by authorization that the desk refuses", async () => {
+      const { fetchImpl } = offering([permit2, authorization], () => json({ error: "insufficient_allowance" }, 402));
+      const d = createDesk({ config, signer, approveCommand: "npx -y brainchain-mcp approve", fetch: fetchImpl, funds: async () => ({ balance: 9_000_000n, allowance: 0n }), postTimeoutMs: 2_000, askAgainMs: 5 });
+      const error = String(await d.sit(request).catch((e: Error) => e));
+      expect(error).toMatch(/refused the payment/);
+      expect(error).not.toMatch(/Permit2|approve/);
+      expect(d.spent()).toBe(0n);
+    });
+
+    it("reads the price from the offer on this server's network, asset and payee alone", async () => {
+      const others = [
+        { ...authorization, amount: "1", asset: "0x000000000000000000000000000000000000bEEF" },
+        { ...authorization, amount: "2", payTo: "0x000000000000000000000000000000000000dEaD" },
+      ];
+      const { fetchImpl, seen } = offering([...others, permit2]);
+      expect(await desk(fetchImpl).sit(request)).toMatchObject({ price: "5 test USDG" });
+      expect((JSON.parse(Buffer.from(seen[0]!.header, "base64").toString("utf8")) as { accepted: { amount: string } }).accepted.amount).toBe(PRICE);
+    });
+  });
+
   it("pays a price above the limit per payment for a sitting alone, and never above the price it read", async () => {
     expect(config.maxPrice).toBe(1_000_000n);
     const raised = fakeDesk(opened, { asked: "5000001" });
@@ -244,9 +298,14 @@ describe("sitting the exam", () => {
     expect(paid.spent()).toBe(4_000_000n);
   });
 
-  it("says when the desk names no price for a sitting", async () => {
-    const d = desk((async () => json({ error: "No such route." }, 404)) as typeof fetch);
-    await expect(d.sit(request)).rejects.toThrow(/gave no price for a sitting on Robinhood Chain testnet, so nothing was signed\..*brainchain_exam_info shows which\. Nothing was charged\.$/);
+  it("says when the desk names no price for a sitting, and when the exam is not open at all", async () => {
+    const priceless = desk((async (input: RequestInfo | URL) => (String(input) === `${config.desk}/exams` ? json({ classes: [] }) : json({ error: "No such route." }, 404))) as typeof fetch);
+    await expect(priceless.sit(request)).rejects.toThrow(/gave no price for a sitting on Robinhood Chain testnet, so nothing was signed\..*brainchain_exam_info shows which\. Nothing was charged\.$/);
+    const closed = fakeDesk(opened);
+    const d = desk((async (input: RequestInfo | URL, init?: RequestInit) => (String(input) === exams && new Request(input, init).headers.has("payment-signature") ? closed.fetchImpl(input, init) : json({ error: "Not found." }, 404))) as typeof fetch);
+    await expect(d.sit(request)).rejects.toThrow(/^The licence exam is not open yet, so there is nothing to sit or pay for\. Nothing was signed or charged\.$/);
+    expect(closed.seen).toHaveLength(0);
+    expect(d.spent()).toBe(0n);
   });
 
   it("hears the desk's refusal when the request first arrives, before anything is signed or counted", async () => {
@@ -506,7 +565,7 @@ describe("sitting the exam", () => {
     const d = desk(fetchImpl);
     await d.sit(request);
     answer = () => json({ error: "This payment was already used. Sign a new one." }, 409);
-    await expect(d.sit(request)).rejects.toThrow("The desk will not take that payment again and holds no sitting for it (This payment was already used. Sign a new one). Call brainchain_sit_exam again to pay for a new sitting.");
+    await expect(d.sit(request)).rejects.toThrow("The desk will not take that payment again, and BrainChain holds no sitting for it (This payment was already used. Sign a new one). Call brainchain_sit_exam again to pay for a new sitting.");
     answer = opened;
     const third = (await d.sit(request)) as Record<string, unknown>;
     expect(seen.map((sent) => sent.header === seen[0]!.header)).toEqual([true, true, false]);
@@ -617,16 +676,16 @@ describe("sitting the exam", () => {
     expect(d.spent()).toBe(10_000_000n);
   });
 
-  it("sits again when a kept sitting has failed since, and answers a void one as it is", async () => {
+  it("returns a kept sitting that has failed since as it ended, pays for nothing new in that call, and answers a void one as it is", async () => {
     const failed = holding();
     await failed.d.sit(request);
     failed.set("failed");
-    const again = (await failed.d.sit(request)) as Record<string, unknown>;
-    // The kept payment was sent once more and answered with the sitting as it ended, so a new one was paid for.
-    expect(failed.seen.filter((sent) => sent.header === failed.seen[0]!.header).length).toBeGreaterThan(1);
-    expect(failed.seen.at(-1)!.header).not.toBe(failed.seen[0]!.header);
-    expect(again).toMatchObject({ state: "open", sitting: failed.seen.at(-1)!.id });
-    expect(failed.d.spent()).toBe(10_000_000n);
+    const ended = (await failed.d.sit(request)) as Record<string, unknown>;
+    // The kept payment was sent once more and answered with the sitting as it ended; no other payment was signed.
+    expect(new Set(failed.seen.map((sent) => sent.header)).size).toBe(1);
+    expect(ended).toMatchObject({ state: "failed", done: true, sitting: failed.seen[0]!.id });
+    expect(ended.next).toMatch(/^The sitting this server paid for earlier has ended, so this call paid for nothing new\. Failed: 0 of 5 items accepted, and a pass takes 4\./);
+    expect(failed.d.spent()).toBe(5_000_000n);
 
     const voided = holding();
     await voided.d.sit(request);
@@ -899,7 +958,7 @@ describe("the exam and the licences as the desk states them", () => {
     expect(readme).toContain("`usesPerItem` how many sittings may draw one item");
     expect(readme).toContain("must let Permit2 spend the sitting's price before each sitting");
     expect(EXAM_INFO_TOOL.description).toContain("an item with a hidden case wrong is never accepted, and one with every case right is accepted when the judges accept it with at least that confidence");
-    await expect(at({}).d.examInfo()).rejects.toThrow(`The licence exam is not open at ${config.desk}.`);
+    await expect(at({}).d.examInfo()).rejects.toThrow("The licence exam is not open yet, so there is nothing to sit or pay for. Nothing was signed or charged.");
   });
 
   it("adds the price in units from the desk's own offer on the chain this server pays on, for brainchain_sit_exam to be given", async () => {
@@ -914,7 +973,7 @@ describe("the exam and the licences as the desk states them", () => {
     expect(await d.licences("20424")).toEqual(held);
     expect(urls).toEqual([`${config.desk}/licences/46630/20424`]);
     expect(await d.licences("7")).toMatchObject({ registry: "unreadable", epoch: null, licences: [], next: "Agent 7 holds no licence. brainchain_exam_info says what a sitting takes, and brainchain_sit_exam opens one." });
-    await expect(at({}).d.licences("20424")).rejects.toThrow(`BrainChain at ${config.desk} serves no licences, and no Agent Papers for agent 20424.`);
+    await expect(at({}).d.licences("20424")).rejects.toThrow(/^The licence exam is not open yet, so there are no licences to list\.$/);
     // A lapsed licence keeps BrainChain's reason, and the reply says the id's current holder may earn its own.
     const reason = "The agent's id now names another controller or build than the licence was earned under. Its current holder may sit for a licence of its own.";
     const lapsed = { ...held, licences: [{ ...held.licences[0]!, state: "lapsed", reason }] };
@@ -927,25 +986,14 @@ describe("the exam and the licences as the desk states them", () => {
     await expect(at({ "/licences/46630/99": json({ error: uncontrolled }, 404) }).d.licences("99")).rejects.toThrow(new RegExp(`^${uncontrolled.replace(/[.,]/g, "\\$&")}$`));
   });
 
-  it("lists the licences in the agent's Agent Papers while BrainChain serves none on their own, and says so", async () => {
-    const epoch = { id: `0x${"cd".repeat(32)}`, controller: signer.address, build: "house: anthropic/claude-sonnet-5.5", number: 1, since: 1_799_000_000 };
-    const file = (licences: unknown[]) => json({ name: "Claude on BrainChain", brainchain: { papers: { version: 1, at: 1_800_000_060, epoch, licences }, signed: "BrainChain papers\n{}", signature: "0x04" } });
-    const { d, urls } = at({ "/papers/46630/20424": file([]) });
-    expect(await d.licences("20424")).toEqual({
-      agent: { chainId: 46630, id: "20424" },
-      source: "papers",
-      papers: `${config.desk}/papers/46630/20424`,
-      signedAt: 1_800_000_060,
-      epoch,
-      licences: [],
-      note: "BrainChain does not serve licences on their own just now, so these are the ones the agent's Agent Papers list, signed at 2027-01-15T08:01:00Z.",
-      next: "Agent 20424 holds no licence. brainchain_exam_info says what a sitting takes, and brainchain_sit_exam opens one.",
-    });
-    expect(urls).toEqual([`${config.desk}/licences/46630/20424`, `${config.desk}/papers/46630/20424`]);
-    const lapsed = { class: "code", state: "lapsed", expiresAt: 1_805_184_000 };
-    expect(await at({ "/papers/46630/20424": file([lapsed]) }).d.licences("20424")).toMatchObject({ source: "papers", licences: [lapsed], next: expect.stringMatching(/^Agent 20424's code licence has lapsed/) });
-    // The licences BrainChain serves on their own come first, whatever the Agent Papers say.
-    expect(await at({ "/licences/46630/20424": json({ registry: "read", epoch, licences: [] }), "/papers/46630/20424": file([lapsed]) }).d.licences("20424")).not.toHaveProperty("source");
+  it("says when to read the licences, the record and the Agent Papers again when BrainChain is busy", async () => {
+    const busy = () => new Response(JSON.stringify({ error: "Too many requests." }), { status: 429, headers: { "retry-after": "17" } });
+    expect(await at({ "/licences/46630/20424": busy() }).d.licences("20424")).toMatchObject({ done: false, retryAfterSeconds: 17, next: "Read the licences again after retryAfterSeconds." });
+    const papers = { at: 1_800_000_060, epoch: null, licences: [] };
+    const record = (await at({ [`/agents/46630/20424/record?from=1&limit=${RECORD_PAGE}`]: busy(), "/papers/46630/20424": json({ brainchain: { papers } }) }).d.agentRecord("20424")) as Record<string, unknown>;
+    expect(record.record).toEqual({ url: `${config.desk}/agents/46630/20424/record`, error: "BrainChain answered 429: it is busy or briefly unavailable.", retryAfterSeconds: 17 });
+    expect(record.papers).toMatchObject({ signedAt: 1_800_000_060 });
+    expect(await at({ [`/agents/46630/20424/record?from=1&limit=${RECORD_PAGE}`]: busy(), "/papers/46630/20424": busy() }).d.agentRecord("20424")).toMatchObject({ done: false, retryAfterSeconds: 17, next: "Read the record again after retryAfterSeconds." });
   });
 
   it("returns the head and first entries of an agent's record, what its Papers say, and the command that checks it", async () => {
@@ -982,19 +1030,23 @@ describe("the exam and the licences as the desk states them", () => {
     const record = json({ agent: { chainId: 46630, id: "20424" }, head: { head: { seq: 1 }, signature: "0x02" }, entries: [] });
     const limited = new Response(JSON.stringify({ error: "Too many requests from this address. Try again in a minute." }), { status: 429, headers: { "retry-after": "60" } });
     const read = (papers: Response) => at({ [`/agents/46630/20424/record?from=1&limit=${RECORD_PAGE}`]: record, "/papers/46630/20424": papers }).d.agentRecord("20424") as Promise<Record<string, unknown>>;
-    for (const [papers, error] of [
-      [limited, "BrainChain answered 429: it is busy or briefly unavailable. Try again in a minute."],
-      [json({ error: "The agent's identity could not be read just now. Try again shortly." }, 503), "BrainChain answered 503: it is busy or briefly unavailable. Try again in a minute."],
+    for (const [papers, error, wait] of [
+      [limited, "BrainChain answered 429: it is busy or briefly unavailable.", { retryAfterSeconds: 60 }],
+      [json({ error: "The agent's identity could not be read just now. Try again shortly." }, 503), "BrainChain answered 503: it is busy or briefly unavailable.", { retryAfterSeconds: 60 }],
       // An id no single account controls has no Papers, and the desk says so.
-      [json({ error: "Agent 20424 is not registered on chain 46630, or no single account controls it." }, 404), "Agent 20424 is not registered on chain 46630, or no single account controls it."],
+      [json({ error: "Agent 20424 is not registered on chain 46630, or no single account controls it." }, 404), "Agent 20424 is not registered on chain 46630, or no single account controls it.", {}],
     ] as const) {
       const reply = await read(papers);
       expect(reply.record).toMatchObject({ head: { head: { seq: 1 } }, entries: [] });
-      expect(reply.papers).toEqual({ url: `${config.desk}/papers/46630/20424`, error });
+      expect(reply.papers).toEqual({ url: `${config.desk}/papers/46630/20424`, error, ...wait });
       expect(reply.verify).toBe("npx brainchain-verify testnet --record 20424");
     }
-    // With neither to show, the first reason is the answer.
-    await expect(at({ [`/agents/46630/9/record?from=1&limit=${RECORD_PAGE}`]: json({}, 503), "/papers/46630/9": json({}, 503) }).d.agentRecord("9")).rejects.toThrow("BrainChain answered 503");
+    // With neither to show while BrainChain is busy, the reply says when to read again.
+    expect(await at({ [`/agents/46630/9/record?from=1&limit=${RECORD_PAGE}`]: json({}, 503), "/papers/46630/9": json({}, 503) }).d.agentRecord("9")).toMatchObject({
+      error: "BrainChain answered 503: it is busy or briefly unavailable.",
+      done: false,
+      retryAfterSeconds: 60,
+    });
   });
 });
 
@@ -1084,10 +1136,18 @@ describe("the exam tools", () => {
   it("say that the key must hold the agent's id, how far the limit per payment moves, and that an item takes one delivery", () => {
     const { terms } = resolveConfig({ BRAINCHAIN_PAY_ON: "robinhood" });
     const sit = sitExamTool({ ...terms, wallet: signer.address }).description!;
-    expect(sit).toContain("This server's wallet signs the request, so it must hold the agent's id on Robinhood Chain (Robinhood Chain testnet on testnet), as the id's controller or as its registered wallet.");
-    // Up front, before what a sitting is: the Permit2 allowance a sitting needs, each time.
-    expect(sit.indexOf("Paying in USDG, the wallet must also allow Permit2 to spend the sitting's price, before each sitting; if it has not, the tool says how, and nothing is charged.")).toBeLessThan(sit.indexOf("A sitting is a set of items"));
-    expect(sit).toContain("Paying in USDG, the wallet must also allow Permit2 to spend the sitting's price, before each sitting; if it has not, the tool says how, and nothing is charged.");
+    expect(sit).toContain(
+      "This server's wallet signs the request, so it must hold the agent's id on Robinhood Chain (Robinhood Chain testnet on testnet): as the id's controller, as its registered wallet, or, for an id bound to an NFT, as the holder of that NFT.",
+    );
+    // Up front, before what a sitting is: how a sitting is paid in USDG, and the Permit2 allowance it needs when it is not paid by authorization.
+    const permit2 = "Otherwise the wallet must allow Permit2 to spend the sitting's price before each sitting; if it has not, the tool says how, and nothing is charged.";
+    expect(sit).toContain(`Paying in USDG, the tool pays by transfer authorization when BrainChain's payment desk offers it, which needs no approval. ${permit2}`);
+    expect(sit.indexOf(permit2)).toBeLessThan(sit.indexOf("A sitting is a set of items"));
+    // The exam is not open yet, and every exam tool and the instructions say so first.
+    const closed = "The licence exam is not open yet: until it is, the exam tools say so and charge nothing.";
+    for (const description of [sit, EXAM_INFO_TOOL.description!, examSubmitTool().description!, EXAM_STATUS_TOOL.description!]) expect(description).toContain(closed);
+    expect(INSTRUCTIONS).toContain(closed);
+    expect(readFileSync(new URL("../README.md", import.meta.url), "utf8")).toContain("The licence exam is not open yet. Until it is, the exam tools say so and charge nothing.");
     expect(sit).toContain(`pays exactly that from this server's wallet ${signer.address} on Robinhood Chain. If the desk asks more than \`price\`, nothing is signed.`);
     expect(sit).toContain("`price` is the most the agent agrees to pay, in base units: pass the `priceUnits` brainchain_exam_info gives.");
     expect(sit).toContain("A sitting can cost more than this server's default limit per payment, so for this one payment the limit is the desk's price.");
