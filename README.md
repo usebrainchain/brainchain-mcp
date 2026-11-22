@@ -4,16 +4,182 @@
 [![npm](https://img.shields.io/npm/v/brainchain-mcp)](https://www.npmjs.com/package/brainchain-mcp)
 [![License](https://img.shields.io/npm/l/brainchain-mcp)](LICENSE)
 
-The BrainChain MCP tells your agent when something public changes about a Robinhood Chain token: BitGo adding support for it, a market maker's wallet first approving or receiving it, a new Uniswap pool, Trust Wallet or MetaMask adding it to their lists, or an exchange listing it. Changes on the chain arrive within seconds of their block, and most others within minutes. Each comes with what the token is worth and the public steps it took before. Your agent can ask for them, follow them as a stream, or have each one sent to Discord, Slack, Telegram or its own endpoint: see [Watch public changes](#watch-public-changes).
-
-It can also go back to any past block and see only what was public about a token then, its market cap included, and count how often each kind of change was followed by a listing, from a dataset published every day with its fingerprint recorded on BrainChain: see [A token's public history at any date](#a-tokens-public-history-at-any-date) and [How often a step was followed by a listing](#how-often-a-step-was-followed-by-a-listing). All of this is free and needs no key.
-
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwIl19)
-[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_server-0098FF?logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=brainchain&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22brainchain-mcp%22%5D%7D)
+The BrainChain MCP lets your agent hire a frontier model for a task and pay only for work that meets the bar you set. It can also have BrainChain grade work from somewhere else before your agent accepts it.
 
 ## Quick start
 
-Requires Node 22 or later. The free tools need no key and no wallet, so the server works as soon as it is added. The buttons above add it to Cursor and VS Code.
+Requires Node 22 or later.
+
+1. Create a paying wallet:
+
+   ```bash
+   npx -y brainchain-mcp@0.19.0 init
+   ```
+
+   This saves a new key in `~/.brainchain/payer.key`, readable only by your account, and prints the wallet's address. The key itself is never printed.
+
+2. Send 1 USDC on Base to that address. That pays for one task or four grades. No ETH is needed, because each payment is a signature. Run the same command again to check the balance.
+
+3. Add the server. `init` prints the line for Claude Code, Cursor and VS Code. For Claude Code:
+
+   ```bash
+   claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.19.0
+   ```
+
+4. Ask your agent to post a task, such as "Post a BrainChain task: summarise the x402 specification in 300 words, with a link to the section behind every claim." Or have it grade work it received on another agent market before it approves the work there.
+
+Briefs and results are public, so keep credentials and private code out of them. The server pays at most 1 USDC per task and 10 USDC per run until you raise the [limits](#payments-and-limits).
+
+## Paid tasks
+
+Your agent posts a brief and two or three quality levels. BrainChain hires one of five models (Claude, GPT, Gemini, Grok or DeepSeek) or an outside worker, grades the result against your levels, and pays the worker only if the work passes. If it fails, the full payment comes back to your wallet.
+
+A task costs 1 USDC on Base and a grade 0.25 USDC, paid over [x402](https://x402.org) from a wallet you control, within spending limits you set. [USDG on Robinhood Chain](#pay-in-usdg-on-robinhood-chain) works too. The same server can bond a task your wallet was hired for.
+
+BrainChain is a blockchain run by an AI agent. The model behind its decisions is Jev, a decision model served by TypeSafe. Every hire and grade is recorded on chain and listed at [usebrainchain.com/decisions](https://usebrainchain.com/decisions).
+
+## Install
+
+The server runs in any MCP client that starts local (stdio) servers. Every setup below points it at the key file with `BRAINCHAIN_PAYER_KEY_FILE`, except VS Code, which can prompt for the key. Client configs then hold only the path, and the key stays out of the environment an agent's shell inherits.
+
+### A wallet you already have
+
+To pay from a wallet you already have instead of a new one, save its key in a file only your account can read. This reads it without echoing it or leaving it in your shell history:
+
+```bash
+mkdir -p ~/.brainchain
+(umask 077; printf 'Key: ' && read -rs key && echo && printf '%s\n' "$key" > ~/.brainchain/payer.key)
+chmod 600 ~/.brainchain/payer.key
+```
+
+`init` never replaces a key file. With this one in place, it prints the wallet's address, its balance and the commands that add the server.
+
+### Claude Code
+
+Add the server for every project:
+
+```bash
+claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.19.0
+```
+
+Or add it to a project's `.mcp.json`. The file holds no secret, so you can commit it:
+
+```json
+{
+  "mcpServers": {
+    "brainchain": {
+      "command": "npx",
+      "args": ["-y", "brainchain-mcp@0.19.0"],
+      "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
+    }
+  }
+}
+```
+
+### Cursor
+
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMTkuMCJdLCJlbnYiOnsiQlJBSU5DSEFJTl9QQVlFUl9LRVlfRklMRSI6In4vLmJyYWluY2hhaW4vcGF5ZXIua2V5In19)
+
+Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for every project):
+
+```json
+{
+  "mcpServers": {
+    "brainchain": {
+      "command": "npx",
+      "args": ["-y", "brainchain-mcp@0.19.0"],
+      "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
+    }
+  }
+}
+```
+
+### Claude Desktop, Windsurf and other clients
+
+Add the server to the client's `mcpServers` configuration. For Claude Desktop that is `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS and `%APPDATA%\Claude\claude_desktop_config.json` on Windows. Quit Claude Desktop fully and open it again to load the change; closing the window is not enough.
+
+```json
+{
+  "mcpServers": {
+    "brainchain": {
+      "command": "npx",
+      "args": ["-y", "brainchain-mcp@0.19.0"],
+      "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
+    }
+  }
+}
+```
+
+### VS Code
+
+`code --add-mcp`, the line `init` prints, adds the server to your user profile. Or `.vscode/mcp.json` can prompt for the key instead of reading a file:
+
+```json
+{
+  "servers": {
+    "brainchain": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "brainchain-mcp@0.19.0"],
+      "env": { "BRAINCHAIN_PAYER_KEY": "${input:brainchain-key}" }
+    }
+  },
+  "inputs": [
+    { "type": "promptString", "id": "brainchain-key", "description": "Private key of the wallet that pays for BrainChain tasks", "password": true }
+  ]
+}
+```
+
+### OpenClaw
+
+Point the server at the key file:
+
+```bash
+openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.19.0"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
+```
+
+The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
+
+Each setup above pays in USDC on Base. To pay in USDG on Robinhood Chain, see [below](#pay-in-usdg-on-robinhood-chain).
+
+`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.19.0 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
+
+### MCP Registry
+
+The server is listed in the official [MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers/com.usebrainchain%2Fbrainchain/versions/latest) as `com.usebrainchain/brainchain`, with every setting it reads, so clients and catalogs that install from the registry can set it up from there.
+
+## Pay in USDG on Robinhood Chain
+
+Add `BRAINCHAIN_PAY_ON=robinhood` to the server's environment (`-e BRAINCHAIN_PAY_ON=robinhood` in Claude Code). The wallet then needs 1 USDG per task, plus a little ETH on Robinhood Chain for a one-time approval that lets Permit2 (Uniswap's token-approval contract) move its USDG:
+
+```bash
+BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.19.0 approve
+```
+
+In PowerShell on Windows:
+
+```powershell
+$env:BRAINCHAIN_PAY_ON='robinhood'; $env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.19.0 approve
+```
+
+This approves 100 USDG. Pass another amount or `max` as the last argument, or `0` to revoke. After that, each payment is a signature, and BrainChain's payment desk (the service that takes payment and posts your task) pays the gas. `init` run with `BRAINCHAIN_PAY_ON=robinhood` names these steps too, and puts the setting in the commands it prints.
+
+## Keep the key safe
+
+Use a dedicated wallet that holds only what you plan to spend. The key stays on your machine: the server signs payments with it locally and never sends it anywhere.
+
+An agent with a shell on the same account can read whatever that account can, including the key, wherever it is kept. The server tells agents to leave it alone, and nothing enforces that. A key taken that way is outside every spending limit. So keep little in the wallet. Prefer `BRAINCHAIN_PAYER_KEY_FILE` to an exported variable, which every shell inherits. Where your client offers a sandbox for the agent's shell, use it; in OpenClaw that is `agents.defaults.sandbox.mode`.
+
+## Free token data
+
+The same server tells your agent when something public changes about a Robinhood Chain token: BitGo adding support for it, a market maker's wallet first approving or receiving it, a new Uniswap pool, Trust Wallet or MetaMask adding it to their lists, or an exchange listing it. Changes on the chain arrive within seconds of their block, and most others within minutes. Each comes with what the token is worth and the public steps it took before. Your agent can ask for them, follow them as a stream, or have each one sent to Discord, Slack, Telegram or its own endpoint: see [Watch public changes](#watch-public-changes).
+
+It can also go back to any past block and see only what was public about a token then, its market cap included, and count how often each kind of change was followed by a listing, from a dataset published every day with its fingerprint recorded on BrainChain: see [A token's public history at any date](#a-tokens-public-history-at-any-date) and [How often a step was followed by a listing](#how-often-a-step-was-followed-by-a-listing).
+
+All of this is free and needs no key or wallet, so for these tools alone you can add the server without one. The buttons add it to Cursor and VS Code:
+
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwIl19)
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_server-0098FF?logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=brainchain&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22brainchain-mcp%22%5D%7D)
 
 In Claude Code:
 
@@ -37,148 +203,6 @@ In Claude Desktop, open Settings, then Developer, then Edit Config, add the serv
 These setups start the newest release each time the client starts the server. Then ask your agent what changed about Robinhood Chain tokens in the last hour, or to post each new change to a Discord channel. [`examples/watch-and-alert`](examples/watch-and-alert) does both from a script.
 
 The other free tools list the Robinhood Chain tokens that BitGo, a custodian for exchanges and funds, has recently started to support, read how much of a token a market maker's trading wallets hold, now or at a past block, read how far along a token is and where it is already listed, and read what tokenized US stocks cost on Robinhood Chain: see [Tools](#tools).
-
-## Paid tasks
-
-The same server lets your agent hire a frontier model for a task and pay only for work that meets the quality bar you set. Your agent posts a brief and two or three quality levels. BrainChain hires one of five models (Claude, GPT, Gemini, Grok or DeepSeek) or an outside worker, grades the result against your levels, and pays the worker only if the work passes. If it fails, the full payment comes back to your wallet.
-
-Each task costs 1 USDG on Robinhood Chain (the default) or 1 USDC on Base, paid over [x402](https://x402.org) from a wallet you control, within spending limits you set. The same server can grade work delivered somewhere else and bond a task your wallet was hired for.
-
-BrainChain is a blockchain run by an AI agent. The model behind its decisions is Jev, a decision model served by TypeSafe. Every hire and grade is recorded on chain and listed at [usebrainchain.com/decisions](https://usebrainchain.com/decisions).
-
-## Install
-
-To pay for tasks, the server needs the key of the wallet that pays. It runs in any MCP client that starts local (stdio) servers.
-
-First save the paying wallet's key in a file only your account can read. This reads it without echoing it or leaving it in your shell history:
-
-```bash
-mkdir -p ~/.brainchain
-(umask 077; printf 'Key: ' && read -rs key && echo && printf '%s\n' "$key" > ~/.brainchain/payer.key)
-chmod 600 ~/.brainchain/payer.key
-```
-
-Every setup below points the server at that file with `BRAINCHAIN_PAYER_KEY_FILE`, except VS Code, which can prompt for the key. Client configs then hold only the path, and the key stays out of the environment an agent's shell inherits.
-
-### Claude Code
-
-Add the server for every project:
-
-```bash
-claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.18.0
-```
-
-Or add it to a project's `.mcp.json`. The file holds no secret, so you can commit it:
-
-```json
-{
-  "mcpServers": {
-    "brainchain": {
-      "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.18.0"],
-      "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
-    }
-  }
-}
-```
-
-### Cursor
-
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMTguMCJdLCJlbnYiOnsiQlJBSU5DSEFJTl9QQVlFUl9LRVlfRklMRSI6In4vLmJyYWluY2hhaW4vcGF5ZXIua2V5In19)
-
-Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for every project):
-
-```json
-{
-  "mcpServers": {
-    "brainchain": {
-      "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.18.0"],
-      "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
-    }
-  }
-}
-```
-
-### Claude Desktop, Windsurf and other clients
-
-Add the server to the client's `mcpServers` configuration. For Claude Desktop that is `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS and `%APPDATA%\Claude\claude_desktop_config.json` on Windows. Quit Claude Desktop fully and open it again to load the change; closing the window is not enough.
-
-```json
-{
-  "mcpServers": {
-    "brainchain": {
-      "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.18.0"],
-      "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
-    }
-  }
-}
-```
-
-### VS Code
-
-`.vscode/mcp.json` can prompt for the key instead of reading a file:
-
-```json
-{
-  "servers": {
-    "brainchain": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.18.0"],
-      "env": { "BRAINCHAIN_PAYER_KEY": "${input:brainchain-key}" }
-    }
-  },
-  "inputs": [
-    { "type": "promptString", "id": "brainchain-key", "description": "Private key of the wallet that pays for BrainChain tasks", "password": true }
-  ]
-}
-```
-
-### OpenClaw
-
-Point the server at the key file:
-
-```bash
-openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.18.0"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
-```
-
-The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
-
-Each setup above pays in USDG on Robinhood Chain. To pay in USDC on Base instead, add `BRAINCHAIN_PAY_ON=base` to the server's environment (`-e BRAINCHAIN_PAY_ON=base` in Claude Code).
-
-`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.18.0 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
-
-### MCP Registry
-
-The server is listed in the official [MCP Registry](https://registry.modelcontextprotocol.io/v0.1/servers/com.usebrainchain%2Fbrainchain/versions/latest) as `com.usebrainchain/brainchain`, with every setting it reads, so clients and catalogs that install from the registry can set it up from there.
-
-## Tasks are public
-
-Each brief is posted on BrainChain and each result is served at a public link. Keep credentials and private code out of briefs.
-
-## Before the first task
-
-**USDG on Robinhood Chain.** The wallet needs 1 USDG per task, plus a little ETH on Robinhood Chain for a one-time approval that lets Permit2 (Uniswap's token-approval contract) move its USDG:
-
-```bash
-BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.18.0 approve
-```
-
-In PowerShell on Windows:
-
-```powershell
-$env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.18.0 approve
-```
-
-This approves 100 USDG. Pass another amount or `max` as the last argument, or `0` to revoke. After that, each payment is a signature, and BrainChain's payment desk (the service that takes payment and posts your task) pays the gas.
-
-**USDC on Base.** The wallet needs 1 USDC per task. Payments are signatures, so it needs no approval and no ETH.
-
-Use a dedicated wallet that holds only what you plan to spend. The key stays on your machine: the server signs payments with it locally and never sends it anywhere.
-
-An agent with a shell on the same account can read whatever that account can, including the key, wherever it is kept. The server tells agents to leave it alone, and nothing enforces that. A key taken that way is outside every limit below. So keep little in the wallet. Prefer `BRAINCHAIN_PAYER_KEY_FILE` to an exported variable, which every shell inherits. Where your client offers a sandbox for the agent's shell, use it; in OpenClaw that is `agents.defaults.sandbox.mode`.
 
 ## Tools
 
@@ -256,7 +280,7 @@ What a reply looks like before you pay for one. The ids, hashes, times and figur
 {
   "order": "0x6d9a…41c2",
   "state": "posted",
-  "network": "eip155:4663",
+  "network": "eip155:8453",
   "paymentTx": "0x3f1e…9b07",
   "taskId": "4812",
   "board": "0x44b8464342Bbfb9B565FAE494DfDefa37D33A211",
@@ -274,7 +298,7 @@ What a reply looks like before you pay for one. The ids, hashes, times and figur
   "grade": "0x8c2f…a913",
   "state": "graded",
   "status": "https://brain.usebrainchain.com/x402/grades/0x8c2f…a913",
-  "network": "eip155:4663",
+  "network": "eip155:8453",
   "paymentTx": "0x51ab…c3d0",
   "accepted": true,
   "answer": "accept",
@@ -361,7 +385,7 @@ Each row has two times. `at` is the earliest time the step can be shown public, 
 The build reads the log, the pool index and Robinhood's page names of the watcher `BRAINCHAIN_WATCH_URL` names, through `GET /events`, `GET /pools?after=` and `GET /robinhood/names`, or a pool index on the same machine with `--pools <dir>`, and reads the chain itself for every followed wallet's approvals and each market maker's queued pools. Give it a private RPC in `BRAINCHAIN_WATCH_RPC`. The first build reads the chain's whole history; a build stops after 50 minutes, and until one has read through the newest block it exits 2, and running it again goes on from there. Later builds take minutes.
 
 ```bash
-BRAINCHAIN_WATCH_RPC=https://your-rpc npx -y brainchain-mcp@0.18.0 dataset --out ./brainchain-data
+BRAINCHAIN_WATCH_RPC=https://your-rpc npx -y brainchain-mcp@0.19.0 dataset --out ./brainchain-data
 ```
 
 ## Watch public changes
@@ -411,7 +435,7 @@ An event says what became public and when. It does not say why, and most tokens 
 [`examples/watch-and-alert`](examples/watch-and-alert) has two scripts. `npm run discord` has each change posted to the Discord channel whose webhook URL is in `DISCORD_WEBHOOK_URL`, and `npm run discord -- --remove` stops it. `npm run loop` is the start of an agent: every minute it reads the new changes, asks `brainchain_trace_outcomes` how often earlier tokens with the same step were listed within 30 days, and prints what it would do. Its core:
 
 ```ts
-await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.18.0"] }));
+await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.19.0"] }));
 let since;
 for (;;) {
   const page = await call("brainchain_changes", since === undefined ? { kinds, limit: 5 } : { kinds, since });
@@ -446,8 +470,8 @@ To try it, pass Cash Cat's contract, `0x020bfC650A365f8BB26819deAAbF3E21291018b4
 
 ## Payments and limits
 
-- 1 USDG or 1 USDC, taken when the task is posted. The server never pays more per task than `BRAINCHAIN_MAX_PRICE_UNITS` (1 USDG or USDC by default), never more in total than `BRAINCHAIN_BUDGET_UNITS` (10 USDG or USDC by default), and only to the BrainChain payment desk. Each server keeps its own budget, which resets whenever it restarts, including when your MCP client restarts it. For an agent that runs unattended, `BRAINCHAIN_DAILY_UNITS` sets a limit per UTC day that holds across restarts, and across servers paying from the same wallet on either chain, as long as they share a `BRAINCHAIN_STATE_DIR`.
-- A grade costs 0.25 USDG or USDC, paid the same way and counted against the same limits. A bond counts against them too.
+- 1 USDC or 1 USDG, taken when the task is posted. The server never pays more per task than `BRAINCHAIN_MAX_PRICE_UNITS` (1 USDC or USDG by default), never more in total than `BRAINCHAIN_BUDGET_UNITS` (10 USDC or USDG by default), and only to the BrainChain payment desk. Each server keeps its own budget, which resets whenever it restarts, including when your MCP client restarts it. For an agent that runs unattended, `BRAINCHAIN_DAILY_UNITS` sets a limit per UTC day that holds across restarts, and across servers paying from the same wallet on either chain, as long as they share a `BRAINCHAIN_STATE_DIR`.
+- A grade costs 0.25 USDC or USDG, paid the same way and counted against the same limits. A bond counts against them too.
 - If BrainChain accepts the work, you get the result and the model receives the payment minus BrainChain's protocol fee (3% on mainnet).
 - If BrainChain rejects the work, or no model delivers within 24 hours, you get no result and the full amount goes back to the paying wallet on the chain it paid on.
 - The payment or refund is final about six hours after grading (about an hour on testnet), when the dispute window closes.
@@ -457,13 +481,13 @@ To try it, pass Cash Cat's contract, `0x020bfC650A365f8BB26819deAAbF3E21291018b4
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BRAINCHAIN_PAYER_KEY_FILE` | required to pay | The path of a file holding the paying wallet's private key, 64 hex characters with or without `0x`: absolute or starting with `~/`. On macOS and Linux the server refuses a file other accounts can read; Windows is not checked, so keep the file in your own user folder. Without a key the server still starts and reads orders, and `brainchain_post_task` explains how to set one. |
+| `BRAINCHAIN_PAYER_KEY_FILE` | required to pay | The path of a file holding the paying wallet's private key, 64 hex characters with or without `0x`: absolute or starting with `~/`. On macOS and Linux the server refuses a file other accounts can read; Windows is not checked, so keep the file in your own user folder. Without a key the server still starts and reads orders, and `brainchain_post_task` explains how to set one. `init` creates a new key in `~/.brainchain/payer.key`. |
 | `BRAINCHAIN_PAYER_KEY` | none | The key itself, in place of `BRAINCHAIN_PAYER_KEY_FILE`. A shell inherits variables, so the file is safer. |
 | `BRAINCHAIN_NETWORK` | `mainnet` | `testnet` switches every setting to BrainChain testnet. |
-| `BRAINCHAIN_PAY_ON` | `robinhood` | `base` pays in USDC on Base (Base Sepolia on testnet) instead of USDG on Robinhood Chain. |
-| `BRAINCHAIN_MAX_PRICE_UNITS` | `1000000` | Maximum paid per task or grade, in base units (6 decimals, so 1000000 is 1 USDG). Under `1000000` every post is refused, since a task costs 1 USDG, and under `250000` every grade. |
+| `BRAINCHAIN_PAY_ON` | `base` | `robinhood` pays in USDG on Robinhood Chain instead of USDC on Base. On testnet these are Robinhood Chain testnet and Base Sepolia. |
+| `BRAINCHAIN_MAX_PRICE_UNITS` | `1000000` | Maximum paid per task or grade, in base units (6 decimals, so 1000000 is 1 USDC). Under `1000000` every post is refused, since a task costs 1 USDC, and under `250000` every grade. |
 | `BRAINCHAIN_MAX_BOND_UNITS` | `10000000` | Maximum locked in one delivery bond with `brainchain_bond_task`, in base units, at least `2000000` (2 USDG). Bonds also draw on the budget and the daily limit. |
-| `BRAINCHAIN_BUDGET_UNITS` | `10000000` | Maximum paid in total while the server runs, in base units (10000000 is 10 USDG). |
+| `BRAINCHAIN_BUDGET_UNITS` | `10000000` | Maximum paid in total while the server runs, in base units (10000000 is 10 USDC). |
 | `BRAINCHAIN_DAILY_UNITS` | no limit | Maximum the wallet pays per UTC day, in base units. The running total is kept on disk, so restarting the server does not reset it. A payment signed just before a crash stays counted until 00:00 UTC, even if it was never taken. |
 | `BRAINCHAIN_STATE_DIR` | `~/.brainchain` | Where the daily total is kept, one file per network and wallet: absolute or starting with `~/`, and not under `/proc`, `/sys` or `/dev`. |
 | `BRAINCHAIN_MAKER_WALLETS` | none | More wallets for `brainchain_market_maker_holdings` and `brainchain_token_timeline` to follow beside the five they follow, as `Name=0xAddress` separated by commas, such as `Acme=0x0000000000000000000000000000000000000001,Acme 2=0x0000000000000000000000000000000000000002`. At most 20, each with a name of up to 40 letters, digits, spaces or `. & ' ( ) -`. Their entries carry the name and `source: "configured"`, and the tool does not check whose wallets they are. |
@@ -474,19 +498,19 @@ To try it, pass Cash Cat's contract, `0x020bfC650A365f8BB26819deAAbF3E21291018b4
 
 If a setting is invalid, the server says so once on stderr when it starts, and each tool the setting stops returns that error and does nothing else. A `BRAINCHAIN_NETWORK`, `BRAINCHAIN_PAY_ON` or `BRAINCHAIN_DESK_URL` the server cannot read stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap`, `brainchain_trace_outcomes`, `brainchain_calls`, `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`. A setting only payments read stops just the four tools that pay, `brainchain_post_task`, `brainchain_grade`, `brainchain_call` and `brainchain_bond_task`; the other fifteen keep working. Those settings are the spending limits, `BRAINCHAIN_STATE_DIR` (including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set), `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC`, and a custom `BRAINCHAIN_DESK_URL` set without its `BRAINCHAIN_PAY_TO`. A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working. A `BRAINCHAIN_MAKER_WALLETS` it cannot read stops `brainchain_market_maker_holdings` and `brainchain_token_timeline`, which read the wallets it adds, and no other tool. A `BRAINCHAIN_WATCH_URL` it cannot read stops `brainchain_changes`, `brainchain_watch`, `brainchain_unwatch` and `brainchain_calls`, and no other tool; `brainchain_token_market_cap` then searches the chain for a token's pools itself. A `BRAINCHAIN_DATASET` it cannot read stops `brainchain_trace_outcomes`, `brainchain_call` and `brainchain_calls`, and no other tool; the timeline and the symbol lookup then read without the dataset.
 
-`npx -y brainchain-mcp@0.18.0 wallet` checks the settings and the key, then prints the wallet that pays, the limits it pays within, what it holds and, for USDG, what Permit2 may spend. It exits 0 when the wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2 when its balance could not be read, so a script can run it before posting. `--help` lists the commands and variables, and `--version` prints the version.
+`npx -y brainchain-mcp@0.19.0 wallet` checks the settings and the key, then prints the wallet that pays, the limits it pays within, what it holds and, for USDG, what Permit2 may spend. It exits 0 when the wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2 when its balance could not be read, so a script can run it before posting. `init` creates a wallet in `~/.brainchain/payer.key`, or in the file `BRAINCHAIN_PAYER_KEY_FILE` names, when none is there, and otherwise reports on it as `wallet` does, exit codes included. Either way it ends with the commands that add the server. `--help` lists the commands and variables, and `--version` prints the version.
 
 ## Try it on testnet
 
-Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have no value. In Claude Code, with the key saved as in [Install](#install):
+Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have no value. `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.19.0 init` prints the address to fund and the commands that add the testnet server. In Claude Code, with the key saved as in [Install](#install):
 
 ```bash
-claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.18.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.19.0
 ```
 
-**With USDC on Base Sepolia** (`BRAINCHAIN_PAY_ON=base`), get test USDC from [Circle's faucet](https://faucet.circle.com). That is all a payment needs.
+**With USDC on Base Sepolia**, the default, get test USDC from [Circle's faucet](https://faucet.circle.com). That is all a payment needs.
 
-**With test USDG on Robinhood Chain testnet:**
+**With test USDG on Robinhood Chain testnet** (`BRAINCHAIN_PAY_ON=robinhood`):
 
 1. Get a little testnet ETH for the paying wallet from the [Robinhood Chain testnet faucet](https://faucet.testnet.chain.robinhood.com).
 2. Claim 100 test USDG (once a day per wallet) with [Foundry](https://getfoundry.sh). `--interactive` asks for the key, so it never appears on the command line:
@@ -498,7 +522,7 @@ claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHA
 3. Approve Permit2:
 
    ```bash
-   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.18.0 approve
+   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.19.0 approve
    ```
 
 ## Examples

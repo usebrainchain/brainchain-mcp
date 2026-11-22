@@ -196,7 +196,7 @@ export function resolveConfig(given: Record<string, string | undefined>, { payme
   const env = payments ? given : Object.fromEntries(Object.entries(given).filter(([name]) => !PAYMENT_SETTINGS.includes(name)));
   const name = (envString(env, "BRAINCHAIN_NETWORK") ?? "mainnet").toLowerCase();
   if (name !== "mainnet" && name !== "testnet") throw new Error("BRAINCHAIN_NETWORK must be mainnet or testnet.");
-  const payOn = (envString(env, "BRAINCHAIN_PAY_ON") ?? "robinhood").toLowerCase();
+  const payOn = (envString(env, "BRAINCHAIN_PAY_ON") ?? "base").toLowerCase();
   if (payOn !== "robinhood" && payOn !== "base") throw new Error("BRAINCHAIN_PAY_ON must be robinhood or base.");
   const preset = PRESETS[name][payOn];
 

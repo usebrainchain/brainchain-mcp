@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hear of public changes to Robinhood Chain tokens as they happen and read their history at any block.",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.18.0",
+      "version": "0.19.0",
       "transport": {
         "type": "stdio"
       },
@@ -54,13 +54,13 @@
         },
         {
           "name": "BRAINCHAIN_PAY_ON",
-          "description": "Where to pay: robinhood for USDG on Robinhood Chain (one-time Permit2 approval) or base for USDC on Base (Base Sepolia on testnet), which needs no approval.",
+          "description": "Where to pay: base for USDC on Base (Base Sepolia on testnet), which needs no approval and no ETH, or robinhood for USDG on Robinhood Chain (one-time Permit2 approval).",
           "isRequired": false,
           "format": "string",
-          "default": "robinhood",
+          "default": "base",
           "choices": [
-            "robinhood",
-            "base"
+            "base",
+            "robinhood"
           ]
         },
         {

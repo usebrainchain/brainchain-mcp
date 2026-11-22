@@ -22,7 +22,7 @@ import { CALL_NAME, CALLS_NAME } from "./calls.js";
 import { TRACE_OUTCOMES_NAME } from "./outcomes.js";
 import { gradeGuidance, guidance } from "./payments.js";
 import { hasGitHubToken } from "./github.js";
-import { approvalFailure, approvalUnconfirmed, approveCommand, createServer, INSTRUCTIONS, pastedKey, payerAccount, terminalHint, walletExitCode, walletReport, type ServerOptions } from "./server.js";
+import { approvalFailure, approvalUnconfirmed, approveCommand, cliCommand, createServer, INSTRUCTIONS, pastedKey, payerAccount, terminalHint, walletExitCode, walletReport, type ServerOptions } from "./server.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, GET_GRADE_NAME, GET_TASK_NAME, GET_TASK_TOOL, GRADE_NAME, POST_TASK_NAME } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
@@ -368,11 +368,11 @@ describe("the server", () => {
     for (const env of [{ BRAINCHAIN_PAYER_KEY: KEY }, { BRAINCHAIN_PAYER_KEY_FILE: keyFile(`${KEY}\n`) }]) {
       const { tools } = await (await connect(env)).listTools();
       const description = tools.find((tool) => tool.name === POST_TASK_NAME)!.description!;
-      expect(description).toContain(`this server's wallet ${address} on Robinhood Chain`);
+      expect(description).toContain(`this server's wallet ${address} on Base`);
       expect(description).not.toContain(KEY);
     }
     const { tools } = await (await connect({})).listTools();
-    expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toContain("this server's wallet on Robinhood Chain");
+    expect(tools.find((tool) => tool.name === POST_TASK_NAME)!.description).toContain("this server's wallet on Base");
   });
 
   it("says how a rejected task ends without a refund wherever it says the task stays not done", () => {
@@ -458,6 +458,7 @@ describe("terminalHint", () => {
     const hint = terminalHint({ isTTY: true }, "0.0.0-test")!;
     expect(hint).toContain("brainchain-mcp 0.0.0-test speaks MCP on stdio and is waiting for a client");
     expect(hint).toContain("claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.0.0-test");
+    expect(hint).toContain("Run `npx -y brainchain-mcp@0.0.0-test init` to set up a paying wallet");
     expect(hint).not.toContain("\n");
     for (const stdin of [{ isTTY: false }, {}]) expect(terminalHint(stdin, "0.0.0-test")).toBeUndefined();
   });
@@ -507,45 +508,53 @@ describe("approvalUnconfirmed", () => {
 });
 
 describe("approveCommand", () => {
-  const mainnet = resolveConfig({});
-  const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
+  // Only USDG pays through Permit2, and USDC on Base is the default, so every approve command names the chain.
+  const mainnet = resolveConfig({ BRAINCHAIN_PAY_ON: "robinhood" });
+  const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "robinhood" });
   const command = "npx -y brainchain-mcp@0.0.0-test approve";
+  const onRobinhood = `BRAINCHAIN_PAY_ON=robinhood ${command}`;
 
-  it("adds nothing for a key in BRAINCHAIN_PAYER_KEY, and never prints the key", () => {
-    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY: KEY })).toBe(command);
-    expect(approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY: KEY })).toBe(`BRAINCHAIN_NETWORK=testnet ${command}`);
+  it("adds only the payment chain for a key in BRAINCHAIN_PAYER_KEY, and never prints the key", () => {
+    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY: KEY })).toBe(onRobinhood);
+    expect(approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY: KEY })).toBe(`BRAINCHAIN_NETWORK=testnet ${onRobinhood}`);
   });
 
   it("names the key file as it was given, so the command finds the key on its own", () => {
-    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: " ~/.brainchain/payer.key\n" })).toBe(`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key ${command}`);
-    expect(approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "/keys/payer.key" })).toBe(`BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=/keys/payer.key ${command}`);
+    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: " ~/.brainchain/payer.key\n" })).toBe(`BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key ${command}`);
+    expect(approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "/keys/payer.key" })).toBe(`BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=/keys/payer.key ${command}`);
+  });
+
+  it("names nothing for the default chain, since a new process pays there already", () => {
+    expect(cliCommand("wallet", resolveConfig({}), "0.0.0-test", { BRAINCHAIN_PAYER_KEY: KEY })).toBe("npx -y brainchain-mcp@0.0.0-test wallet");
+    expect(cliCommand("init", resolveConfig({ BRAINCHAIN_NETWORK: "testnet" }), "0.0.0-test", {})).toBe("BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.0.0-test init");
   });
 
   it("quotes a path so a shell reads it back unchanged", () => {
     if (process.platform === "win32") return;
     for (const path of ["/my keys/payer.key", "/keys/it's/$HOME/`id`.key"]) {
       const [assignment] = approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: path }).split(" npx ");
+      expect(assignment!.startsWith("BRAINCHAIN_PAY_ON=robinhood ")).toBe(true);
       expect(execFileSync("sh", ["-c", `${assignment} printenv BRAINCHAIN_PAYER_KEY_FILE`], { encoding: "utf8" })).toBe(`${path}\n`);
     }
   });
 
   it("gives the PowerShell form on Windows, where an inline assignment is no command", () => {
-    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY: KEY }, "win32")).toBe(command);
+    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY: KEY }, "win32")).toBe(`$env:BRAINCHAIN_PAY_ON='robinhood'; ${command}`);
     expect(approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "~/.brainchain/payer.key" }, "win32")).toBe(
-      `$env:BRAINCHAIN_NETWORK='testnet'; $env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; ${command}`,
+      `$env:BRAINCHAIN_NETWORK='testnet'; $env:BRAINCHAIN_PAY_ON='robinhood'; $env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; ${command}`,
     );
-    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "~/it's/payer.key" }, "win32")).toBe(`$env:BRAINCHAIN_PAYER_KEY_FILE='~/it''s/payer.key'; ${command}`);
+    expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "~/it's/payer.key" }, "win32")).toBe(`$env:BRAINCHAIN_PAY_ON='robinhood'; $env:BRAINCHAIN_PAYER_KEY_FILE='~/it''s/payer.key'; ${command}`);
   });
 
   it("leaves out a value that is no path, which may be a key in the wrong variable", () => {
-    for (const value of [KEY, `0x${KEY}`, "payer.key", "~other/payer.key"]) expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: value })).toBe(command);
+    for (const value of [KEY, `0x${KEY}`, "payer.key", "~other/payer.key"]) expect(approveCommand(mainnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: value })).toBe(onRobinhood);
   });
 });
 
 describe("wallet", () => {
   const address = privateKeyToAccount(`0x${KEY}`).address;
-  const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
-  const approve = "BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.0.0-test approve";
+  const testnet = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "robinhood" });
+  const approve = "BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAY_ON=robinhood npx -y brainchain-mcp@0.0.0-test approve";
   // Bonds are closed on testnet, so their cap is left out.
   const limits = "Limits: 1 test USDG per task or grade (BRAINCHAIN_MAX_PRICE_UNITS), 10 test USDG per server run (BRAINCHAIN_BUDGET_UNITS), no daily limit (BRAINCHAIN_DAILY_UNITS).";
 
@@ -566,7 +575,7 @@ describe("wallet", () => {
   });
 
   it("treats a raised price limit as a ceiling: the wallet may hold enough to post while it holds less than that", () => {
-    const raised = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_MAX_PRICE_UNITS: "5000000" });
+    const raised = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "robinhood", BRAINCHAIN_MAX_PRICE_UNITS: "5000000" });
     expect(walletReport(raised, address, { balance: 2_000_000n, allowance: 2_000_000n, eth: 0n }, approve)).toBe(
       [
         `${address} pays for tasks in test USDG on Robinhood Chain testnet.`,
@@ -581,7 +590,7 @@ describe("wallet", () => {
   });
 
   it("names the desk's price under a lower price limit, and says posts will be refused", () => {
-    const capped = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_MAX_PRICE_UNITS: "500000" });
+    const capped = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "robinhood", BRAINCHAIN_MAX_PRICE_UNITS: "500000" });
     expect(walletReport(capped, address, { balance: 0n, allowance: 0n, eth: 0n }, approve)).toBe(
       [
         `${address} pays for tasks in test USDG on Robinhood Chain testnet.`,
@@ -597,7 +606,7 @@ describe("wallet", () => {
   it("prints an approve command that finds a key kept in a file", () => {
     const fromFile = approveCommand(testnet, "0.0.0-test", { BRAINCHAIN_PAYER_KEY_FILE: "~/.brainchain/payer.key" });
     expect(walletReport(testnet, address, { balance: 1_000_000n, allowance: 0n, eth: 0n }, fromFile)).toContain(
-      "Run `BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.0.0-test approve` once;",
+      "Run `BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.0.0-test approve` once;",
     );
   });
 
@@ -610,7 +619,7 @@ describe("wallet", () => {
   });
 
   it("lists every limit, the daily limit and the bond cap among them on mainnet", () => {
-    const mainnet = resolveConfig({ BRAINCHAIN_DAILY_UNITS: "5000000", BRAINCHAIN_MAX_BOND_UNITS: "3000000" });
+    const mainnet = resolveConfig({ BRAINCHAIN_PAY_ON: "robinhood", BRAINCHAIN_DAILY_UNITS: "5000000", BRAINCHAIN_MAX_BOND_UNITS: "3000000" });
     expect(walletReport(mainnet, address, new Error("down"), approve).split("\n")[1]).toBe(
       "Limits: 1 USDG per task or grade (BRAINCHAIN_MAX_PRICE_UNITS), 10 USDG per server run (BRAINCHAIN_BUDGET_UNITS), 5 per UTC day, USDG and USDC together (BRAINCHAIN_DAILY_UNITS), 3 USDG per bond (BRAINCHAIN_MAX_BOND_UNITS).",
     );
@@ -618,8 +627,8 @@ describe("wallet", () => {
 
   it("exits 0 only when the wallet can pay for a task, 1 when it cannot, and 2 when its balance could not be read", () => {
     const base = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "base" });
-    const raised = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_MAX_PRICE_UNITS: "5000000" });
-    const capped = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_MAX_PRICE_UNITS: "500000" });
+    const raised = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "robinhood", BRAINCHAIN_MAX_PRICE_UNITS: "5000000" });
+    const capped = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "robinhood", BRAINCHAIN_MAX_PRICE_UNITS: "500000" });
     for (const [config, funds, code] of [
       [testnet, { balance: 1_000_000n, allowance: 1_000_000n, eth: 0n }, 0],
       [testnet, { balance: 999_999n, allowance: 10_000_000n, eth: 0n }, 1],

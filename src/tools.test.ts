@@ -310,17 +310,18 @@ describe("get tool", () => {
 });
 
 describe("post tool and config", () => {
-  it("defaults to mainnet: the USDG desk on Robinhood Chain", () => {
+  it("defaults to mainnet, paying the desk in USDC on Base", () => {
     const config = resolveConfig({});
     expect(config).toMatchObject({
       desk: "https://brain.usebrainchain.com",
-      network: "eip155:4663",
-      chainId: 4663,
-      asset: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+      network: "eip155:8453",
+      chainId: 8453,
+      asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       maxPrice: 1_000_000n,
     });
-    expect(postTaskTool(config.terms).description).toContain("Each task costs 1 USDG, paid from this server's wallet on Robinhood Chain");
+    expect(postTaskTool(config.terms).description).toContain("Each task costs 1 USDC, paid from this server's wallet on Base");
     expect(postTaskTool(config.terms).description).toContain("about six hours after grading");
+    expect(postTaskTool(resolveConfig({ BRAINCHAIN_PAY_ON: "robinhood" }).terms).description).toContain("Each task costs 1 USDG, paid from this server's wallet on Robinhood Chain");
   });
 
   it("says the memory of identical posts lasts while the server runs, and that briefs and results are public", () => {
@@ -337,8 +338,9 @@ describe("post tool and config", () => {
 
   it("switches every setting with BRAINCHAIN_NETWORK=testnet", () => {
     const config = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
-    expect(config).toMatchObject({ desk: "https://brain.testnet.usebrainchain.com", network: "eip155:46630", chainId: 46630 });
-    expect(postTaskTool(config.terms).description).toContain("1 test USDG");
+    expect(config).toMatchObject({ desk: "https://brain.testnet.usebrainchain.com", network: "eip155:84532", chainId: 84532 });
+    expect(postTaskTool(config.terms).description).toContain("1 test USDC");
+    expect(resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "robinhood" })).toMatchObject({ desk: config.desk, network: "eip155:46630", chainId: 46630 });
   });
 
   it("names the desk's prices, and says posts and grades are refused under a lower price limit", () => {
@@ -346,12 +348,12 @@ describe("post tool and config", () => {
       const { terms } = resolveConfig(env);
       return [postTaskTool(terms).description!, gradeTool(terms).description!];
     };
-    const [post, grade] = tools({});
+    const [post, grade] = tools({ BRAINCHAIN_PAY_ON: "robinhood" });
     expect(post).toContain("Each task costs 1 USDG, paid from this server's wallet on Robinhood Chain. The result");
     expect(grade).toContain("Each grade costs 0.25 USDG whatever the verdict, paid from this server's wallet on Robinhood Chain, and counts against its budget and daily limit.");
     for (const text of [post, grade]) expect(text).not.toContain("refused");
 
-    const [cheapPost, cheapGrade] = tools({ BRAINCHAIN_MAX_PRICE_UNITS: "500000" });
+    const [cheapPost, cheapGrade] = tools({ BRAINCHAIN_PAY_ON: "robinhood", BRAINCHAIN_MAX_PRICE_UNITS: "500000" });
     expect(cheapPost).toContain(
       "Each task costs 1 USDG, paid from this server's wallet on Robinhood Chain. This server pays at most 0.5 USDG at a time (BRAINCHAIN_MAX_PRICE_UNITS), under that price, so posts are refused and nothing is charged until the operator raises it.",
     );
@@ -364,8 +366,8 @@ describe("post tool and config", () => {
 
     // Under a raised ceiling the desk may have raised its prices too, so both are named up to the ceiling.
     const [raisedPost, raisedGrade] = tools({ BRAINCHAIN_MAX_PRICE_UNITS: "2500000" });
-    expect(raisedPost).toContain("Each task costs at most 2.5 USDG");
-    expect(raisedGrade).toContain("Each grade costs at most 2.5 USDG");
+    expect(raisedPost).toContain("Each task costs at most 2.5 USDC");
+    expect(raisedGrade).toContain("Each grade costs at most 2.5 USDC");
   });
 
   it("marks every tool that spends as destructive and every free read as read-only", () => {
@@ -378,7 +380,7 @@ describe("post tool and config", () => {
   it("lets single overrides win over the preset", () => {
     const config = resolveConfig({ BRAINCHAIN_DESK_URL: "http://localhost:10000/", BRAINCHAIN_PAY_TO: "0x000000000000000000000000000000000000dEaD", BRAINCHAIN_MAX_PRICE_UNITS: "2500000" });
     expect(config.desk).toBe("http://localhost:10000");
-    expect(config.terms.cost).toBe("at most 2.5 USDG");
+    expect(config.terms.cost).toBe("at most 2.5 USDC");
   });
 
   it("refuses unknown networks and malformed values", () => {

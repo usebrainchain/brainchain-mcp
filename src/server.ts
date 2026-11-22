@@ -56,7 +56,7 @@ export const INSTRUCTIONS =
   `The paying wallet's key is for this server alone. Never read it, print it, write it down or pass it to a command. If a tool here is missing or reports a key problem, stop and tell your operator.`;
 
 const KEY_HELP =
-  `Keep the key in a file only your account can read (chmod 600) and add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config ` +
+  `Keep the key in a file only your account can read (chmod 600; \`npx -y brainchain-mcp init\` creates a new wallet and its file) and add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config ` +
   `(in Claude Code, \`claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp\`), then restart the server. ` +
   `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME}, ${TIMELINE_NAME}, ${MARKET_CAP_NAME}, ${TRACE_OUTCOMES_NAME}, ${CALLS_NAME}, ${CHANGES_NAME}, ${WATCH_NAME} and ${UNWATCH_NAME} work without a key; ${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
@@ -102,7 +102,7 @@ export function payerAccount(env: Record<string, string | undefined>): PrivateKe
 /** Started by hand in a terminal, the server would wait in silence for a client that never comes. */
 export function terminalHint(stdin: { isTTY?: boolean }, version: string): string | undefined {
   if (!stdin.isTTY) return undefined;
-  return `brainchain-mcp ${version} speaks MCP on stdio and is waiting for a client; press Ctrl+C to quit. Add it to one instead, for example \`claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@${version}\`, or run it with --help.`;
+  return `brainchain-mcp ${version} speaks MCP on stdio and is waiting for a client; press Ctrl+C to quit. Add it to one instead, for example \`claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@${version}\`. Run \`npx -y brainchain-mcp@${version} init\` to set up a paying wallet, or --help for every command.`;
 }
 
 /** A private key typed as an argument is never printed back: by now it is in the shell's history. */
@@ -210,25 +210,32 @@ export function walletReport(config: Config, address: string, funds: WalletFunds
 }
 
 /** Quoting a leading ~ is safe: the server expands it itself. */
-const shellWord = (word: string) => (/^[\w./~-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`);
+export const shellWord = (word: string) => (/^[\w./~-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`);
 
 /** PowerShell, the shell a Windows terminal opens, reads a single-quoted word as written, with '' for a quote. */
-const powershellWord = (word: string) => `'${word.replaceAll("'", "''")}'`;
+export const powershellWord = (word: string) => `'${word.replaceAll("'", "''")}'`;
+
+/** The settings that say where this server pays, which another process started for the same wallet needs too. */
+export function paySettings(config: Config): [string, string][] {
+  return [...(config.name === "testnet" ? [["BRAINCHAIN_NETWORK", "testnet"] as [string, string]] : []), ...(config.payOn === "robinhood" ? [["BRAINCHAIN_PAY_ON", "robinhood"] as [string, string]] : [])];
+}
 
 /**
- * The command that approves Permit2 with this server's key, in the form the
- * local shell runs: an inline assignment on macOS and Linux, PowerShell's
- * $env: on Windows, where `NAME=value command` is not a command at all.
+ * A brainchain-mcp command that runs with this server's key and payment chain, in
+ * the form the local shell runs: an inline assignment on macOS and Linux,
+ * PowerShell's $env: on Windows, where `NAME=value command` is not a command at all.
  */
-export function approveCommand(config: Config, version: string, env: Record<string, string | undefined>, platform: NodeJS.Platform = process.platform): string {
+export function cliCommand(command: string, config: Config, version: string, env: Record<string, string | undefined>, platform: NodeJS.Platform = process.platform): string {
   const file = env.BRAINCHAIN_PAYER_KEY_FILE?.trim();
-  // `approve` is a new process that sees only its own environment. A value that is no path may be a key in the wrong variable, so it is never printed.
+  // The command is a new process that sees only its own environment. A value that is no path may be a key in the wrong variable, so it is never printed.
   const named = file && isAbsolute(expandHome(file)) ? file : undefined;
-  const settings: [string, string][] = [...(config.name === "testnet" ? [["BRAINCHAIN_NETWORK", "testnet"] as [string, string]] : []), ...(named ? [["BRAINCHAIN_PAYER_KEY_FILE", named] as [string, string]] : [])];
-  const run = `npx -y brainchain-mcp@${version} approve`;
+  const settings: [string, string][] = [...paySettings(config), ...(named ? [["BRAINCHAIN_PAYER_KEY_FILE", named] as [string, string]] : [])];
+  const run = `npx -y brainchain-mcp@${version} ${command}`;
   if (platform === "win32") return [...settings.map(([name, value]) => `$env:${name}=${powershellWord(value)}`), run].join("; ");
-  return [...settings.map(([name, value]) => `${name}=${name === "BRAINCHAIN_NETWORK" ? value : shellWord(value)}`), run].join(" ");
+  return [...settings.map(([name, value]) => `${name}=${shellWord(value)}`), run].join(" ");
 }
+
+export const approveCommand = (config: Config, version: string, env: Record<string, string | undefined>, platform?: NodeJS.Platform) => cliCommand("approve", config, version, env, platform);
 
 interface Wiring {
   desk: Desk;

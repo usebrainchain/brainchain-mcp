@@ -16,7 +16,7 @@ import { callTool, checkBrief, POST_TASK_NAME, type Desk } from "./tools.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
 const signer = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
-const config = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
+const config = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "robinhood" });
 const endpoint = `${config.desk}/x402/tasks`;
 const task = { title: "Explain a Merkle proof", brief: "In two paragraphs.", levels: ["Accurate and complete", "Accurate", "Wrong"] };
 
