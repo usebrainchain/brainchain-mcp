@@ -168,6 +168,15 @@ export class CallIndex {
     return this.calls.filter((call) => call.payer.toLowerCase() === caller.toLowerCase());
   }
 
+  /**
+   * Every call from position `after` on, in the order they were kept. Calls are only ever added, and a restart reads them
+   * back in that order, so a position names the same call for good and a reader can go on from the `next` it was given.
+   */
+  page(after: number, limit: number): { calls: IndexedCall[]; next: number; total: number } {
+    const calls = this.calls.slice(after, after + limit);
+    return { calls, next: after + calls.length, total: this.calls.length };
+  }
+
   get(grade: string): IndexedCall | undefined {
     return this.calls.find((call) => call.grade === grade.toLowerCase());
   }

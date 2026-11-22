@@ -17,7 +17,8 @@ export const DATASET_USAGE = `Usage: brainchain-mcp dataset --out <dir> [--pools
 Builds the BrainChain MCP dataset in <dir>: every Robinhood Chain token with a pool or a public trace, the dated public
 steps each took, the venues that went on to list it, and how often each kind of step was followed by a listing within 7,
 30 and 90 days. It writes tokens.jsonl, events.jsonl, outcomes.jsonl, their CSV copies, base-rates.json, feed.json,
-feed.xml, pools/ (every token's first pool on each Uniswap venue), symbols/ (what each of those tokens calls itself) and
+feed.xml, calls.jsonl and calls.csv (every call made with brainchain_call, settled by the day's outcomes), pools/
+(every token's first pool on each Uniswap venue), symbols/ (what each of those tokens calls itself) and
 manifests/YYYY-MM-DD.json, with the SHA-256 and rows of each file.
 
 Keep <dir> between builds: each build adds the rows it has not written before and never changes one, and goes on from
@@ -29,7 +30,7 @@ builds take minutes.
   --pools <dir>  Read the pool index from the state folder of a brainchain-mcp watch on this machine, in place of the
                  watcher's GET /pools?after=.
 
-Environment: BRAINCHAIN_WATCH_URL names the watcher whose log and pool index the build reads (default
+Environment: BRAINCHAIN_WATCH_URL names the watcher whose log, pool index and calls the build reads (default
 https://watch.usebrainchain.com). BRAINCHAIN_WATCH_RPC reads Robinhood Chain from another RPC, such as Chainstack, with
 the public endpoint as the fallback; without it the chain's history is read from the public endpoint alone, which is
 slow. GITHUB_TOKEN, or GITHUB_TOKEN_FILE, dates Trust Wallet's and MetaMask's files with that token's allowance; without

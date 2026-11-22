@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { getAddress, zeroAddress, type Address, type Hash } from "viem";
 
+import { CALL_COLUMNS, callCells, settle, type IndexedCall } from "../calls.js";
 import { blockTime, remember, STRETCH_BLOCKS, type ChainHistory } from "../history.js";
 import type { MakerWallet } from "../makers.js";
 import { dated, queuedKept, queuedPools, registryLogs } from "../queued.js";
@@ -16,7 +17,7 @@ import { again, approvalsIn, blockTimes, confirmedBy, inOrder, namesOf, type Fou
 import { csv, EVENT_COLUMNS, FILES, jsonl, OUTCOME_COLUMNS, OUTCOME_WORDS, outcomeKey, parseJsonl, poolShard, sha256, STEP_WORDS, stepKey, symbolBucket, unsettled, type FileEntry, type Manifest, type OutcomeRow, type PoolRow, type StepRow, type SymbolRow, type TokenRow } from "./format.js";
 import { baseRates, type PoolPieces } from "./rates.js";
 import { outcomesFromEvents, stepsFromEvents, tracedIn, type Traced } from "./rows.js";
-import { gateStarts, kucoinStarts, robinhoodPageName, watcherEvents, watcherNames, type PoolSource } from "./sources.js";
+import { gateStarts, kucoinStarts, robinhoodPageName, watcherCalls, watcherEvents, watcherNames, type PoolSource } from "./sources.js";
 import { TokenTable } from "./table.js";
 
 /** `base-rates.json` counts pools by stretches of this many blocks, each with the time its last block was made. */
@@ -158,10 +159,10 @@ const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
 
 /**
  * Builds the BrainChain MCP dataset in `out`, adding to what an earlier build left there: the files publish.mjs takes,
- * and today's manifest. Everything that is a row is appended, never rewritten; the CSV files, the base rates and the
- * feeds are worked out again from the rows. The watcher's log gives the steps public sources record and the venues' own
- * listings, its pool index every token with a pool, and the job's own scans of the chain the market makers' approvals
- * and queued pools of every token.
+ * and today's manifest. Everything that is a row is appended, never rewritten; the CSV files, the base rates, the feeds
+ * and the calls, settled again each day, are worked out again from the rows. The watcher's log gives the steps public
+ * sources record and the venues' own listings, its pool index every token with a pool, its call index every call, and
+ * the job's own scans of the chain the market makers' approvals and queued pools of every token.
  */
 export async function buildDataset(options: BuildOptions): Promise<BuildReport> {
   const { out, watcher, reader, wallets, fetch: fetchImpl = fetch, say = () => {}, now = () => new Date() } = options;
@@ -548,6 +549,29 @@ export async function buildDataset(options: BuildOptions): Promise<BuildReport> 
   const date = readAt.slice(0, 10);
   writeWhole(join(out, "events.csv"), csv(EVENT_COLUMNS, steps));
   writeWhole(join(out, "outcomes.csv"), csv(OUTCOME_COLUMNS, outcomes));
+
+  // Every call made with brainchain_call by the time the build read its sources, settled by this day's outcomes exactly as
+  // brainchain_calls settles it from this day's files. The calls are kept between builds, so a call the watcher no longer
+  // serves stays in; one recorded after readAt waits for the next build.
+  const callsPath = join(out, STATE_DIR, "calls.jsonl");
+  if (existsSync(callsPath)) trimTail(callsPath);
+  const calls = rowsOf<IndexedCall>(callsPath);
+  const grades = new Set(calls.map(({ grade }) => grade));
+  try {
+    const fresh = (await watcherCalls(watcher, fetchImpl)).filter((call) => {
+      if (Date.parse(call.at) > Date.parse(readAt) || grades.has(call.grade)) return false;
+      grades.add(call.grade);
+      return true;
+    });
+    if (fresh.length) appendFileSync(callsPath, jsonl(fresh));
+    calls.push(...fresh);
+    count("calls.jsonl", fresh.length);
+  } catch (error) {
+    notes.push(`The watcher's calls could not be read (${error instanceof Error ? error.message : String(error)}), so calls.jsonl holds the ${calls.length} an earlier build read.`);
+  }
+  const settled = calls.map((call) => settle(call, { outcomes, ref: { readAt } })).sort((a, b) => a.at.localeCompare(b.at) || a.grade.localeCompare(b.grade));
+  writeWhole(join(out, "calls.jsonl"), jsonl(settled));
+  writeWhole(join(out, "calls.csv"), csv(CALL_COLUMNS, settled.map(callCells)));
   writeWhole(join(out, "base-rates.json"), `${JSON.stringify({ readAt, headBlock, cut: new Date(Math.min(Date.parse(readAt), headAt)).toISOString(), through: { head, pools: poolsThrough, approvals: state.approvals ?? 0, wallets: wallets.map(({ wallet }) => wallet) }, unconfirmed: unsettled(outcomes).length, kinds: rates, pools: pieces }, null, 1)}\n`);
   const items = feedItems(steps, outcomes, traced);
   writeWhole(join(out, "feed.json"), `${JSON.stringify(jsonFeed(items), null, 1)}\n`);

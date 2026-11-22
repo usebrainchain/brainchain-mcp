@@ -583,7 +583,13 @@ describe("the watcher's GitHub token", () => {
 
 describe("calls", () => {
   const call = { grade: `0x${"ab".repeat(32)}`, payer: "0xFe4d9d7c5c530c9652A46D0BF6178b041Bc2F858", token: "0x020bfC650A365f8BB26819deAAbF3E21291018b4" } as never as IndexedCall;
-  const calls = { of: (caller: string) => (caller.toLowerCase() === call.payer.toLowerCase() ? [call] : []), get: (grade: string) => (grade === call.grade ? call : undefined) };
+  const later = { ...call, grade: `0x${"cd".repeat(32)}`, payer: "0x46e92cF98d3430b39d5de7c15695894590BBfBBe" };
+  const all = [call, later];
+  const calls = {
+    of: (caller: string) => (caller.toLowerCase() === call.payer.toLowerCase() ? [call] : []),
+    get: (grade: string) => (grade === call.grade ? call : undefined),
+    page: (after: number, limit: number) => ({ calls: all.slice(after, after + limit), next: Math.min(all.length, after + limit), total: all.length }),
+  };
 
   it("are served by the wallet that paid for them, and one by its grade", async () => {
     const { base } = await serving({ calls });
@@ -593,6 +599,15 @@ describe("calls", () => {
     expect((await fetch(new URL(`/calls/0x${"cd".repeat(32)}`, base))).status).toBe(404);
     expect(await (await fetch(new URL("/calls?caller=me", base))).json()).toEqual({ error: "caller must be the 0x address of the wallet that paid for the calls." });
     expect((await fetch(new URL("/calls", base), { method: "POST" })).status).toBe(405);
+  });
+
+  it("are served whole a page at a time, so the dataset reads every call without knowing who made them", async () => {
+    const { base } = await serving({ calls });
+    const first = await fetch(new URL("/calls?after=0&limit=1", base));
+    expect([first.status, first.headers.get("access-control-allow-origin"), await first.json()]).toEqual([200, "*", { readAt: "2026-11-19T13:00:00.000Z", total: 2, after: 0, next: 1, more: true, calls: [call] }]);
+    expect(await (await fetch(new URL("/calls?after=1", base))).json()).toMatchObject({ after: 1, next: 2, more: false, calls: [later] });
+    expect(await (await fetch(new URL("/calls", base))).json()).toMatchObject({ after: 0, next: 2, more: false, calls: all });
+    for (const query of ["after=-1", "after=x", "limit=0", "limit=1001"]) expect((await fetch(new URL(`/calls?${query}`, base))).status, query).toBe(400);
   });
 
   it("answer 404 on a watcher that does not read them", async () => {

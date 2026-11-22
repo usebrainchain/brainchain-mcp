@@ -112,4 +112,22 @@ describe("the call index", () => {
     expect(index.of(PAYER).map((call) => call.decision)).toEqual(["7", "8"]);
     expect(index.status()).toEqual({ calls: 2, through: { [LOG]: 120 } });
   });
+
+  it("pages every call in the order it kept them, and a restart keeps each call at its place", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "brainchain-calls-"));
+    const head = { block: 200 };
+    const entries: Entry[] = [5, 6, 7].map((id) => ({ id, block: 200 + id, record: `${BRAIN}/records/0x0${id}.json` }));
+    const records = Object.fromEntries(entries.map(({ id, record: uri }) => [uri, record(BigInt(id), callBrief, id === 6 ? CASHCAT : PAYER)]));
+    const { client, fetch } = chain(entries, head, records);
+    const index = new CallIndex({ dir, brain: BRAIN, client, fetch });
+    await index.read();
+    head.block = 210;
+    await index.read();
+    const first = index.page(0, 2);
+    expect([first.calls.map((call) => call.decision), first.next, first.total]).toEqual([["5", "6"], 2, 3]);
+    expect(index.page(first.next, 2)).toMatchObject({ calls: [{ decision: "7" }], next: 3, total: 3 });
+    expect(index.page(3, 2)).toEqual({ calls: [], next: 3, total: 3 });
+    const again = new CallIndex({ dir, brain: BRAIN, client, fetch });
+    expect(again.page(0, 10)).toEqual(index.page(0, 10));
+  });
 });

@@ -132,7 +132,7 @@ export interface SettledCall extends IndexedCall {
  * by its deadline; already public when one is dated at or before; a miss once the deadline has passed and the dataset was
  * read after it; pending until then. A row tied by the symbol alone settles nothing.
  */
-export function settle(call: IndexedCall, dataset: Dataset): SettledCall {
+export function settle(call: IndexedCall, dataset: Pick<Dataset, "outcomes"> & { ref: Pick<DatasetRef, "readAt"> }): SettledCall {
   const at = Date.parse(call.at);
   const deadline = at + call.days * DAY_MS;
   const rows = settling(call.token, call.outcome, dataset.outcomes).sort((a, b) => timeOf(a) - timeOf(b));
@@ -146,6 +146,13 @@ export function settle(call: IndexedCall, dataset: Dataset): SettledCall {
   const unconfirmed = rows.some((row) => row.unconfirmed && timeOf(row) <= deadline) ? { note: "A row tied by the symbol alone falls inside the window; it settles nothing until the venue confirms the token." } : {};
   if (Date.parse(dataset.ref.readAt) > deadline) return { ...base, settled: "miss", ...unconfirmed };
   return { ...base, settled: "pending", ...unconfirmed };
+}
+
+export const CALL_COLUMNS = ["decision", "grade", "at", "payer", "token", "outcome", "days", "deadline", "accepted", "settled", "settledOutcome", "settledVenue", "settledAt", "settledRef", "note", "network", "amount", "datasetDate", "datasetManifest", "record"] as const;
+
+/** A settled call as one flat row of `calls.csv`: the outcome row that settled it and the dataset it was checked against, spread into columns. */
+export function callCells({ by, dataset, ...call }: SettledCall) {
+  return { ...call, settledOutcome: by?.outcome, settledVenue: by?.venue, settledAt: by?.at ?? by?.by, settledRef: by?.ref, datasetDate: dataset.date, datasetManifest: dataset.manifest };
 }
 
 /** A caller's calls as the dataset settles them, newest first, with how many settled each way: counts, never a rate. */
