@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -6,24 +7,37 @@ import { describe, expect, it } from "vitest";
 import { resolveConfig } from "./config.js";
 
 describe("resolveConfig", () => {
-  it("pays in USDG on Robinhood Chain by default", () => {
+  it("pays in USDC on Base by default, which needs no approval and no ETH", () => {
     const config = resolveConfig({});
-    expect(config).toMatchObject({ name: "mainnet", payOn: "robinhood", network: "eip155:4663", token: "USDG", permit2: true });
-  });
-
-  it("pays in USDC on Base with BRAINCHAIN_PAY_ON=base, to the same desk", () => {
-    const config = resolveConfig({ BRAINCHAIN_PAY_ON: "base" });
     expect(config).toMatchObject({
+      name: "mainnet",
       payOn: "base",
       network: "eip155:8453",
       chainId: 8453,
       asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-      payTo: resolveConfig({}).payTo,
       token: "USDC",
       chain: "Base",
       permit2: false,
     });
     expect(config.terms).toEqual({ cost: "1 USDC", gradeCost: "0.25 USDC", chain: "Base", finalAfter: "about six hours" });
+    expect(resolveConfig({ BRAINCHAIN_PAY_ON: "base" })).toEqual(config);
+  });
+
+  it("pays in USDG on Robinhood Chain with BRAINCHAIN_PAY_ON=robinhood, to the same desk", () => {
+    const config = resolveConfig({ BRAINCHAIN_PAY_ON: "robinhood" });
+    expect(config).toMatchObject({
+      payOn: "robinhood",
+      network: "eip155:4663",
+      chainId: 4663,
+      asset: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+      payTo: resolveConfig({}).payTo,
+      desk: resolveConfig({}).desk,
+      token: "USDG",
+      chain: "Robinhood Chain",
+      permit2: true,
+    });
+    expect(config.terms).toEqual({ cost: "1 USDG", gradeCost: "0.25 USDG", chain: "Robinhood Chain", finalAfter: "about six hours" });
+    expect(resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "Robinhood" })).toMatchObject({ network: "eip155:46630", token: "test USDG", permit2: true });
   });
 
   it("pairs testnet with Base Sepolia", () => {
@@ -39,8 +53,8 @@ describe("resolveConfig", () => {
   it("treats empty and blank variables as unset, as MCP clients often pass them", () => {
     expect(resolveConfig({ BRAINCHAIN_NETWORK: "", BRAINCHAIN_PAY_ON: " ", BRAINCHAIN_PAYMENT_NETWORK: "", BRAINCHAIN_MAX_PRICE_UNITS: "" })).toMatchObject({
       name: "mainnet",
-      payOn: "robinhood",
-      network: "eip155:4663",
+      payOn: "base",
+      network: "eip155:8453",
       maxPrice: 1_000_000n,
     });
   });
@@ -93,7 +107,7 @@ describe("resolveConfig", () => {
   });
 
   it("gives both values, in base units and in the token, when a budget or daily limit is under the price limit", () => {
-    expect(() => resolveConfig({ BRAINCHAIN_BUDGET_UNITS: "500000" })).toThrow(
+    expect(() => resolveConfig({ BRAINCHAIN_PAY_ON: "robinhood", BRAINCHAIN_BUDGET_UNITS: "500000" })).toThrow(
       "BRAINCHAIN_BUDGET_UNITS must be at least BRAINCHAIN_MAX_PRICE_UNITS: it is 500000 (0.5 USDG), and BRAINCHAIN_MAX_PRICE_UNITS is 1000000 (1 USDG).",
     );
     expect(() => resolveConfig({ BRAINCHAIN_PAY_ON: "base", BRAINCHAIN_MAX_PRICE_UNITS: "2000000", BRAINCHAIN_DAILY_UNITS: "1500000" })).toThrow(
@@ -104,6 +118,16 @@ describe("resolveConfig", () => {
   it("refuses a bond cap under the smallest bond, which would refuse every bond", () => {
     expect(() => resolveConfig({ BRAINCHAIN_MAX_BOND_UNITS: "1999999" })).toThrow("BRAINCHAIN_MAX_BOND_UNITS must be at least 2000000 (2 USDG), the smallest bond this server places.");
     expect(resolveConfig({ BRAINCHAIN_MAX_BOND_UNITS: "2000000" }).maxBond).toBe(2_000_000n);
+  });
+
+  it("names Base as the default chain wherever BRAINCHAIN_PAY_ON is documented", () => {
+    const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    const server = JSON.parse(read("server.json")) as { packages: { environmentVariables: { name: string; default?: string; choices?: string[] }[] }[] };
+    const listed = server.packages[0]!.environmentVariables.find(({ name }) => name === "BRAINCHAIN_PAY_ON")!;
+    expect([listed.default, listed.choices]).toEqual([resolveConfig({}).payOn, ["base", "robinhood"]]);
+    expect(read("README.md")).toContain("| `BRAINCHAIN_PAY_ON` | `base` |");
+    expect(read("src/index.ts")).toMatch(/BRAINCHAIN_PAY_ON {11}base \(default\) pays in USDC on Base/);
+    expect(read("examples/openclaw/brainchain/SKILL.md")).toContain("base (USDC, the default)");
   });
 
   it("refuses an unknown chain", () => {

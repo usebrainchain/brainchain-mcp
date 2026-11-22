@@ -5,7 +5,7 @@ Reads public chain state only: the token balance, and for USDG on Robinhood
 Chain also the ETH for the one-time approval and the Permit2 allowance. Takes
 the wallet's address, never its key.
 
-    python wallet_check.py 0xADDRESS [--network mainnet|testnet] [--pay-on robinhood|base] [--tasks N]
+    python wallet_check.py 0xADDRESS [--network mainnet|testnet] [--pay-on base|robinhood] [--tasks N]
 
 Exits 0 when the wallet can pay for N tasks (default 1), 1 when it cannot,
 2 on bad arguments or an unreachable RPC. Prints one JSON object.
@@ -77,7 +77,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Check that a wallet can pay for BrainChain tasks.")
     parser.add_argument("address")
     parser.add_argument("--network", choices=["mainnet", "testnet"], default="mainnet")
-    parser.add_argument("--pay-on", choices=["robinhood", "base"], default="robinhood")
+    parser.add_argument("--pay-on", choices=["base", "robinhood"], default="base")
     parser.add_argument("--tasks", type=int, default=1)
     args = parser.parse_args(argv)
     if not re.fullmatch(r"0x[0-9a-fA-F]{40}", args.address):

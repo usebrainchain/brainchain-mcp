@@ -6,6 +6,7 @@ import { createWalletClient, http, maxUint256, type Hex, type PrivateKeyAccount 
 
 import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
+import { runInit } from "./init.js";
 import { erc20 } from "./payments.js";
 import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, pastedKey, payerAccount, PERMIT2, terminalHint, walletExitCode, walletFunds, walletReport } from "./server.js";
 
@@ -23,7 +24,12 @@ Robinhood Chain tokens.
 
 Usage:
   brainchain-mcp                 Start the server on stdio (what MCP clients run).
-  brainchain-mcp approve [USDG]  Let Permit2 spend the paying wallet's USDG.
+  brainchain-mcp init            Create a paying wallet: a new key in ~/.brainchain/payer.key, or the file
+                                 BRAINCHAIN_PAYER_KEY_FILE names, readable only by your account and never printed.
+                                 Prints the wallet's address, what to send it, and the command that adds the server
+                                 to Claude Code, Cursor or VS Code. Run it again to check the balance: an existing
+                                 key is never replaced, and the exit code is then the same as wallet's.
+  brainchain-mcp approve [USDG]  Let Permit2 spend the paying wallet's USDG. Run it with BRAINCHAIN_PAY_ON=robinhood.
                                  Default 100 USDG; pass a number, "max", or 0 to revoke.
                                  Not needed when paying in USDC on Base.
   brainchain-mcp wallet          Check the key and settings, and print the wallet that pays, the limits,
@@ -42,10 +48,10 @@ Environment:
   BRAINCHAIN_PAYER_KEY_FILE   A file holding that key instead. Absolute or starting with ~/. On macOS and Linux it must be
                               readable only by your account (chmod 600); Windows is not checked, so keep it in your own user folder.
   BRAINCHAIN_NETWORK          mainnet (default) or testnet.
-  BRAINCHAIN_PAY_ON           robinhood (default) pays in USDG on Robinhood Chain;
-                              base pays in USDC on Base (Base Sepolia on testnet).
-  BRAINCHAIN_MAX_PRICE_UNITS  Maximum paid per task or grade, in base units (default 1000000 = 1 USDG or USDC).
-  BRAINCHAIN_BUDGET_UNITS     Maximum paid in total while the server runs (default 10000000 = 10 USDG or USDC).
+  BRAINCHAIN_PAY_ON           base (default) pays in USDC on Base (Base Sepolia on testnet);
+                              robinhood pays in USDG on Robinhood Chain.
+  BRAINCHAIN_MAX_PRICE_UNITS  Maximum paid per task or grade, in base units (default 1000000 = 1 USDC or USDG).
+  BRAINCHAIN_BUDGET_UNITS     Maximum paid in total while the server runs (default 10000000 = 10 USDC or USDG).
   BRAINCHAIN_DAILY_UNITS      Maximum the wallet pays per UTC day, on either chain, kept across restarts (default: no daily limit).
   BRAINCHAIN_MAX_BOND_UNITS   Maximum locked in one delivery bond on Shipped (default 10000000 = 10 USDG); bonds also draw on
                               the budget and the daily limit.
@@ -72,7 +78,7 @@ const pasted = pastedKey(process.argv.slice(2));
 if (pasted) fail(pasted);
 const command = process.argv[2];
 const HELP = ["--help", "-h", "help"];
-if ((command !== undefined && HELP.includes(command)) || (["approve", "wallet"].includes(command ?? "") && HELP.includes(process.argv[3] ?? ""))) {
+if ((command !== undefined && HELP.includes(command)) || (["approve", "wallet", "init"].includes(command ?? "") && HELP.includes(process.argv[3] ?? ""))) {
   console.log(USAGE);
   process.exit(0);
 }
@@ -91,9 +97,9 @@ if (command === "--version" || command === "-v" || command === "version") {
   console.log(version);
   process.exit(0);
 }
-if (command !== undefined && command !== "approve" && command !== "wallet" && command !== "watch" && command !== "dataset") fail(`Unknown command ${command}.\n\n${USAGE}`);
+if (command !== undefined && !["approve", "wallet", "init", "watch", "dataset"].includes(command)) fail(`Unknown command ${command}.\n\n${USAGE}`);
 const extra = process.argv[command === "approve" ? 4 : 3];
-if (command !== undefined && command !== "watch" && command !== "dataset" && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : "wallet takes none"}.\n\n${USAGE}`);
+if (command !== undefined && command !== "watch" && command !== "dataset" && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : `${command} takes none`}.\n\n${USAGE}`);
 
 if (command === undefined) {
   const hint = terminalHint(process.stdin, version);
@@ -103,6 +109,10 @@ if (command === undefined) {
   await watch.runWatch(process.argv.slice(3), process.env, version).catch((error: unknown) => fail(error instanceof watch.UsageError ? `${error.message}\n\n${watch.WATCH_USAGE}` : error instanceof Error ? error.message : String(error)));
 } else if (dataset) {
   await dataset.runDataset(process.argv.slice(3), process.env).catch((error: unknown) => fail(error instanceof dataset.DatasetUsageError ? `${error.message}\n\n${dataset.DATASET_USAGE}` : error instanceof Error ? error.message : String(error)));
+} else if (command === "init") {
+  const { text, code } = await runInit(process.env, version).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
+  console.log(text);
+  process.exitCode = code;
 } else if (command === "wallet") {
   const { config, account } = settings();
   const funds = await walletFunds(config, account.address).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
@@ -129,7 +139,7 @@ function settings(): { config: Config; account: PrivateKeyAccount } {
 async function approve(arg: string): Promise<void> {
   const { config, account } = settings();
   if (!config.permit2) {
-    console.log(`${config.token} on ${config.chain} pays by signature alone, so there is nothing to approve.`);
+    console.log(`${config.token} on ${config.chain} pays by signature alone, so there is nothing to approve. To pay in USDG on Robinhood Chain instead, run approve with BRAINCHAIN_PAY_ON=robinhood.`);
     process.exit(0);
   }
   const max = arg.toLowerCase() === "max";

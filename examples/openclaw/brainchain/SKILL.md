@@ -14,7 +14,7 @@ metadata:
         "envVars":
           [
             { "name": "BRAINCHAIN_PAYER_KEY_FILE", "required": true, "description": "Path of the file holding the paying wallet's private key. Set in the brainchain MCP server's env and read only by that server." },
-            { "name": "BRAINCHAIN_PAY_ON", "required": false, "description": "Where the server pays: robinhood (USDG, the default) or base (USDC)." },
+            { "name": "BRAINCHAIN_PAY_ON", "required": false, "description": "Where the server pays: base (USDC, the default) or robinhood (USDG)." },
             { "name": "BRAINCHAIN_NETWORK", "required": false, "description": "mainnet (the default) or testnet." },
             { "name": "BRAINCHAIN_MAX_PRICE_UNITS", "required": false, "description": "The most the server pays for one task or grade, in units of 0.000001." },
             { "name": "BRAINCHAIN_BUDGET_UNITS", "required": false, "description": "The most the server pays while it runs, in units of 0.000001." },
@@ -58,8 +58,9 @@ The operator does this in a terminal, before the agent can see this skill. OpenC
 step 3 is saved, which only means the server is registered. Step 4 checks the key.
 
 1. Make a dedicated wallet that holds only what this agent may spend. Fund it with USDC on Base (no gas, no approval)
-   or USDG on Robinhood Chain (plus a little ETH there).
-2. Save its private key in a file only your account can read:
+   or USDG on Robinhood Chain (plus a little ETH there). `npx -y brainchain-mcp@0.18.0 init` makes a new one for you:
+   it saves the key as in step 2 and prints the address to fund, and running it again shows the balance.
+2. Or save the private key of a wallet you already have in a file only your account can read:
 
    ```bash
    mkdir -p ~/.brainchain
@@ -68,9 +69,9 @@ step 3 is saved, which only means the server is registered. Step 4 checks the ke
    ```
 
    For USDG on Robinhood Chain, also approve once:
-   `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.18.0 approve` (with
-   `BRAINCHAIN_NETWORK=testnet` in front on testnet). In PowerShell on Windows:
-   `$env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.18.0 approve`.
+   `BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.18.0 approve`
+   (with `BRAINCHAIN_NETWORK=testnet` in front on testnet). In PowerShell on Windows:
+   `$env:BRAINCHAIN_PAY_ON='robinhood'; $env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.18.0 approve`.
 3. Register the server with the path of that file:
 
    ```sh
@@ -82,12 +83,12 @@ step 3 is saved, which only means the server is registered. Step 4 checks the ke
 
    Amounts are in units of 0.000001: `5000000` is 5 USDC. `BRAINCHAIN_BUDGET_UNITS` caps what the server pays while
    it runs, `BRAINCHAIN_DAILY_UNITS` caps a UTC day on either chain and survives restarts,
-   `BRAINCHAIN_MAX_PRICE_UNITS` caps one task (default 1 USDC). Drop `BRAINCHAIN_PAY_ON` to pay in USDG on Robinhood
-   Chain. Add `"BRAINCHAIN_NETWORK":"testnet"` to practise with test tokens (Base Sepolia USDC or Robinhood Chain
+   `BRAINCHAIN_MAX_PRICE_UNITS` caps one task (default 1 USDC). Set `BRAINCHAIN_PAY_ON` to `robinhood` to pay in USDG
+   on Robinhood Chain. Add `"BRAINCHAIN_NETWORK":"testnet"` to practise with test tokens (Base Sepolia USDC or Robinhood Chain
    testnet USDG).
 4. Check the key: `BRAINCHAIN_PAY_ON=base BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.18.0 wallet`
-   prints the wallet it holds and what it still needs before it can pay, or says what is wrong. Drop
-   `BRAINCHAIN_PAY_ON=base` if you pay in USDG, and put `BRAINCHAIN_NETWORK=testnet` in front on testnet.
+   prints the wallet it holds and what it still needs before it can pay, or says what is wrong. Use
+   `BRAINCHAIN_PAY_ON=robinhood` in its place if you pay in USDG, and put `BRAINCHAIN_NETWORK=testnet` in front on testnet.
    `openclaw mcp doctor` and `openclaw mcp probe` do not check the key.
 
 What this does not stop: the agent's shell runs as your user, so an agent that chose to could open that file, and a
