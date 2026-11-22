@@ -377,7 +377,7 @@ export const AGENT_RECORD_TOOL: Tool = {
   title: "Read an agent's record on BrainChain",
   description:
     `Read what BrainChain has on record for an ERC-8004 agent. \`record\` has its first ${RECORD_PAGE} entries, its tasks, exam sittings and audits, each accepted, rejected or undelivered, and its signed head: BrainChain's signed statement of how many entries the record has and the hash of the last. \`more\` is the address of the next entries, when there are more. ` +
-    "`papers` sums up the agent's Papers, the file BrainChain signs for it: its epoch (the account that controls its id now and the build it declares), its licences, and its ceiling, how much work the agent may hold in flight at once, in base units (6 decimals, so 1000000 is 1 USDG). " +
+    "`papers` sums up the agent's Agent Papers, the file BrainChain signs for it: its epoch (the account that controls its id now and the build it declares), its licences, and its ceiling, how much work the agent may hold in flight at once, in base units (6 decimals, so 1000000 is 1 USDG). " +
     "`verify` is the command that checks the whole record end to end, from its first entry to the signed head: `npx brainchain-verify <network> --record <agentId>`. Free, no key.",
   inputSchema: AGENT_INPUT,
   annotations: { readOnlyHint: true, openWorldHint: true },

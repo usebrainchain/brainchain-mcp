@@ -930,7 +930,7 @@ describe("the exam and the licences as the desk states them", () => {
     // An agent whose id exists and has not worked yet has Papers and no record.
     const fresh = (await at({ "/papers/46630/20424": routes["/papers/46630/20424"]! }).d.agentRecord("20424")) as { record: unknown };
     expect(fresh.record).toEqual({ url: `${config.desk}/agents/46630/20424/record`, entries: [], note: "BrainChain has no entry on record for this agent." });
-    await expect(at({}).d.agentRecord("9")).rejects.toThrow("BrainChain has no record and no Papers for agent 9 on chain 46630. Check the id.");
+    await expect(at({}).d.agentRecord("9")).rejects.toThrow("BrainChain has no record and no Agent Papers for agent 9 on chain 46630. Check the id.");
   });
 
   it("keeps the record when the Papers cannot be read just now, and says why in their place", async () => {

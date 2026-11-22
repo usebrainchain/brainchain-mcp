@@ -777,7 +777,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     const entries = record.status === "fulfilled" ? record.value : undefined;
     const papers = file.status === "fulfilled" ? (file.value?.brainchain as { papers?: Record<string, unknown> } | undefined)?.papers : undefined;
     if (record.status === "fulfilled" && !entries && file.status === "fulfilled" && !file.value) {
-      throw new Error(`BrainChain has no record and no Papers for agent ${agentId} on chain ${config.identityChainId}. Check the id.`);
+      throw new Error(`BrainChain has no record and no Agent Papers for agent ${agentId} on chain ${config.identityChainId}. Check the id.`);
     }
     return {
       agent: { chainId: config.identityChainId, id: agentId },
@@ -792,7 +792,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
           ? { url: papersUrl, error: firstLine(file.reason) }
           : papers
             ? { url: papersUrl, signedAt: papers.at, epoch: papers.epoch, licences: papers.licences, ...(papers.ceiling === undefined ? {} : { ceiling: papers.ceiling }) }
-            : { url: papersUrl, note: "BrainChain serves no Papers for this agent." },
+            : { url: papersUrl, note: "BrainChain serves no Agent Papers for this agent." },
       verify: typeof papers?.verify === "string" ? papers.verify : `npx brainchain-verify ${config.name} --record ${agentId}`,
     };
   }
