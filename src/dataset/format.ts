@@ -132,8 +132,8 @@ export interface Manifest {
   files: Record<string, FileEntry>;
 }
 
-/** The files publish.mjs requires in every manifest. */
-export const FILES = ["tokens.jsonl", "events.jsonl", "outcomes.jsonl", "events.csv", "outcomes.csv", "base-rates.json", "feed.json", "feed.xml"] as const;
+/** The files every manifest lists besides pools/ and symbols/: publish.mjs requires all but the calls. */
+export const FILES = ["tokens.jsonl", "events.jsonl", "outcomes.jsonl", "events.csv", "outcomes.csv", "base-rates.json", "feed.json", "feed.xml", "calls.jsonl", "calls.csv"] as const;
 
 /** `pools/` holds one file for each stretch of this many blocks, so only the newest grows. */
 export const POOL_SHARD = 5_000_000;

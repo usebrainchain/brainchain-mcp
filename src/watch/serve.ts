@@ -126,6 +126,19 @@ function poolsPage(index: PoolLookup, params: URLSearchParams, now: number) {
   return { readAt: new Date(now).toISOString(), ready: index.ready, through: index.through, bytes, after: Number(after), next: page.next, pools: page.pools };
 }
 
+/** The most calls one answer of `GET /calls?after=` holds. */
+export const MAX_CALLS = 1_000;
+
+/** Every call a page at a time, in the order the index found them, for `brainchain-mcp dataset`: from `after`, 0 or the `next` of the page before. */
+function callsPage(calls: Pick<CallIndex, "page">, params: URLSearchParams, now: number) {
+  const after = params.get("after") ?? "0";
+  if (!/^\d{1,9}$/.test(after)) throw new HttpError(400, "after must be 0 or the next of an earlier answer.");
+  const limit = params.get("limit") ?? String(MAX_CALLS);
+  if (!/^\d{1,4}$/.test(limit) || Number(limit) < 1 || Number(limit) > MAX_CALLS) throw new HttpError(400, `limit must be a whole number from 1 to ${MAX_CALLS}.`);
+  const page = calls.page(Number(after), Number(limit));
+  return { readAt: new Date(now).toISOString(), total: page.total, after: Number(after), next: page.next, more: page.next < page.total, calls: page.calls };
+}
+
 /** Robinhood's name on each crypto page the watcher has read, "" for a page that gave none, and when it was read. */
 export type PageNames = () => Readonly<Record<string, { name: string; at: string }>>;
 
@@ -140,7 +153,7 @@ export interface ServeOptions {
   adminToken?: string;
   deliveries?: Deliveries;
   /** The calls read from BrainChain's DecisionLog, for `GET /calls`; a watcher without them answers 404 there. */
-  calls?: Pick<CallIndex, "of" | "get">;
+  calls?: Pick<CallIndex, "of" | "get" | "page">;
   /** Behind a proxy that appends the client's address to X-Forwarded-For, such as Render's, take the address from there. */
   trustProxy?: boolean;
   limits?: ServeLimits;
@@ -272,7 +285,8 @@ export interface Served {
 /**
  * The watcher's HTTP surface. Reads: `GET /events`, `GET /events/stream` (server-sent events, resumed from Last-Event-ID),
  * `GET /pools?token=` (a token's pools from the index), `GET /pools?after=` (the whole index a page at a time), `GET
- * /robinhood/names` (Robinhood's name on each crypto page), `GET /health` (503 while a source keeps failing) and `GET
+ * /robinhood/names` (Robinhood's name on each crypto page), `GET /calls?caller=` (a wallet's calls), `GET /calls?after=`
+ * (every call a page at a time), `GET /calls/:grade`, `GET /health` (503 while a source keeps failing) and `GET
  * /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
  * /watches/:id` with the watch's manage token. Nothing lists watches. Every address is held to `perMinute` requests.
  */
@@ -361,6 +375,7 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
         if (!call) throw new HttpError(404, "No call is recorded with that grade.");
         return send(response, 200, call, OPEN);
       }
+      if (!url.searchParams.has("caller")) return send(response, 200, callsPage(calls, url.searchParams, clock()), OPEN);
       const caller = url.searchParams.get("caller") ?? "";
       if (!/^0x[0-9a-fA-F]{40}$/.test(caller)) throw new HttpError(400, "caller must be the 0x address of the wallet that paid for the calls.");
       return send(response, 200, { readAt: new Date(clock()).toISOString(), caller, calls: calls.of(caller) }, OPEN);
@@ -397,7 +412,7 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       return send(response, 200, status);
     }
     if (["/events", "/events/stream", "/pools", "/robinhood/names", "/calls", "/health", "/health/live", "/watches"].includes(url.pathname) || id !== undefined || grade !== undefined) throw new HttpError(405, "That method is not served here.");
-    throw new HttpError(404, "Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls/:grade, GET /health, POST /watches and GET or DELETE /watches/:id.");
+    throw new HttpError(404, "Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls?after=, GET /calls/:grade, GET /health, POST /watches and GET or DELETE /watches/:id.");
   }
 
   const server = createServer((request, response) => {

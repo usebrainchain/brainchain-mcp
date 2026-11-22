@@ -3,15 +3,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { decodeFunctionData, encodeFunctionResult, getAddress, parseAbi, zeroAddress, type Address } from "viem";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 
+import { CALL_COLUMNS, callRecord, type IndexedCall, type SettledCall } from "../calls.js";
 import type { ChainHistory } from "../history.js";
 import { MARKET_MAKERS } from "../makers.js";
 import type { WatchEvent } from "../watch/events.js";
 import type { IndexedPool } from "../watch/pools.js";
 import { buildDataset, PIECE, trimTail } from "./build.js";
 import { FILES, parseJsonl, sha256, type Manifest, type OutcomeRow, type PoolRow, type StepRow } from "./format.js";
-import { poolDir, poolWatcher, robinhoodPageName, titleName, watcherNames, watcherPace, type PoolSource } from "./sources.js";
+import { datasetReader } from "./published.js";
+import { poolDir, poolWatcher, robinhoodPageName, titleName, WATCHER_GAP_MS, watcherNames, watcherPace, type PoolSource } from "./sources.js";
 
 const CASHCAT = getAddress("0x020bfc650a365f8bb26819deaabf3e21291018b4");
 const MEME = getAddress("0x1111111111111111111111111111111111111111");
@@ -78,9 +80,16 @@ const watcherEvents = (extra: WatchEvent[] = []): WatchEvent[] => [
   ...extra,
 ];
 
-function web(events: () => WatchEvent[], names: () => Record<string, { name: string; at: string }> | undefined = () => undefined): typeof fetch {
+function web(events: () => WatchEvent[], names: () => Record<string, { name: string; at: string }> | undefined = () => undefined, calls: () => IndexedCall[] | undefined = () => []): typeof fetch {
   return (async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
+    if (url.host === "watch.test" && url.pathname === "/calls") {
+      const all = calls();
+      if (!all) return Response.json({ error: "This watcher does not read calls." }, { status: 404 });
+      const after = Number(url.searchParams.get("after"));
+      const page = all.slice(after, after + 1);
+      return Response.json({ readAt: "2026-11-21T00:00:00.000Z", total: all.length, after, next: after + page.length, more: after + page.length < all.length, calls: page });
+    }
     if (url.host === "watch.test" && url.pathname === "/robinhood/names") {
       const read = names();
       return read ? Response.json({ readAt: "2026-11-21T00:00:00.000Z", pages: Object.keys(read).length, names: read }) : Response.json({ error: "Not found." }, { status: 404 });
@@ -153,6 +162,67 @@ describe("the dataset build", () => {
     expect(lines<PoolRow>(join(out, "pools/000.jsonl"))).toHaveLength(4);
     const third = await buildDataset(options);
     expect(third.added).toEqual({});
+  });
+
+  it("writes every call recorded by readAt, settled as brainchain_calls settles it from the same day's files, and keeps them when the watcher cannot serve them", async () => {
+    const out = mkdtempSync(join(tmpdir(), "dataset-"));
+    const world = { head: 25_000, pools: [pool(4, CASHCAT, 9_500, 1), pool(3, MEME, 12_000, 2)], approvals: [] };
+    const { reader } = chain(world);
+    const call = (n: number, more: Partial<IndexedCall>): IndexedCall => ({
+      token: MEME,
+      outcome: "any",
+      days: 7,
+      dataset: { date: "2026-11-20", manifest: "ab".repeat(32) },
+      grade: hash(n),
+      decision: String(n),
+      at: "2026-11-20T12:00:00.000Z",
+      payer: n % 2 ? WINTERMUTE.wallet : CASHCAT,
+      network: "eip155:8453",
+      amount: "250000",
+      accepted: n !== 3,
+      record: `https://brain.usebrainchain.com/records/${hash(n)}.json`,
+      ...more,
+    });
+    const made = [
+      call(1, { token: CASHCAT, outcome: "kucoin", at: "2026-07-10T00:00:00.000Z" }),
+      call(2, { token: CASHCAT, outcome: "kucoin", at: "2026-11-19T00:00:00.000Z" }),
+      call(3, { at: "2026-11-10T00:00:00.000Z" }),
+      call(4, { outcome: "gate", days: 30 }),
+      call(5, { at: "2026-11-20T23:00:00.000Z" }),
+    ];
+    let served: IndexedCall[] | undefined = made;
+    let clock = Date.parse("2026-11-20T22:00:00Z");
+    const options = { out, watcher: new URL("https://watch.test"), pools: pools(() => world.pools, () => world.head), reader, span: 10_000, wallets: [WINTERMUTE], fetch: web(() => watcherEvents(), undefined, () => served), now: () => new Date(clock) };
+    // The fake watcher serves one call a page, so the build reads several pages: unpaced here, and paced again after.
+    watcherPace(options.watcher, { gap: 0 });
+    onTestFinished(() => void watcherPace(options.watcher, { gap: WATCHER_GAP_MS }));
+
+    const first = await buildDataset(options);
+    expect(first.added["calls.jsonl"]).toBe(4);
+    const written = lines<SettledCall>(join(out, "calls.jsonl"));
+    expect(written.map(({ decision, settled }) => `${decision} ${settled}`)).toEqual(["1 hit", "3 miss", "2 already public", "4 pending"]);
+    expect(written[0]).toMatchObject({ deadline: "2026-07-17T00:00:00.000Z", by: { outcome: "kucoin", venue: "KuCoin", at: "2026-07-15T10:00:00.000Z" } });
+    const read = await datasetReader(out).load();
+    for (const payer of [WINTERMUTE.wallet, CASHCAT]) {
+      const mine = made.slice(0, 4).filter((one) => one.payer === payer);
+      expect(callRecord(payer, mine, read).calls.sort((a, b) => a.at.localeCompare(b.at)), payer).toEqual(written.filter((one) => one.payer === payer));
+    }
+    const csv = readFileSync(join(out, "calls.csv"), "utf8").split("\n");
+    expect(csv[0]).toBe(CALL_COLUMNS.join(","));
+    expect(csv[1]).toBe(`1,${hash(1)},2026-07-10T00:00:00.000Z,${WINTERMUTE.wallet},${CASHCAT},kucoin,7,2026-07-17T00:00:00.000Z,true,hit,kucoin,KuCoin,2026-07-15T10:00:00.000Z,https://api.kucoin.com/api/v3/currencies,,eip155:8453,250000,2026-11-20,${"ab".repeat(32)},https://brain.usebrainchain.com/records/${hash(1)}.json`);
+    const manifest = JSON.parse(readFileSync(join(out, "manifests", "2026-11-20.json"), "utf8")) as Manifest;
+    expect([manifest.files["calls.jsonl"]?.rows, manifest.files["calls.csv"]?.rows]).toEqual([4, 4]);
+
+    clock = Date.parse("2026-11-21T00:40:00Z");
+    const second = await buildDataset(options);
+    expect(second.added["calls.jsonl"]).toBe(1);
+    expect(lines<SettledCall>(join(out, "calls.jsonl")).map(({ decision }) => decision)).toEqual(["1", "3", "2", "4", "5"]);
+
+    served = undefined;
+    clock = Date.parse("2026-12-21T00:40:00Z");
+    const third = await buildDataset(options);
+    expect(third.notes).toContain("The watcher's calls could not be read (watch.test answered 404: {\"error\":\"This watcher does not read calls.\"}.), so calls.jsonl holds the 5 an earlier build read.");
+    expect(lines<SettledCall>(join(out, "calls.jsonl")).map(({ decision, settled }) => `${decision} ${settled}`)).toEqual(["1 hit", "3 miss", "2 already public", "4 miss", "5 miss"]);
   });
 
   it("stops a scan when its time is up, says so, and goes on from there the next time", async () => {

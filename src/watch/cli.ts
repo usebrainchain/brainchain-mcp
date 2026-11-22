@@ -52,8 +52,9 @@ The first run records what is already public as a baseline and reports none of i
                          a private RPC set), GET /pools?after= (the whole pool index a page at a time, which
                          brainchain-mcp dataset reads), GET /robinhood/names (Robinhood's name for the asset on each
                          crypto page, read from the US pages when the watcher runs in the US, which the dataset reads
-                         too), GET /calls?caller= and GET /calls/:grade (the calls made with brainchain_call, read
-                         from BrainChain's DecisionLog), and GET /health. Point BRAINCHAIN_WATCH_URL at it.
+                         too), GET /calls?caller=, GET /calls?after= (every call a page at a time, which the dataset
+                         reads) and GET /calls/:grade (the calls made with brainchain_call, read from BrainChain's
+                         DecisionLog), and GET /health. Point BRAINCHAIN_WATCH_URL at it.
   --print                Write each new event to stdout as one line of JSON.
   --trust-proxy          Behind Cloudflare and a proxy such as Render's, take a client's address from CF-Connecting-IP, or
                          else from the X-Forwarded-For entry before the proxy's own.

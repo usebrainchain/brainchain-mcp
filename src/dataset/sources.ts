@@ -1,6 +1,7 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync } from "node:fs";
 import { join } from "node:path";
 
+import type { IndexedCall } from "../calls.js";
 import type { WatchEvent } from "../watch/events.js";
 import { CHECKPOINT_FILE, POOLS_FILE, type IndexedPool, type PoolCheckpoint } from "../watch/pools.js";
 
@@ -61,6 +62,18 @@ export async function watcherEvents(watcher: URL, fetchImpl: typeof fetch = fetc
     events.push(...page.events);
     if (!page.more || page.next <= since) return events;
     since = page.next;
+  }
+}
+
+/** Every call the watcher has read from BrainChain's DecisionLog, in the order it kept them. */
+export async function watcherCalls(watcher: URL, fetchImpl: typeof fetch = fetch, pace = watcherPace(watcher)): Promise<IndexedCall[]> {
+  const calls: IndexedCall[] = [];
+  for (let after = 0; ; ) {
+    const page = (await getJson(at(watcher, `calls?after=${after}&limit=1000`), fetchImpl, pace)) as { calls?: IndexedCall[]; next?: number; more?: boolean };
+    if (!Array.isArray(page.calls) || typeof page.next !== "number") throw new Error(`The watcher at ${watcher.origin} did not answer with a page of calls.`);
+    calls.push(...page.calls);
+    if (!page.more || page.next <= after) return calls;
+    after = page.next;
   }
 }
 
