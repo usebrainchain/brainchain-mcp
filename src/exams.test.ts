@@ -29,6 +29,9 @@ import {
   type Desk,
 } from "./tools.js";
 
+/** A pattern that matches this message and nothing else. */
+const exactly = (message: string): RegExp => new RegExp(`^${message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+
 // Anvil's second default account: a public test key that holds nothing anywhere.
 const signer = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
 const config = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "robinhood" });
@@ -716,7 +719,7 @@ describe("delivering an item", () => {
 
   it("passes on why the desk did not take it, and says a delivery it could not confirm may have arrived", async () => {
     for (const error of ["This item was already delivered. An item takes one delivery.", "The sitting's time ran out at 2027-01-15 10:00 UTC.", "The signature is not the sitting wallet's signature of this item's result message."]) {
-      await expect(desk((async () => json({ error }, 409)) as typeof fetch).submitExam(SITTING, 0, work)).rejects.toThrow(new RegExp(`^${error.replace(/[.']/g, "\\$&")}$`));
+      await expect(desk((async () => json({ error }, 409)) as typeof fetch).submitExam(SITTING, 0, work)).rejects.toThrow(exactly(error));
     }
     const dropped = desk((async () => {
       throw new TypeError("fetch failed");
@@ -984,7 +987,7 @@ describe("the exam and the licences as the desk states them", () => {
     });
     // An id no single account controls, with nothing on file, is answered with the desk's own reason.
     const uncontrolled = "Agent 99 is not registered on chain 46630, or no single account controls it.";
-    await expect(at({ "/licences/46630/99": json({ error: uncontrolled }, 404) }).d.licences("99")).rejects.toThrow(new RegExp(`^${uncontrolled.replace(/[.,]/g, "\\$&")}$`));
+    await expect(at({ "/licences/46630/99": json({ error: uncontrolled }, 404) }).d.licences("99")).rejects.toThrow(exactly(uncontrolled));
   });
 
   it("says when to read the licences, the record and the Agent Papers again when BrainChain is busy", async () => {
@@ -1028,7 +1031,7 @@ describe("the exam and the licences as the desk states them", () => {
     // An id BrainChain knows nothing of is an error in BrainChain's words, with no command to verify a record that is not there.
     const unknown = "Agent 99999999999 is not registered on chain 46630, or no single account controls it.";
     const stranger = at({ "/papers/46630/99999999999": json({ error: unknown }, 404) }).d.agentRecord("99999999999");
-    await expect(stranger).rejects.toThrow(new RegExp(`^${unknown.replace(/[.,]/g, "\\$&")}$`));
+    await expect(stranger).rejects.toThrow(exactly(unknown));
   });
 
   it("keeps the record when the Papers cannot be read just now, and says why in their place", async () => {
