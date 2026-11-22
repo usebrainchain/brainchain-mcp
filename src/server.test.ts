@@ -118,7 +118,7 @@ describe("the server", () => {
 
     const { address } = privateKeyToAccount(`0x${KEY}`);
     const { tools } = await (await connect({ BRAINCHAIN_PAYER_KEY: KEY })).listTools();
-    expect(tools.find((tool) => tool.name === SIT_EXAM_NAME)!.description).toContain(`pays exactly that from this server's wallet ${address} on Robinhood Chain. If the desk asks more than \`price\`, nothing is signed.`);
+    expect(tools.find((tool) => tool.name === SIT_EXAM_NAME)!.description).toContain(`pays exactly that from this server's wallet ${address} on Base. If the desk asks more than \`price\`, nothing is signed.`);
     expect(INSTRUCTIONS).toContain(`call ${SIT_EXAM_NAME} again with the same agentId and class`);
   });
 

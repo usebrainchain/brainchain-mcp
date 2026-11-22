@@ -751,9 +751,28 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     return { ...view, ...sittingGuidance(view) };
   }
 
+  const papersUrl = (agentId: string) => `${config.desk}/papers/${config.identityChainId}/${agentId}`;
+  const papersIn = (file: Record<string, unknown> | undefined) => (file?.brainchain as { papers?: Record<string, unknown> } | undefined)?.papers;
+
+  /** While BrainChain serves no licences on their own, such as while the exam is closed, the ones its signed Agent Papers list. */
+  async function licencesInPapers(agentId: string): Promise<Record<string, unknown>> {
+    const url = papersUrl(agentId);
+    const papers = papersIn(await read(url, true));
+    if (!papers) throw new Error(`BrainChain at ${config.desk} serves no licences, and no Agent Papers for agent ${agentId}.`);
+    const signed = typeof papers.at === "number" ? `, signed at ${new Date(papers.at * 1000).toISOString().replace(".000Z", "Z")}` : "";
+    return {
+      agent: { chainId: config.identityChainId, id: agentId },
+      source: "papers",
+      papers: url,
+      signedAt: papers.at,
+      epoch: papers.epoch,
+      licences: Array.isArray(papers.licences) ? papers.licences : [],
+      note: `BrainChain does not serve licences on their own just now, so these are the ones the agent's Agent Papers list${signed}.`,
+    };
+  }
+
   async function licences(agentId: string): Promise<unknown> {
-    const view = await read(`${config.desk}/licences/${config.identityChainId}/${agentId}`, true);
-    if (!view) throw new Error(`BrainChain at ${config.desk} serves no licences.`);
+    const view = (await read(`${config.desk}/licences/${config.identityChainId}/${agentId}`, true)) ?? (await licencesInPapers(agentId));
     const held = Array.isArray(view.licences) ? (view.licences as { class?: unknown; state?: unknown }[]) : [];
     if (held.length === 0) return { ...view, next: `Agent ${agentId} holds no licence. brainchain_exam_info says what a sitting takes, and brainchain_sit_exam opens one.` };
     // Each licence keeps BrainChain's `reason` as given. A lapsed one is no use to whoever holds the id now, who may earn its own.
@@ -766,16 +785,16 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
   }
 
   /**
-   * The head and first entries of an agent's numbered record, and what its Papers say of its epoch, licences and
+   * The head and first entries of an agent's numbered record, and what its Agent Papers say of its epoch, licences and
    * ceiling. The two are read separately, so if one cannot be read just now the other still comes back, with the reason in its place.
    */
   async function agentRecord(agentId: string): Promise<unknown> {
     const recordUrl = `${config.desk}/agents/${config.identityChainId}/${agentId}/record`;
-    const papersUrl = `${config.desk}/papers/${config.identityChainId}/${agentId}`;
-    const [record, file] = await Promise.allSettled([read(`${recordUrl}?from=1&limit=${RECORD_PAGE}`), read(papersUrl, true)]);
+    const url = papersUrl(agentId);
+    const [record, file] = await Promise.allSettled([read(`${recordUrl}?from=1&limit=${RECORD_PAGE}`), read(url, true)]);
     if (record.status === "rejected" && file.status === "rejected") throw record.reason;
     const entries = record.status === "fulfilled" ? record.value : undefined;
-    const papers = file.status === "fulfilled" ? (file.value?.brainchain as { papers?: Record<string, unknown> } | undefined)?.papers : undefined;
+    const papers = file.status === "fulfilled" ? papersIn(file.value) : undefined;
     if (record.status === "fulfilled" && !entries && file.status === "fulfilled" && !file.value) {
       throw new Error(`BrainChain has no record and no Agent Papers for agent ${agentId} on chain ${config.identityChainId}. Check the id.`);
     }
@@ -789,10 +808,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
             : { url: recordUrl, entries: [], note: "BrainChain has no entry on record for this agent." },
       papers:
         file.status === "rejected"
-          ? { url: papersUrl, error: firstLine(file.reason) }
+          ? { url, error: firstLine(file.reason) }
           : papers
-            ? { url: papersUrl, signedAt: papers.at, epoch: papers.epoch, licences: papers.licences, ...(papers.ceiling === undefined ? {} : { ceiling: papers.ceiling }) }
-            : { url: papersUrl, note: "BrainChain serves no Agent Papers for this agent." },
+            ? { url, signedAt: papers.at, epoch: papers.epoch, licences: papers.licences, ...(papers.ceiling === undefined ? {} : { ceiling: papers.ceiling }) }
+            : { url, note: "BrainChain serves no Agent Papers for this agent." },
       verify: typeof papers?.verify === "string" ? papers.verify : `npx brainchain-verify ${config.name} --record ${agentId}`,
     };
   }

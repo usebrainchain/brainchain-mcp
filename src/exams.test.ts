@@ -30,7 +30,7 @@ import {
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
 const signer = privateKeyToAccount("0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d");
-const config = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
+const config = resolveConfig({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAY_ON: "robinhood" });
 const exams = `${config.desk}/x402/exams`;
 const PRICE = "5000000";
 const request = { agentId: "20424", class: "code", price: 5_000_000n };
@@ -136,6 +136,30 @@ describe("sitting the exam", () => {
     expect(reply.briefs).toEqual(briefs);
     expect(reply.next).toMatch(/^Deliver items 0, 1, 2, 3 and 4 with brainchain_exam_submit before 2100-01-01T02:00:00Z\. Each item takes one delivery/);
     expect(d.spent()).toBe(5_000_000n);
+  });
+
+  it("pays for a sitting on Base, the default, by transfer authorization, and still names the agent's id on Robinhood Chain", async () => {
+    const base = resolveConfig({ BRAINCHAIN_NETWORK: "testnet" });
+    const usdc = { scheme: "exact", network: base.network, amount: PRICE, asset: base.asset, payTo: base.payTo, maxTimeoutSeconds: 300, extra: { name: "USDC", version: "2" } };
+    const usdg = { ...usdc, network: config.network, asset: config.asset, payTo: config.payTo, extra: { assetTransferMethod: "permit2" } };
+    const required = Buffer.from(JSON.stringify({ x402Version: 2, resource: { url: exams }, accepts: [usdg, usdc] })).toString("base64");
+    const seen: Paid[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const req = new Request(input, init);
+      const header = req.headers.get("payment-signature");
+      if (!header) return new Response("{}", { status: 402, headers: { "payment-required": required } });
+      const sent = { header, body: await req.text(), id: orderIdOf(JSON.parse(Buffer.from(header, "base64").toString("utf8")) as { payload: unknown }) };
+      seen.push(sent);
+      return opened(sent);
+    }) as typeof fetch;
+    const reply = await createDesk({ config: base, signer, approveCommand: "unused", fetch: fetchImpl, postTimeoutMs: 2_000, askAgainMs: 5 }).sit(request);
+    expect(seen).toHaveLength(1);
+    const payment = JSON.parse(Buffer.from(seen[0]!.header, "base64").toString("utf8")) as { accepted: { network: string; amount: string }; payload: unknown };
+    expect(payment.accepted).toMatchObject({ network: "eip155:84532", amount: PRICE });
+    expect(payment.payload).toHaveProperty("authorization");
+    expect(payment.payload).not.toHaveProperty("permit2Authorization");
+    expect(JSON.parse(seen[0]!.body)).toMatchObject({ agent: { chainId: 46630, id: "20424" } });
+    expect(reply).toMatchObject({ sitting: seen[0]!.id, price: "5 test USDC" });
   });
 
   it("pays a price above the limit per payment for a sitting alone, and never above the price it read", async () => {
@@ -890,7 +914,7 @@ describe("the exam and the licences as the desk states them", () => {
     expect(await d.licences("20424")).toEqual(held);
     expect(urls).toEqual([`${config.desk}/licences/46630/20424`]);
     expect(await d.licences("7")).toMatchObject({ registry: "unreadable", epoch: null, licences: [], next: "Agent 7 holds no licence. brainchain_exam_info says what a sitting takes, and brainchain_sit_exam opens one." });
-    await expect(at({}).d.licences("20424")).rejects.toThrow(`BrainChain at ${config.desk} serves no licences.`);
+    await expect(at({}).d.licences("20424")).rejects.toThrow(`BrainChain at ${config.desk} serves no licences, and no Agent Papers for agent 20424.`);
     // A lapsed licence keeps BrainChain's reason, and the reply says the id's current holder may earn its own.
     const reason = "The agent's id now names another controller or build than the licence was earned under. Its current holder may sit for a licence of its own.";
     const lapsed = { ...held, licences: [{ ...held.licences[0]!, state: "lapsed", reason }] };
@@ -901,6 +925,27 @@ describe("the exam and the licences as the desk states them", () => {
     // An id no single account controls, with nothing on file, is answered with the desk's own reason.
     const uncontrolled = "Agent 99 is not registered on chain 46630, or no single account controls it.";
     await expect(at({ "/licences/46630/99": json({ error: uncontrolled }, 404) }).d.licences("99")).rejects.toThrow(new RegExp(`^${uncontrolled.replace(/[.,]/g, "\\$&")}$`));
+  });
+
+  it("lists the licences in the agent's Agent Papers while BrainChain serves none on their own, and says so", async () => {
+    const epoch = { id: `0x${"cd".repeat(32)}`, controller: signer.address, build: "house: anthropic/claude-sonnet-5.5", number: 1, since: 1_799_000_000 };
+    const file = (licences: unknown[]) => json({ name: "Claude on BrainChain", brainchain: { papers: { version: 1, at: 1_800_000_060, epoch, licences }, signed: "BrainChain papers\n{}", signature: "0x04" } });
+    const { d, urls } = at({ "/papers/46630/20424": file([]) });
+    expect(await d.licences("20424")).toEqual({
+      agent: { chainId: 46630, id: "20424" },
+      source: "papers",
+      papers: `${config.desk}/papers/46630/20424`,
+      signedAt: 1_800_000_060,
+      epoch,
+      licences: [],
+      note: "BrainChain does not serve licences on their own just now, so these are the ones the agent's Agent Papers list, signed at 2027-01-15T08:01:00Z.",
+      next: "Agent 20424 holds no licence. brainchain_exam_info says what a sitting takes, and brainchain_sit_exam opens one.",
+    });
+    expect(urls).toEqual([`${config.desk}/licences/46630/20424`, `${config.desk}/papers/46630/20424`]);
+    const lapsed = { class: "code", state: "lapsed", expiresAt: 1_805_184_000 };
+    expect(await at({ "/papers/46630/20424": file([lapsed]) }).d.licences("20424")).toMatchObject({ source: "papers", licences: [lapsed], next: expect.stringMatching(/^Agent 20424's code licence has lapsed/) });
+    // The licences BrainChain serves on their own come first, whatever the Agent Papers say.
+    expect(await at({ "/licences/46630/20424": json({ registry: "read", epoch, licences: [] }), "/papers/46630/20424": file([lapsed]) }).d.licences("20424")).not.toHaveProperty("source");
   });
 
   it("returns the head and first entries of an agent's record, what its Papers say, and the command that checks it", async () => {
@@ -1037,7 +1082,7 @@ describe("the exam tools", () => {
   });
 
   it("say that the key must hold the agent's id, how far the limit per payment moves, and that an item takes one delivery", () => {
-    const { terms } = resolveConfig({});
+    const { terms } = resolveConfig({ BRAINCHAIN_PAY_ON: "robinhood" });
     const sit = sitExamTool({ ...terms, wallet: signer.address }).description!;
     expect(sit).toContain("This server's wallet signs the request, so it must hold the agent's id on Robinhood Chain (Robinhood Chain testnet on testnet), as the id's controller or as its registered wallet.");
     // Up front, before what a sitting is: the Permit2 allowance a sitting needs, each time.
