@@ -8,6 +8,7 @@ import { CustodyError, type CustodyToken } from "./custody.js";
 import { ChainError, STILL_READING } from "./history.js";
 import type { MakerBoard } from "./makers.js";
 import { bondsClosed, type Bonds } from "./bonds.js";
+import { BuilderError } from "./builder.js";
 import { PREMIUMS_TOOL } from "./premiums.js";
 import { SightingsError } from "./sightings.js";
 import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_GRADE_TOOL, GET_TASK_NAME, GET_TASK_TOOL, gradeTool, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
@@ -694,6 +695,42 @@ describe("token sightings", () => {
   });
 });
 
+describe("token builder", () => {
+  const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
+  const board = { chain: "Robinhood Chain" as const, token: { contract: CASHCAT as `0x${string}` }, readAt: "2026-11-22T10:00:00.000Z", source: "HEY Research Lab" as const, published: false, scan: `https://heyresearch.xyz/scan/${CASHCAT.toLowerCase()}` };
+  const call = (args: unknown, builder: (token: string) => Promise<typeof board>) => callTool(desk, "brainchain_token_builder", args, undefined, undefined, undefined, { builder, listed: noLookup });
+
+  it("serves HEY's card without a desk or a key, and refuses what is not an address before reading anything", async () => {
+    const asked: string[] = [];
+    const read = async (token: string) => (asked.push(token), board);
+    expect(body(await call({ token: CASHCAT.toLowerCase() }, read))).toEqual(board);
+    for (const [args, said] of [
+      [{}, "token is required."],
+      [{ token: "0xCASHCAT" }, "token must be an address on Robinhood Chain: 0x followed by 40 hex characters."],
+      [{ token: CASHCAT, at: "2026-08-06" }, "Unknown field: at. This tool takes only token."],
+    ] as const) {
+      const result = await call(args, read);
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: said });
+    }
+    expect(asked).toEqual([CASHCAT]);
+  });
+
+  it("answers a failed read in one line, and passes on what is already written for the reader", async () => {
+    const refused = new BuilderError(`HEY Research Lab does not treat ${CASHCAT} as a token on Robinhood Chain, so it has no card for it. It answers this way for the zero address and for burn addresses.`);
+    for (const [error, said] of [
+      [new TypeError("fetch failed"), "HEY Research Lab could not be read just now: fetch failed. Try again in a minute."],
+      [new Error("heyresearch.xyz answered 429."), "HEY Research Lab could not be read just now: heyresearch.xyz answered 429. Try again in a minute."],
+      [new Error("HEY Research Lab did not answer with the token's card."), "HEY Research Lab could not be read just now: HEY Research Lab did not answer with the token's card. Try again in a minute."],
+      [refused, refused.message],
+    ] as const) {
+      const result = await call({ token: CASHCAT }, async () => Promise.reject(error));
+      expect(result.isError).toBe(true);
+      expect(body(result)).toEqual({ error: said });
+    }
+  });
+});
+
 describe("a token by symbol", () => {
   const RLUSD = "0x8d58C0C60B8D6b88Fa98B291a646dB34d0F98258";
   const CASHCAT = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
@@ -711,6 +748,7 @@ describe("a token by symbol", () => {
     sightings: { chain: "Robinhood Chain", lists: [] },
     timeline: { chain: "Robinhood Chain", steps: [] },
     marketCap: { chain: "Robinhood Chain", priceUsd: "0.1" },
+    builder: { chain: "Robinhood Chain", published: false },
   };
   const tools = [
     ["brainchain_market_maker_holdings", "makers"],
@@ -718,6 +756,7 @@ describe("a token by symbol", () => {
     ["brainchain_token_sightings", "sightings"],
     ["brainchain_token_timeline", "timeline"],
     ["brainchain_token_market_cap", "marketCap"],
+    ["brainchain_token_builder", "builder"],
   ] as const;
 
   it("reads the one token a symbol, an id or a name stands for, and says which contract it was", async () => {
