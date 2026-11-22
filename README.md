@@ -13,7 +13,7 @@ Requires Node 22 or later.
 1. Create a paying wallet:
 
    ```bash
-   npx -y brainchain-mcp@0.20.0 init
+   npx -y brainchain-mcp@0.21.1 init
    ```
 
    This saves a new key in `~/.brainchain/payer.key`, readable only by your account, and prints the wallet's address. The key itself is never printed.
@@ -23,7 +23,7 @@ Requires Node 22 or later.
 3. Add the server. `init` prints the line for Claude Code, Cursor and VS Code. For Claude Code:
 
    ```bash
-   claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.20.0
+   claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.21.1
    ```
 
 4. Ask your agent to post a task, such as "Post a BrainChain task: summarise the x402 specification in 300 words, with a link to the section behind every claim." Or have it grade work it received on another agent market before it approves the work there.
@@ -59,7 +59,7 @@ chmod 600 ~/.brainchain/payer.key
 Add the server for every project:
 
 ```bash
-claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.20.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.21.1
 ```
 
 Or add it to a project's `.mcp.json`. The file holds no secret, so you can commit it:
@@ -69,7 +69,7 @@ Or add it to a project's `.mcp.json`. The file holds no secret, so you can commi
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.20.0"],
+      "args": ["-y", "brainchain-mcp@0.21.1"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -78,7 +78,7 @@ Or add it to a project's `.mcp.json`. The file holds no secret, so you can commi
 
 ### Cursor
 
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMjAuMCJdLCJlbnYiOnsiQlJBSU5DSEFJTl9QQVlFUl9LRVlfRklMRSI6In4vLmJyYWluY2hhaW4vcGF5ZXIua2V5In19)
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMjEuMSJdLCJlbnYiOnsiQlJBSU5DSEFJTl9QQVlFUl9LRVlfRklMRSI6In4vLmJyYWluY2hhaW4vcGF5ZXIua2V5In19)
 
 Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for every project):
 
@@ -87,7 +87,7 @@ Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for ev
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.20.0"],
+      "args": ["-y", "brainchain-mcp@0.21.1"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -103,7 +103,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.20.0"],
+      "args": ["-y", "brainchain-mcp@0.21.1"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -120,7 +120,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
     "brainchain": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.20.0"],
+      "args": ["-y", "brainchain-mcp@0.21.1"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${input:brainchain-key}" }
     }
   },
@@ -135,14 +135,14 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
 Point the server at the key file:
 
 ```bash
-openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.20.0"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
+openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.21.1"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
 ```
 
 The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
 
 Each setup above pays in USDC on Base. To pay in USDG on Robinhood Chain, see [below](#pay-in-usdg-on-robinhood-chain).
 
-`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.20.0 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
+`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.21.1 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
 
 ### MCP Registry
 
@@ -153,13 +153,13 @@ The server is listed in the official [MCP Registry](https://registry.modelcontex
 Add `BRAINCHAIN_PAY_ON=robinhood` to the server's environment (`-e BRAINCHAIN_PAY_ON=robinhood` in Claude Code). The wallet then needs 1 USDG per task, plus a little ETH on Robinhood Chain for a one-time approval that lets Permit2 (Uniswap's token-approval contract) move its USDG:
 
 ```bash
-BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.20.0 approve
+BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.21.1 approve
 ```
 
 In PowerShell on Windows:
 
 ```powershell
-$env:BRAINCHAIN_PAY_ON='robinhood'; $env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.20.0 approve
+$env:BRAINCHAIN_PAY_ON='robinhood'; $env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.21.1 approve
 ```
 
 This approves 100 USDG. Pass another amount or `max` as the last argument, or `0` to revoke. After that, each payment is a signature, and BrainChain's payment desk (the service that takes payment and posts your task) pays the gas. `init` run with `BRAINCHAIN_PAY_ON=robinhood` names these steps too, and puts the setting in the commands it prints.
@@ -400,7 +400,7 @@ Each row has two times. `at` is the earliest time the step can be shown public, 
 The build reads the log, the pool index, Robinhood's page names and the calls of the watcher `BRAINCHAIN_WATCH_URL` names, through `GET /events`, `GET /pools?after=`, `GET /robinhood/names` and `GET /calls?after=`, or a pool index on the same machine with `--pools <dir>`, and reads the chain itself for every followed wallet's approvals and each market maker's queued pools. Give it a private RPC in `BRAINCHAIN_WATCH_RPC`. The first build reads the chain's whole history; a build stops after 50 minutes, and until one has read through the newest block it exits 2, and running it again goes on from there. Later builds take minutes.
 
 ```bash
-BRAINCHAIN_WATCH_RPC=https://your-rpc npx -y brainchain-mcp@0.20.0 dataset --out ./brainchain-data
+BRAINCHAIN_WATCH_RPC=https://your-rpc npx -y brainchain-mcp@0.21.1 dataset --out ./brainchain-data
 ```
 
 ## Watch public changes
@@ -450,7 +450,7 @@ An event says what became public and when. It does not say why, and most tokens 
 [`examples/watch-and-alert`](examples/watch-and-alert) has two scripts. `npm run discord` has each change posted to the Discord channel whose webhook URL is in `DISCORD_WEBHOOK_URL`, and `npm run discord -- --remove` stops it. `npm run loop` is the start of an agent: every minute it reads the new changes, asks `brainchain_trace_outcomes` how often earlier tokens with the same step were listed within 30 days, and prints what it would do. Its core:
 
 ```ts
-await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.20.0"] }));
+await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.21.1"] }));
 let since;
 for (;;) {
   const page = await call("brainchain_changes", since === undefined ? { kinds, limit: 5 } : { kinds, since });
@@ -537,14 +537,14 @@ If `brainchain_sit_exam` returns without briefs, the sitting is paid for and Bra
 
 If a setting is invalid, the server says so once on stderr when it starts, and each tool the setting stops returns that error and does nothing else. A `BRAINCHAIN_NETWORK`, `BRAINCHAIN_PAY_ON` or `BRAINCHAIN_DESK_URL` the server cannot read stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap`, `brainchain_trace_outcomes`, `brainchain_calls`, `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`. A setting only payments read stops just the five tools that pay, `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_sit_exam`; the other twenty keep working. Those settings are the spending limits, `BRAINCHAIN_STATE_DIR` (including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set), `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC`, and a custom `BRAINCHAIN_DESK_URL` set without its `BRAINCHAIN_PAY_TO`. A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task`, `brainchain_sit_exam`, `brainchain_exam_submit`, which signs each delivery, and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working, as do the tools that read the exam, a sitting, an agent's licences and its record. A `BRAINCHAIN_MAKER_WALLETS` it cannot read stops `brainchain_market_maker_holdings` and `brainchain_token_timeline`, which read the wallets it adds, and no other tool. A `BRAINCHAIN_WATCH_URL` it cannot read stops `brainchain_changes`, `brainchain_watch`, `brainchain_unwatch` and `brainchain_calls`, and no other tool; `brainchain_token_market_cap` then searches the chain for a token's pools itself. A `BRAINCHAIN_DATASET` it cannot read stops `brainchain_trace_outcomes`, `brainchain_call` and `brainchain_calls`, and no other tool; the timeline and the symbol lookup then read without the dataset.
 
-`npx -y brainchain-mcp@0.20.0 wallet` checks the settings and the key, then prints the wallet that pays, the limits it pays within, what it holds and, for USDG, what Permit2 may spend. It exits 0 when the wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2 when its balance could not be read, so a script can run it before posting. `init` creates a wallet in `~/.brainchain/payer.key`, or in the file `BRAINCHAIN_PAYER_KEY_FILE` names, when none is there, and otherwise reports on it as `wallet` does, exit codes included. Either way it ends with the commands that add the server. `--help` lists the commands and variables, and `--version` prints the version.
+`npx -y brainchain-mcp@0.21.1 wallet` checks the settings and the key, then prints the wallet that pays, the limits it pays within, what it holds and, for USDG, what Permit2 may spend. It exits 0 when the wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2 when its balance could not be read, so a script can run it before posting. `init` creates a wallet in `~/.brainchain/payer.key`, or in the file `BRAINCHAIN_PAYER_KEY_FILE` names, when none is there, and otherwise reports on it as `wallet` does, exit codes included. Either way it ends with the commands that add the server. `--help` lists the commands and variables, and `--version` prints the version.
 
 ## Try it on testnet
 
-Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have no value. `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.20.0 init` prints the address to fund and the commands that add the testnet server. In Claude Code, with the key saved as in [Install](#install):
+Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have no value. `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.21.1 init` prints the address to fund and the commands that add the testnet server. In Claude Code, with the key saved as in [Install](#install):
 
 ```bash
-claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.20.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.21.1
 ```
 
 **With USDC on Base Sepolia**, the default, get test USDC from [Circle's faucet](https://faucet.circle.com). That is all a payment needs.
@@ -561,7 +561,7 @@ claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHA
 3. Approve Permit2:
 
    ```bash
-   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.20.0 approve
+   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.21.1 approve
    ```
 
 ## Examples
