@@ -286,7 +286,7 @@ function unreadable(problem: string): Wiring {
 }
 
 /** A missing key or a bad setting is reported when a tool needs it, so the server always starts and lists its tools. */
-function deskFor(env: Record<string, string | undefined>, version: string, fetchImpl?: typeof fetch): Wiring {
+export function deskFor(env: Record<string, string | undefined>, version: string, fetchImpl?: typeof fetch): Wiring {
   const fix = (error: unknown) => `${messageOf(error)} Fix it in this server's environment and restart the server.`;
   let config: Config;
   let paymentProblem: string | undefined;
