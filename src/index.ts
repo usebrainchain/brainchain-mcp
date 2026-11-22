@@ -8,7 +8,7 @@ import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
 import { runInit } from "./init.js";
 import { erc20 } from "./payments.js";
-import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, pastedKey, payerAccount, PERMIT2, terminalHint, walletExitCode, walletFunds, walletReport } from "./server.js";
+import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, deskFor, pastedKey, payerAccount, PERMIT2, terminalHint, walletExitCode, walletFunds, walletReport } from "./server.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -39,6 +39,10 @@ Usage:
                                  when its balance could not be read.
   brainchain-mcp watch           Watch public sources for changes about Robinhood Chain tokens, keep them in a log
                                  and serve them to brainchain_changes. See brainchain-mcp watch --help.
+  brainchain-mcp solve [<problem> <file>]
+                                 Answer an open problem on BrainChain's problem board: the answer in <file> is run through
+                                 the problem's checker and the decision is recorded. Without arguments it lists the
+                                 problems. See brainchain-mcp solve --help.
   brainchain-mcp dataset --out <dir>
                                  Build the dataset brainchain_trace_outcomes reads: every token's dated public steps,
                                  the venues that listed it and the base rates. See brainchain-mcp dataset --help.
@@ -95,13 +99,18 @@ if (dataset && process.argv.slice(3).some((arg) => HELP.includes(arg))) {
   console.log(dataset.DATASET_USAGE);
   process.exit(0);
 }
+const solve = command === "solve" ? await import("./solve.js") : undefined;
+if (solve && process.argv.slice(3).some((arg) => HELP.includes(arg))) {
+  console.log(solve.SOLVE_USAGE);
+  process.exit(0);
+}
 if (command === "--version" || command === "-v" || command === "version") {
   console.log(version);
   process.exit(0);
 }
-if (command !== undefined && !["approve", "wallet", "init", "watch", "dataset"].includes(command)) fail(`Unknown command ${command}.\n\n${USAGE}`);
+if (command !== undefined && !["approve", "wallet", "init", "watch", "dataset", "solve"].includes(command)) fail(`Unknown command ${command}.\n\n${USAGE}`);
 const extra = process.argv[command === "approve" ? 4 : 3];
-if (command !== undefined && command !== "watch" && command !== "dataset" && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : `${command} takes none`}.\n\n${USAGE}`);
+if (command !== undefined && command !== "watch" && command !== "dataset" && command !== "solve" && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : `${command} takes none`}.\n\n${USAGE}`);
 
 if (command === undefined) {
   const hint = terminalHint(process.stdin, version);
@@ -111,6 +120,24 @@ if (command === undefined) {
   await watch.runWatch(process.argv.slice(3), process.env, version).catch((error: unknown) => fail(error instanceof watch.UsageError ? `${error.message}\n\n${watch.WATCH_USAGE}` : error instanceof Error ? error.message : String(error)));
 } else if (dataset) {
   await dataset.runDataset(process.argv.slice(3), process.env).catch((error: unknown) => fail(error instanceof dataset.DatasetUsageError ? `${error.message}\n\n${dataset.DATASET_USAGE}` : error instanceof Error ? error.message : String(error)));
+} else if (solve) {
+  const { readFile } = await import("node:fs/promises");
+  process.exitCode = await solve
+    .runSolve(process.argv.slice(3), {
+      boardUrl: process.env.BRAINCHAIN_PROBLEMS_URL?.trim() || solve.BOARD_URL,
+      fetch,
+      desk: () => {
+        const { config } = settings();
+        const { desk, terms } = deskFor(process.env, version);
+        if (typeof terms === "string" || terms.problem) fail(typeof terms === "string" ? terms : terms.problem!);
+        return { desk, origin: config.desk, cost: terms.gradeCost, ...(terms.wallet ? { wallet: terms.wallet } : {}), chain: terms.chain };
+      },
+      read: (path) => readFile(path, "utf8"),
+      wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      log: (line) => console.log(line),
+      now: Date.now,
+    })
+    .catch((error: unknown) => fail(error instanceof solve.SolveUsageError ? `${error.message}\n\n${solve.SOLVE_USAGE}` : error instanceof Error ? error.message : String(error)));
 } else if (command === "init") {
   const { text, code } = await runInit(process.env, version).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
   console.log(text);
