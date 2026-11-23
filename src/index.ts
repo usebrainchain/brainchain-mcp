@@ -6,7 +6,7 @@ import { createWalletClient, http, maxUint256, type Hex, type PrivateKeyAccount 
 
 import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
-import { runInit } from "./init.js";
+import { initWallet, runInit } from "./init.js";
 import { erc20 } from "./payments.js";
 import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, deskFor, pastedKey, payerAccount, PERMIT2, terminalHint, walletExitCode, walletFunds, walletReport } from "./server.js";
 
@@ -52,6 +52,7 @@ Environment:
                               Needed to post tasks, grade work, bond, sit the exam and approve; reading orders works without it.
   BRAINCHAIN_PAYER_KEY_FILE   A file holding that key instead. Absolute or starting with ~/. On macOS and Linux it must be
                               readable only by your account (chmod 600); Windows is not checked, so keep it in your own user folder.
+                              With neither set, wallet, approve and solve pay from the wallet init made.
   BRAINCHAIN_NETWORK          mainnet (default) or testnet.
   BRAINCHAIN_PAY_ON           base (default) pays in USDC on Base (Base Sepolia on testnet);
                               robinhood pays in USDG on Robinhood Chain.
@@ -128,7 +129,7 @@ if (command === undefined) {
       fetch,
       desk: () => {
         const { config } = settings();
-        const { desk, terms } = deskFor(process.env, version);
+        const { desk, terms } = deskFor(initWallet(process.env), version);
         if (typeof terms === "string" || terms.problem) fail(typeof terms === "string" ? terms : terms.problem!);
         return { desk, origin: config.desk, cost: terms.gradeCost, ...(terms.wallet ? { wallet: terms.wallet } : {}), chain: terms.chain };
       },
@@ -156,7 +157,7 @@ function settings(): { config: Config; account: PrivateKeyAccount } {
   let account: PrivateKeyAccount;
   try {
     config = resolveConfig(process.env);
-    account = payerAccount(process.env);
+    account = payerAccount(initWallet(process.env));
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));
   }

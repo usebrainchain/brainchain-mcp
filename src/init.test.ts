@@ -7,7 +7,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveConfig, type Config } from "./config.js";
-import { installCommands, runInit } from "./init.js";
+import { initWallet, installCommands, runInit } from "./init.js";
 import type { WalletFunds } from "./server.js";
 
 // init writes under the home folder by default, so each test gets its own.
@@ -161,5 +161,17 @@ describe("installCommands", () => {
     expect(JSON.parse(config)).toEqual({ command: "npx", args: ["-y", "brainchain-mcp@1.2.3"], env: { BRAINCHAIN_PAYER_KEY_FILE: "~/.brainchain/payer.key" } });
     // PowerShell takes a quoted word as written, with '' for a quote.
     expect(installCommands(base, "1.2.3", "C:\\Users\\me\\it's.key", "win32")[0]![1]).toContain(" -e 'BRAINCHAIN_PAYER_KEY_FILE=C:\\Users\\me\\it''s.key' -- ");
+  });
+});
+
+describe("initWallet", () => {
+  it("pays from the wallet init made when the shell names no key", () => {
+    expect(initWallet({ BRAINCHAIN_NETWORK: "testnet" }, () => true)).toEqual({ BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAYER_KEY_FILE: "~/.brainchain/payer.key" });
+  });
+
+  it("leaves a key the shell names, and a machine without that wallet, as they are", () => {
+    for (const env of [{ BRAINCHAIN_PAYER_KEY: "0x01" }, { BRAINCHAIN_PAYER_KEY_FILE: "/tmp/other.key" }]) expect(initWallet(env, () => true)).toBe(env);
+    const env = {};
+    expect(initWallet(env, () => false)).toBe(env);
   });
 });
