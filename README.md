@@ -3,6 +3,7 @@
 [![CI](https://github.com/usebrainchain/brainchain-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/usebrainchain/brainchain-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/brainchain-mcp)](https://www.npmjs.com/package/brainchain-mcp)
 [![License](https://img.shields.io/npm/l/brainchain-mcp)](LICENSE)
+<a href="https://heyresearch.xyz/project/brainchain?utm_source=badge&utm_medium=readme"><img src="https://heyresearch.xyz/api/badge/brainchain?style=pill" alt="BrainChain on HEY Research Lab" height="20" /></a>
 
 The BrainChain MCP lets your agent hire a frontier model for a task and pay only for work that meets the bar you set. It can also have BrainChain grade work from somewhere else before your agent accepts it.
 
@@ -13,7 +14,7 @@ Requires Node 22 or later.
 1. Create a paying wallet:
 
    ```bash
-   npx -y brainchain-mcp@0.22.0 init
+   npx -y brainchain-mcp@0.23.0 init
    ```
 
    This saves a new key in `~/.brainchain/payer.key`, readable only by your account, and prints the wallet's address. The key itself is never printed.
@@ -23,7 +24,7 @@ Requires Node 22 or later.
 3. Add the server. `init` prints the line for Claude Code, Cursor and VS Code. For Claude Code:
 
    ```bash
-   claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.22.0
+   claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.23.0
    ```
 
 4. Ask your agent to post a task, such as "Post a BrainChain task: summarise the x402 specification in 300 words, with a link to the section behind every claim." Or have it grade work it received on another agent market before it approves the work there.
@@ -59,7 +60,7 @@ chmod 600 ~/.brainchain/payer.key
 Add the server for every project:
 
 ```bash
-claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.22.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.23.0
 ```
 
 Or add it to a project's `.mcp.json`. The file holds no secret, so you can commit it:
@@ -69,7 +70,7 @@ Or add it to a project's `.mcp.json`. The file holds no secret, so you can commi
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.22.0"],
+      "args": ["-y", "brainchain-mcp@0.23.0"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -78,7 +79,7 @@ Or add it to a project's `.mcp.json`. The file holds no secret, so you can commi
 
 ### Cursor
 
-[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMjIuMCJdLCJlbnYiOnsiQlJBSU5DSEFJTl9QQVlFUl9LRVlfRklMRSI6In4vLmJyYWluY2hhaW4vcGF5ZXIua2V5In19)
+[![Add to Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=brainchain&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsImJyYWluY2hhaW4tbWNwQDAuMjMuMCJdLCJlbnYiOnsiQlJBSU5DSEFJTl9QQVlFUl9LRVlfRklMRSI6In4vLmJyYWluY2hhaW4vcGF5ZXIua2V5In19)
 
 Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for every project):
 
@@ -87,7 +88,7 @@ Or add the server to a project's `.cursor/mcp.json` (`~/.cursor/mcp.json` for ev
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.22.0"],
+      "args": ["-y", "brainchain-mcp@0.23.0"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -103,7 +104,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
   "mcpServers": {
     "brainchain": {
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.22.0"],
+      "args": ["-y", "brainchain-mcp@0.23.0"],
       "env": { "BRAINCHAIN_PAYER_KEY_FILE": "~/.brainchain/payer.key" }
     }
   }
@@ -120,7 +121,7 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
     "brainchain": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "brainchain-mcp@0.22.0"],
+      "args": ["-y", "brainchain-mcp@0.23.0"],
       "env": { "BRAINCHAIN_PAYER_KEY": "${input:brainchain-key}" }
     }
   },
@@ -135,14 +136,14 @@ Add the server to the client's `mcpServers` configuration. For Claude Desktop th
 Point the server at the key file:
 
 ```bash
-openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.22.0"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
+openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.23.0"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key"}}'
 ```
 
 The config holds only the path, and the key never enters OpenClaw's environment, which the agent's shell inherits. A key saved in `skills.entries.brainchain.apiKey` does not reach the server. [`examples/openclaw/brainchain`](examples/openclaw/brainchain) is an OpenClaw skill that tells the agent when to hand work to BrainChain, how to write the brief and levels, and checks the wallet before it pays.
 
 Each setup above pays in USDC on Base. To pay in USDG on Robinhood Chain, see [below](#pay-in-usdg-on-robinhood-chain).
 
-`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.22.0 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
+`BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.23.0 wallet` checks the file and the settings, and prints the wallet the file holds and its balance.
 
 ### MCP Registry
 
@@ -153,13 +154,13 @@ The server is listed in the official [MCP Registry](https://registry.modelcontex
 Add `BRAINCHAIN_PAY_ON=robinhood` to the server's environment (`-e BRAINCHAIN_PAY_ON=robinhood` in Claude Code). The wallet then needs 1 USDG per task, plus a little ETH on Robinhood Chain for a one-time approval that lets Permit2 (Uniswap's token-approval contract) move its USDG:
 
 ```bash
-BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.22.0 approve
+BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.23.0 approve
 ```
 
 In PowerShell on Windows:
 
 ```powershell
-$env:BRAINCHAIN_PAY_ON='robinhood'; $env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.22.0 approve
+$env:BRAINCHAIN_PAY_ON='robinhood'; $env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.23.0 approve
 ```
 
 This approves 100 USDG. Pass another amount or `max` as the last argument, or `0` to revoke. After that, each payment is a signature, and BrainChain's payment desk (the service that takes payment and posts your task) pays the gas. `init` run with `BRAINCHAIN_PAY_ON=robinhood` names these steps too, and puts the setting in the commands it prints.
@@ -202,7 +203,7 @@ In Claude Desktop, open Settings, then Developer, then Edit Config, add the serv
 
 These setups start the newest release each time the client starts the server. Then ask your agent what changed about Robinhood Chain tokens in the last hour, or to post each new change to a Discord channel. [`examples/watch-and-alert`](examples/watch-and-alert) does both from a script.
 
-The other free tools list the Robinhood Chain tokens that BitGo, a custodian for exchanges and funds, has recently started to support, read how much of a token a market maker's trading wallets hold, now or at a past block, read how far along a token is and where it is already listed, and read what tokenized US stocks cost on Robinhood Chain: see [Tools](#tools).
+The other free tools list the Robinhood Chain tokens that BitGo, a custodian for exchanges and funds, has recently started to support, read how much of a token a market maker's trading wallets hold, now or at a past block, read how far along a token is, where it is already listed and whether a team is building behind it, and read what tokenized US stocks cost on Robinhood Chain: see [Tools](#tools).
 
 ## Tools
 
@@ -217,6 +218,7 @@ The other free tools list the Robinhood Chain tokens that BitGo, a custodian for
 - `brainchain_token_sightings` returns which public wallet lists and exchanges already carry a Robinhood Chain token, and what Robinhood's own public pages show for its symbol. Free, no key.
 - `brainchain_token_timeline` returns every dated public step of a Robinhood Chain token, oldest first, each with its source, or only those public by a past block or time. Free, no key.
 - `brainchain_token_market_cap` returns a Robinhood Chain token's price, supply and market cap at a past block or time, or now, with the pool and the swap the price comes from. Free, no key.
+- `brainchain_token_builder` returns whether a team is building behind a Robinhood Chain token and what it last shipped, as HEY Research Lab reports it. Free, no key.
 - `brainchain_trace_outcomes` returns how often a kind of public step of a Robinhood Chain token was followed by a listing within 7, 30 and 90 days, with the tokens behind each count. Free, no key.
 - `brainchain_call` makes your agent's call that a Robinhood Chain token is listed within 7, 30 or 90 days, as a paid grade recorded on BrainChain.
 - `brainchain_calls` returns every call a wallet made, each settled by the published dataset, and how many settled each way. Free, no key.
@@ -232,7 +234,7 @@ The other free tools list the Robinhood Chain tokens that BitGo, a custodian for
 - `brainchain_licences` returns an agent's licences and the state of each. Free, no key.
 - `brainchain_agent_record` returns an agent's numbered record on BrainChain and what its Agent Papers say. Free, no key.
 
-`brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_sit_exam` spend from the wallet and count against the limits in [Payments and limits](#payments-and-limits). The other twenty spend nothing: `brainchain_exam_submit` delivers an exam item, `brainchain_watch` and `brainchain_unwatch` set up and remove a watch, and the rest only read.
+`brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_sit_exam` spend from the wallet and count against the limits in [Payments and limits](#payments-and-limits). The other twenty-one spend nothing: `brainchain_exam_submit` delivers an exam item, `brainchain_watch` and `brainchain_unwatch` set up and remove a watch, and the rest only read.
 
 ### Reference
 
@@ -249,6 +251,7 @@ The other free tools list the Robinhood Chain tokens that BitGo, a custodian for
 | `brainchain_token_sightings` | Takes `token`, the token's contract address on Robinhood Chain or its symbol or name, and returns `lists`, with an entry for Trust Wallet, MetaMask, LI.FI and CoinGecko, each with its `source` and `listed`. For a token Trust Wallet or MetaMask lists, the entry adds `link`, the token's file in their public code, and `since`, when the list's master branch took that file; for one Trust Wallet warns about, a `status` of `spam` or `abandoned`. `exchanges` has an entry for KuCoin and Gate, each with its `source`, `listed` and, when listed, whether `deposits` and `withdrawals` are open. `robinhood` has an entry for each `symbol` those sources give the token: whether Robinhood's crypto sitemap has a `page` for it, whether the pair list Robinhood serves to API clients has it (`pair`, with `pairsRead`, the number of pairs in that list), Robinhood's own `name` for the asset, whether it is `tradable`, and whether Bitstamp lists it on Robinhood Chain (`bitstamp`). With an optional `atBlock` or `at`, only the sightings public by then are listed, `until` gives the time (`at`) and the `block` used, and `withheld` names each source that lists the token now with no date to place it by. `unread` names any source that could not be read. The answer also has `token`, with the `contract` and the `symbol` and `name` the sources give it, and `readAt`. Free, no key. |
 | `brainchain_token_timeline` | Takes `token`, the token's contract address on Robinhood Chain or its symbol or name, and returns `steps`, oldest first, each with `at`, `step` and `source`, and for a step read from the chain its `block` and `transaction`. A step is BitGo's merge of the token (`custody`, with `id`, `name` and `commit`), the contract's creation (`deploy`, when the transaction that first minted the token also created it), its first mint (`mint`, with `to`), the first pool on each Uniswap venue (`pool`, with `pairedWith`), the first of the token's pools a market maker added to its trading contracts' approved list (`pool_queued`, with the wallet as `maker`, the `venue`, the `pool`, `pairedWith`, `confirmed` and `granted`, when the addition took effect), each followed wallet's first approval (`approval`, with the wallet as `maker`, the `spender` and `confirmed`) or the merge that added the token's file to Trust Wallet's or MetaMask's list (`listing`, with its `link`). With an optional `atBlock` or `at`, only the steps public by then are listed, and `until` gives the `block` and time (`at`) used. `undated` holds a step with no known time, with `by`, a time it had happened by; with a cut-off, one whose `by` is after it is named in `withheld` instead. The answer also has `deployed`, `token`, with the `contract`, `name` and `symbol`, `unread`, any source that could not be read, and `readAt`. Free, no key. |
 | `brainchain_token_market_cap` | Takes `token`, the token's contract address on Robinhood Chain or its symbol or name, and an optional `atBlock` or `at`, and returns the token's `priceUsd`, `supply` and `marketCapUsd` at `asOf`, the `block` asked for, or the newest without either, and when it was made (`at`). The price is the pool's after `swap`, the last swap at or before that block in the deepest pool that pairs the token with USDG, with its `block`, `at` and `transaction`, or in the deepest pool paired with ETH or WETH when no USDG pool traded, converted with `ethUsd`. `pool` gives the pool's `version`, its `address` on Uniswap v3 or its `id` and `hooks` on Uniswap v4, the `pair`, `pairedWith`, its `fee`, its `depth2pctUsd` at the block and `thin`, true under $2,000. `chosen` says why that pool, and `pools` lists the pools weighed, deepest first, each with its last swap's `block` and its `priceUsd`. At a past block `supplyCheck` gives the newest `block` and whether the token's mints less its burns came to its totalSupply there (`passed`); when they did not, no past `supply` or `marketCapUsd` is given. When the pools came from the pool index of the watcher `BRAINCHAIN_WATCH_URL` names, `poolIndex` gives the `watcher` and the block the index ran `through`. The answer also has `token`, with the `contract`, `name`, `symbol` and `decimals`, and `readAt`. Free, no key. |
+| `brainchain_token_builder` | Takes `token`, the token's contract address on Robinhood Chain or its symbol or name, and returns HEY Research Lab's card for it. `published` says whether HEY has published a project for the contract; when it has not, the answer adds only `scan`, the page on HEY where the address can be scanned. For a published project it returns `project`, with its `name` and its `page` on HEY; `tokenVerification`, whether the project itself names this contract (`VERIFIED`, `UNVERIFIED` or `MISMATCH`), and `appliesToToken`, whether the project's activity can be read as this token's; `status`, with HEY's `label`, what it `means` and its `code` (SHIPPING, ACTIVE, RESUMED, QUIET, DORMANT or UNKNOWN); `verifiedBuilder`; `measured`, whether HEY measured the project's building at all; `shipsIn30Days` and `lastActivityAt`; `latestShip`, with its `title`, `kind`, `at`, `link` and `evidence`; `latestChange`, with its `summary`, `type`, `happenedAt`, `precision`, `seenAt` and `record`; `asOf`, the moment the status and the count describe; and `note`, HEY's own sentence on what the card is not. A field that is left out is unknown, never zero. The answer also has `token`, which holds the `contract`; `source`, which is always HEY Research Lab; and `readAt`. Free, no key. |
 | `brainchain_trace_outcomes` | Takes `trace`, a kind of step: `pool`, `custody_pr`, `custody`, `custody_release`, `listing_pr`, `listing`, `aggregator`, `approval` or `pool_queued`, or a kind `brainchain_changes` reports, such as `bitgo.merged`; an optional `within`, one window of 1 to 365 days in place of 7, 30 and 90; an optional `venue`, `robinhood`, `robinhood_page`, `robinhood_tradable`, `kucoin` or `gate`; and an optional `at` or `atBlock`. Returns `n`, the tokens that took the step, `undated`, those that took it with no date, `tokens`, the contracts behind `n` when there are at most 2,000, and `windows`, each with `days`, `steps` and `outcomes` for `any` venue and each one: `eligible`, `before`, `unknown`, `followed`, `share`, `medianLeadDays` and the `tokens` behind each. `dataset` names the day read, its `headBlock`, `readAt` and the SHA-256 of its `manifest`, and `cut` the time counted to. Counts only, never a score. Free, no key. |
 | `brainchain_call` | Takes `token`, a contract address, symbol or name; `outcome`, `any` (a listing at any venue the dataset reads, the default) or one of `robinhood_page`, `robinhood_tradable`, `kucoin`, `gate`, `kraken`, `binance_futures`, `upbit`, `bithumb` and `bitget`; and `days`, 7, 30 (the default) or 90. Checks the newest published dataset first and pays nothing when it already has the outcome. Otherwise pays for one grade from this server's wallet, as `brainchain_grade` does, and returns `call` (the token, outcome, days and the dataset day and manifest it was checked against) and `graded`, the grade as `brainchain_grade` returns it. |
 | `brainchain_calls` | Takes `caller`, the wallet that paid for the calls. Returns `counts` (`calls`, `hit`, `miss`, `pending` and `already public`) and `calls`, newest first, each with its `grade`, `decision`, `record`, `accepted` (whether Jev found it complete; it counts either way), `at`, `deadline`, `settled` and, for a hit or a call already public, the outcome row that settled it. `dataset` names the day that settled them. Free, no key. |
@@ -270,7 +273,7 @@ Results usually arrive within minutes. A post reply with `possiblyCharged` means
 
 `brainchain_custody_additions` reads [BitGo's public code](https://github.com/BitGo/BitGoJS/tree/master/modules/statics/src/coins) on GitHub. BitGo is a custodian for exchanges, funds and trading firms, and a token shows up in BitGo's code while BitGo is getting ready to hold it, which can be before an exchange lists it: BitGo merged the commit that added Cash Cat on July 28, 2026, and Robinhood listed that token on August 6, 2026. That makes an entry worth a closer look, not a prediction: it does not say which client asked BitGo to support the token or why, and it does not mean an exchange will list it. Most of the tokens BitGo has added are stock tokens issued by Robinhood itself, which say nothing about a listing on an exchange, and some are added before their contract is deployed. Nearly all of those have "Robinhood" in their `name`, but `name` is BitGo's label and not the token's name on chain, so a `name` without "Robinhood" does not prove a token comes from someone else: look up the `contract` on a block explorer before treating a token as one Robinhood did not issue. The answer also carries `readAt`, when the merges were read from GitHub, and `since`, where the period starts, and `additions` is empty if nothing was added. GitHub allows 60 unauthenticated API requests an hour from one IP address: 30 days usually takes two requests and 90 days about six, and when they are used up the tool says when to try again. While the server runs, what it read from GitHub is kept for ten minutes: the same call again in that time makes no request and shows the same `readAt`.
 
-`brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline` and `brainchain_token_market_cap` take a token by its contract address, or by a symbol or name such as RLUSD or Ripple USD, looked up first on BitGo's lists for Robinhood Chain: BitGo's id for the token, with or without `hoodeth:`, or BitGo's name for it, in any case. When none there goes by it, the lookup goes on in the dataset: the tokens Trust Wallet, MetaMask, LI.FI, CoinGecko, KuCoin and Gate list, by symbol or name, and then every token with a Uniswap pool, by the symbol its contract gives itself (`pool index`). When exactly one token goes by it, the answer starts with `lookup`, which names the `contract` it stands for and its `source`, and for one found in the dataset the `dataset` day, block and manifest read. When several do, the answer lists them as `candidates`, each with its `source`, up to 20 with `total` when there are more, and reads nothing more; when none does, it says so. A symbol in the pool index is whatever the token's deployer chose, so check the contract before relying on it.
+`brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap` and `brainchain_token_builder` take a token by its contract address, or by a symbol or name such as RLUSD or Ripple USD, looked up first on BitGo's lists for Robinhood Chain: BitGo's id for the token, with or without `hoodeth:`, or BitGo's name for it, in any case. When none there goes by it, the lookup goes on in the dataset: the tokens Trust Wallet, MetaMask, LI.FI, CoinGecko, KuCoin and Gate list, by symbol or name, and then every token with a Uniswap pool, by the symbol its contract gives itself (`pool index`). When exactly one token goes by it, the answer starts with `lookup`, which names the `contract` it stands for and its `source`, and for one found in the dataset the `dataset` day, block and manifest read. When several do, the answer lists them as `candidates`, each with its `source`, up to 20 with `total` when there are more, and reads nothing more; when none does, it says so. A symbol in the pool index is whatever the token's deployer chose, so check the contract before relying on it.
 
 `brainchain_market_maker_holdings` reads from Robinhood Chain how much of a token a market maker's trading wallet holds and when that wallet first approved the token. An approval is a transaction in which a wallet gives a contract permission to move its holdings of one token. A market maker makes one when it is getting ready to trade a token, which can be before an exchange lists the token: Wintermute's trading contract first approved Cash Cat on August 5, 2026, and Robinhood listed that token on August 6, 2026. A first approval is a lead to look into: it does not say why the market maker wants the token, and it does not mean an exchange will list it. The tool follows five wallets at three firms: Wintermute's trading contract at `0x51C72848c68a965f66FA7a88855F9f7784502a7F`, two more Wintermute wallets, one B2C2 wallet and one Galaxy Digital wallet. Etherscan tags the contract's address as a market maker and Arkham attributes it to Wintermute. The other four are plain wallets with a public name tag on Etherscan, which each entry repeats as `tag`. To read another wallet instead, pass its address as `wallet`. Unless it is one of the five, its entry has no `name` or `tag`, and the tool does not check whose wallet it is. To follow more wallets on every call, list them in `BRAINCHAIN_MAKER_WALLETS` (see [Configuration](#configuration)); their entries carry the name you give and `source: "configured"`. The `contract` of an entry from `brainchain_custody_additions` can be passed here as `token`. To try it, pass Cash Cat's contract, `0x020bfC650A365f8BB26819deAAbF3E21291018b4`.
 
@@ -283,6 +286,8 @@ The tool answers one request at a time, so requests sent together are answered i
 `brainchain_token_readiness` reads from Robinhood Chain how far along a token is. A token is often named before it exists: BitGo's public code lists contracts that are not deployed yet. The tool says whether the contract is deployed, and gives the first mint and the first pool created on each Uniswap venue, each with its block and transaction. Only the first pool on each venue is listed. Anyone can create an empty pool for any token, so a pool's date is worth looking into and is not proof that the token trades. Each `at` is the time of the block that holds the event, so a backtest sees each step when it happened. The tool answers one request at a time. The first answer for a token can take half a minute, because the tool reads the token's whole history; later ones are faster for as long as the server keeps running. An answer that is not ready after 45 seconds says so, and asking again goes on from where it stopped.
 
 `brainchain_token_sightings` reads which public wallet lists and exchanges already carry a token. It needs no key. A token picks up these listings one at a time as it reaches a wider market: Cash Cat entered Trust Wallet's and MetaMask's lists on July 8, 2026, four weeks before Robinhood listed it on August 6. On its own a sighting says little: most tokens on these lists are never listed by Robinhood. Trust Wallet, MetaMask, LI.FI, CoinGecko, KuCoin and Gate are matched by the token's contract address. The tool reads the chain only for the time of `atBlock`, so an address that is not a token is listed nowhere. A Trust Wallet or MetaMask listing is dated by when the list's master branch took the token's file: the time the pull request that added it was merged, which can be days after its commit was made. For a cut-off, pass `at` or `atBlock`. A Trust Wallet or MetaMask entry stays when its `since` is at or before that time. The other sources publish no date for a listing, so a token listed there now may or may not have been listed then, and `withheld` names each one rather than leaving it out. Trust Wallet also keeps a file for a token it warns about or has dropped: its entry then has `listed` false and a `status` of `spam` or `abandoned`. Robinhood and Bitstamp, which Robinhood owns, publish no contract addresses, so they are matched by symbol: `robinhood` has an entry for each symbol of letters and digits that the six sources give the token. Each entry says whether Robinhood's crypto sitemap has a page for the symbol, whether the pair list Robinhood serves to API clients has it, with how many pairs that list held, and whether Bitstamp lists it on Robinhood Chain. That list leaves out most pairs Robinhood shows with a price only: on November 20, 2026 it held 140 pairs, while the sitemap had a page for each of the 353 pairs Robinhood's site shows. So `pair` false says only that the list does not have the symbol, and `page` covers the price-only pairs. For a symbol in the list it also gives Robinhood's own `name` for the asset and whether customers can trade it or only see its price. Two tokens can share a symbol, so compare that `name` with the token's own before reading an entry as this token: a token on Robinhood Chain that calls itself DOGE is not Dogecoin. An entry with a `page` and `pair` false has no name to compare, so it says only that Robinhood has a page under that symbol. A source that could not be read is named in `unread` and left out, not reported as unlisted. A list that was read is kept for ten minutes while the server runs, so what an entry says can be that old. The first answer takes a few seconds, and later ones within those ten minutes come at once.
+
+`brainchain_token_builder` reads [HEY Research Lab](https://heyresearch.xyz)'s card for a token. It needs no key. HEY is an independent research site that records what projects on Robinhood Chain ship, each ship with its source: a release, a contract deployment, a dated changelog entry or a week of code changes. The tool passes the card on in HEY's own words: the project's status, whether HEY verified it as a builder, how many ships HEY counted in the last thirty days, the newest ship with its source, and the newest change. HEY derives the status from what the project ships, never from price. The card is a record of what a team shipped and how HEY knows. It carries no rating and no verdict. A token is not a project: `tokenVerification` says whether the project itself names this contract, and when `appliesToToken` is false, as it is on a `MISMATCH` and for some unverified tokens that share a project's name, the answer describes the project and not this token. When HEY has published no project for a contract, `published` is false and the answer adds only the page on HEY where the address can be scanned, which says nothing about whether anyone is building. The tool does not read the chain, so a wallet's address is answered like a contract HEY has no project for. A field that is left out is one HEY does not hold: it is unknown, never zero. When you show an answer to a person, link `project.page`: HEY asks that of everyone who shows its card. Without a key, HEY answers 120 requests a minute from one IP address. The tool names itself to HEY as `brainchain-mcp`, and HEY's links to a project's page and to a ship's evidence carry that name.
 
 ### Sample replies
 
@@ -400,7 +405,7 @@ Each row has two times. `at` is the earliest time the step can be shown public, 
 The build reads the log, the pool index, Robinhood's page names and the calls of the watcher `BRAINCHAIN_WATCH_URL` names, through `GET /events`, `GET /pools?after=`, `GET /robinhood/names` and `GET /calls?after=`, or a pool index on the same machine with `--pools <dir>`, and reads the chain itself for every followed wallet's approvals and each market maker's queued pools. Give it a private RPC in `BRAINCHAIN_WATCH_RPC`. The first build reads the chain's whole history; a build stops after 50 minutes, and until one has read through the newest block it exits 2, and running it again goes on from there. Later builds take minutes.
 
 ```bash
-BRAINCHAIN_WATCH_RPC=https://your-rpc npx -y brainchain-mcp@0.22.0 dataset --out ./brainchain-data
+BRAINCHAIN_WATCH_RPC=https://your-rpc npx -y brainchain-mcp@0.23.0 dataset --out ./brainchain-data
 ```
 
 ## Watch public changes
@@ -450,7 +455,7 @@ An event says what became public and when. It does not say why, and most tokens 
 [`examples/watch-and-alert`](examples/watch-and-alert) has two scripts. `npm run discord` has each change posted to the Discord channel whose webhook URL is in `DISCORD_WEBHOOK_URL`, and `npm run discord -- --remove` stops it. `npm run loop` is the start of an agent: every minute it reads the new changes, asks `brainchain_trace_outcomes` how often earlier tokens with the same step were listed within 30 days, and prints what it would do. Its core:
 
 ```ts
-await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.22.0"] }));
+await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.23.0"] }));
 let since;
 for (;;) {
   const page = await call("brainchain_changes", since === undefined ? { kinds, limit: 5 } : { kinds, since });
@@ -513,8 +518,8 @@ If `brainchain_sit_exam` returns without briefs, the sitting is paid for and Bra
 BrainChain's [problem board](https://usebrainchain.com/problems) lists open problems in mathematics, each with a record to beat and an exact checker. `brainchain-mcp solve` lists them, and sends an answer to be checked:
 
 ```bash
-npx -y brainchain-mcp@0.22.0 solve                                      # the problems, their records and answer formats
-npx -y brainchain-mcp@0.22.0 solve shannon-capacity-c7-5 answer.json    # check the answer in answer.json
+npx -y brainchain-mcp@0.23.0 solve                                      # the problems, their records and answer formats
+npx -y brainchain-mcp@0.23.0 solve shannon-capacity-c7-5 answer.json    # check the answer in answer.json
 ```
 
 The answer file holds JSON in the problem's format, such as `{"words": [[0, 2, 0, 2, 0], ...]}`. BrainChain runs the problem's checker on it and records the decision. The command prints what the checker found and exits 0 when the answer is accepted, 1 when it is refused, and 2 when the verdict is not in yet.
@@ -552,16 +557,16 @@ An agent can send the same answer with `brainchain_grade`: the brief and levels 
 | `GITHUB_TOKEN` | none | A GitHub token the server reads GitHub's API with, for BitGo's history and the dates of Trust Wallet's and MetaMask's listings. Without one, every server on an IP address shares the 60 requests an hour GitHub allows it, which a hosted server can use up. The token needs no scopes, since every repository read is public, and it is sent to api.github.com only and never logged. |
 | `BRAINCHAIN_DESK_URL`, `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC` | network preset | Override a single setting. A custom desk needs its own `BRAINCHAIN_PAY_TO`, and an https URL unless it is on localhost or 127.0.0.1. |
 
-If a setting is invalid, the server says so once on stderr when it starts, and each tool the setting stops returns that error and does nothing else. A `BRAINCHAIN_NETWORK`, `BRAINCHAIN_PAY_ON` or `BRAINCHAIN_DESK_URL` the server cannot read stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap`, `brainchain_trace_outcomes`, `brainchain_calls`, `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`. A setting only payments read stops just the five tools that pay, `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_sit_exam`; the other twenty keep working. Those settings are the spending limits, `BRAINCHAIN_STATE_DIR` (including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set), `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC`, and a custom `BRAINCHAIN_DESK_URL` set without its `BRAINCHAIN_PAY_TO`. A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task`, `brainchain_sit_exam`, `brainchain_exam_submit`, which signs each delivery, and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working, as do the tools that read the exam, a sitting, an agent's licences and its record. A `BRAINCHAIN_MAKER_WALLETS` it cannot read stops `brainchain_market_maker_holdings` and `brainchain_token_timeline`, which read the wallets it adds, and no other tool. A `BRAINCHAIN_WATCH_URL` it cannot read stops `brainchain_changes`, `brainchain_watch`, `brainchain_unwatch` and `brainchain_calls`, and no other tool; `brainchain_token_market_cap` then searches the chain for a token's pools itself. A `BRAINCHAIN_DATASET` it cannot read stops `brainchain_trace_outcomes`, `brainchain_call` and `brainchain_calls`, and no other tool; the timeline and the symbol lookup then read without the dataset.
+If a setting is invalid, the server says so once on stderr when it starts, and each tool the setting stops returns that error and does nothing else. A `BRAINCHAIN_NETWORK`, `BRAINCHAIN_PAY_ON` or `BRAINCHAIN_DESK_URL` the server cannot read stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap`, `brainchain_token_builder`, `brainchain_trace_outcomes`, `brainchain_calls`, `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`. A setting only payments read stops just the five tools that pay, `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_sit_exam`; the other twenty-one keep working. Those settings are the spending limits, `BRAINCHAIN_STATE_DIR` (including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set), `BRAINCHAIN_PAY_TO`, `BRAINCHAIN_PAYMENT_NETWORK`, `BRAINCHAIN_PAYMENT_ASSET`, `BRAINCHAIN_PAYMENT_RPC`, and a custom `BRAINCHAIN_DESK_URL` set without its `BRAINCHAIN_PAY_TO`. A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task`, `brainchain_sit_exam`, `brainchain_exam_submit`, which signs each delivery, and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working, as do the tools that read the exam, a sitting, an agent's licences and its record. A `BRAINCHAIN_MAKER_WALLETS` it cannot read stops `brainchain_market_maker_holdings` and `brainchain_token_timeline`, which read the wallets it adds, and no other tool. A `BRAINCHAIN_WATCH_URL` it cannot read stops `brainchain_changes`, `brainchain_watch`, `brainchain_unwatch` and `brainchain_calls`, and no other tool; `brainchain_token_market_cap` then searches the chain for a token's pools itself. A `BRAINCHAIN_DATASET` it cannot read stops `brainchain_trace_outcomes`, `brainchain_call` and `brainchain_calls`, and no other tool; the timeline and the symbol lookup then read without the dataset.
 
-`npx -y brainchain-mcp@0.22.0 wallet` checks the settings and the key, then prints the wallet that pays, the limits it pays within, what it holds and, for USDG, what Permit2 may spend. It exits 0 when the wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2 when its balance could not be read, so a script can run it before posting. `init` creates a wallet in `~/.brainchain/payer.key`, or in the file `BRAINCHAIN_PAYER_KEY_FILE` names, when none is there, and otherwise reports on it as `wallet` does, exit codes included. Either way it ends with the commands that add the server. `--help` lists the commands and variables, and `--version` prints the version.
+`npx -y brainchain-mcp@0.23.0 wallet` checks the settings and the key, then prints the wallet that pays, the limits it pays within, what it holds and, for USDG, what Permit2 may spend. It exits 0 when the wallet can pay for a task, 1 when it cannot or a setting is wrong, and 2 when its balance could not be read, so a script can run it before posting. `init` creates a wallet in `~/.brainchain/payer.key`, or in the file `BRAINCHAIN_PAYER_KEY_FILE` names, when none is there, and otherwise reports on it as `wallet` does, exit codes included. Either way it ends with the commands that add the server. `--help` lists the commands and variables, and `--version` prints the version.
 
 ## Try it on testnet
 
-Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have no value. `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.22.0 init` prints the address to fund and the commands that add the testnet server. In Claude Code, with the key saved as in [Install](#install):
+Set `BRAINCHAIN_NETWORK=testnet` in the server's environment. Test tokens have no value. `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.23.0 init` prints the address to fund and the commands that add the testnet server. In Claude Code, with the key saved as in [Install](#install):
 
 ```bash
-claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.22.0
+claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@0.23.0
 ```
 
 **With USDC on Base Sepolia**, the default, get test USDC from [Circle's faucet](https://faucet.circle.com). That is all a payment needs.
@@ -578,7 +583,7 @@ claude mcp add brainchain --scope user -e BRAINCHAIN_NETWORK=testnet -e BRAINCHA
 3. Approve Permit2:
 
    ```bash
-   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.22.0 approve
+   BRAINCHAIN_NETWORK=testnet BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.23.0 approve
    ```
 
 ## Examples

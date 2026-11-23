@@ -2,6 +2,7 @@ import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { getAddress, isAddress, type Address } from "viem";
 
 import type { Bonds } from "./bonds.js";
+import { BUILDER_NAME, BUILDER_TOOL, BuilderError, readTokenBuilder, type BuilderBoard } from "./builder.js";
 import { CALL_NAME, CALL_TOOL, callArgs, callRecord, callRequest, CALLS_NAME, CALLS_TOOL, type IndexedCall } from "./calls.js";
 import { CHANGES_NAME, CHANGES_TOOL, changesQuery, createWatch, HOSTED_WATCH_URL, readCalls, readChanges, removeWatch, UNWATCH_NAME, UNWATCH_TOOL, unwatchArgs, WATCH_NAME, WATCH_TOOL, watchArgsOf, type ChangesQuery, type WatchRequest } from "./changes.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
@@ -720,6 +721,8 @@ export interface Readers {
   listed(): Promise<CustodyToken[]>;
   timeline(token: Address, until?: Moment): Promise<TimelineBoard>;
   marketCap(token: Address, moment?: Moment): Promise<MarketCapBoard>;
+  /** HEY Research Lab's card for the token. */
+  builder(token: Address): Promise<BuilderBoard>;
   /** The events of the watcher BRAINCHAIN_WATCH_URL names, or of BrainChain's own. */
   changes(query: ChangesQuery): Promise<unknown>;
   watch(request: WatchRequest): Promise<unknown>;
@@ -745,6 +748,7 @@ const READERS: Readers = {
   listed: readListedTokens,
   timeline: readTokenTimeline,
   marketCap: readMarketCap,
+  builder: readTokenBuilder,
   changes: (query) => readChanges(new URL(HOSTED_WATCH_URL), query),
   watch: (request) => createWatch(new URL(HOSTED_WATCH_URL), request),
   unwatch: (id, manageToken) => removeWatch(new URL(HOSTED_WATCH_URL), id, manageToken),
@@ -768,7 +772,7 @@ export async function callTool(
   refused: ReadonlyMap<string, string> = new Map(),
   readers: Partial<Readers> = {},
 ): Promise<CallToolResult> {
-  const { custody, makers, readiness, sightings, listed, timeline, marketCap, changes, watch, unwatch, dataset, cutOf, symbols, calls } = { ...READERS, ...readers };
+  const { custody, makers, readiness, sightings, listed, timeline, marketCap, builder, changes, watch, unwatch, dataset, cutOf, symbols, calls } = { ...READERS, ...readers };
   const input = (args ?? {}) as Record<string, unknown>;
   const refusal = refused.get(name);
   if (refusal !== undefined) return reply({ error: refusal }, true);
@@ -900,6 +904,15 @@ export async function callTool(
       const board = await marketCap(token, when).catch((error: unknown) => {
         if (error instanceof ChainError) throw error;
         throw new Error(`Robinhood Chain could not be read just now: ${brief(error)} Try again in a minute.`);
+      });
+      return reply(withLookup(board, lookup));
+    }
+    if (name === BUILDER_NAME) {
+      refuseUnknownFields(input, BUILDER_TOOL.inputSchema);
+      const { token, lookup } = await tokenOf(input.token, listed, dataset, symbols);
+      const board = await builder(token).catch((error: unknown) => {
+        if (error instanceof BuilderError) throw error;
+        throw new Error(`HEY Research Lab could not be read just now: ${brief(error)} Try again in a minute.`);
       });
       return reply(withLookup(board, lookup));
     }

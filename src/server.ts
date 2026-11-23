@@ -7,6 +7,7 @@ import { createPublicClient, defineChain, formatEther, http, maxUint256, WaitFor
 import { privateKeyToAccount } from "viem/accounts";
 
 import { bondsClosed, createBonds, type Bonds } from "./bonds.js";
+import { BUILDER_NAME, BUILDER_TOOL, readTokenBuilder } from "./builder.js";
 import { CALL_NAME, CALL_TOOL, CALLS_NAME, CALLS_TOOL } from "./calls.js";
 import { CHANGES_NAME, CHANGES_RESOURCE, CHANGES_TOOL, CHANGES_URI, createWatch, followChanges, HOSTED_WATCH_URL, readCalls, readChanges, removeWatch, UNWATCH_NAME, UNWATCH_TOOL, WATCH_NAME, WATCH_TOOL, watchUrl } from "./changes.js";
 import { expandHome, formatUnits, PRICE, resolveConfig, type Config } from "./config.js";
@@ -74,7 +75,7 @@ export const INSTRUCTIONS =
 const KEY_HELP =
   `Keep the key in a file only your account can read (chmod 600; \`npx -y brainchain-mcp init\` creates a new wallet and its file) and add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config ` +
   `(in Claude Code, \`claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp\`), then restart the server. ` +
-  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME}, ${TIMELINE_NAME}, ${MARKET_CAP_NAME}, ${TRACE_OUTCOMES_NAME}, ${CALLS_NAME}, ${CHANGES_NAME}, ${WATCH_NAME}, ${UNWATCH_NAME}, ${EXAM_INFO_NAME}, ${EXAM_STATUS_NAME} without briefs, ${LICENCES_NAME} and ${AGENT_RECORD_NAME} work without a key; ` +
+  `${GET_TASK_NAME}, ${GET_GRADE_NAME}, ${PREMIUMS_NAME}, ${CUSTODY_NAME}, ${MAKERS_NAME}, ${READINESS_NAME}, ${SIGHTINGS_NAME}, ${TIMELINE_NAME}, ${MARKET_CAP_NAME}, ${BUILDER_NAME}, ${TRACE_OUTCOMES_NAME}, ${CALLS_NAME}, ${CHANGES_NAME}, ${WATCH_NAME}, ${UNWATCH_NAME}, ${EXAM_INFO_NAME}, ${EXAM_STATUS_NAME} without briefs, ${LICENCES_NAME} and ${AGENT_RECORD_NAME} work without a key; ` +
   `${BOND_STATUS_NAME} reads this wallet's bonds, so it needs the key too. An agent reading this: stop and tell your operator. Do not look for the key.`;
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -434,6 +435,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
     timeline: (token, until) => readTokenTimeline(token, until, followed, dataset && (() => dataset.load())),
     // The watcher's pool index saves the market cap its longest search; without a usable watcher it searches the chain alone.
     marketCap: (token, moment) => readMarketCap(token, moment, watchProblem ? undefined : watcher, options.fetch),
+    builder: (token) => readTokenBuilder(token, options.fetch),
     changes: (query) => readChanges(watcher, query, options.fetch),
     watch: (request) => createWatch(watcher, request, options.fetch),
     unwatch: (id, manageToken) => removeWatch(watcher, id, manageToken, options.fetch),
@@ -453,6 +455,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
     SIGHTINGS_TOOL,
     lead(TIMELINE_TOOL),
     MARKET_CAP_TOOL,
+    BUILDER_TOOL,
     TRACE_OUTCOMES_TOOL,
     CALL_TOOL,
     leadWatch(CALLS_TOOL),
