@@ -122,6 +122,12 @@
           "format": "string"
         },
         {
+          "name": "BRAINCHAIN_FREE_URL",
+          "description": "Advanced: where a server with no paying key asks for free checks after brainchain-mcp login. BrainChain's own on mainnet by default, none on testnet. An https URL, or http on localhost or 127.0.0.1.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
           "name": "BRAINCHAIN_DESK_URL",
           "description": "Advanced: a payment desk to use in place of the network's own. An https URL, or http on localhost or 127.0.0.1. A custom desk needs its own BRAINCHAIN_PAY_TO.",
           "isRequired": false,

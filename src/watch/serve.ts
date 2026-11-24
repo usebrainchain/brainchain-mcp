@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
 
+import type { Sponsor } from "../sponsor.js";
 import { BASES } from "./chain.js";
 import type { CallIndex } from "./calls.js";
 import type { Deliveries } from "./deliver.js";
@@ -65,6 +66,8 @@ export interface ServeLimits {
 }
 
 export const SERVE_LIMITS: ServeLimits = { perMinute: 120, watchesPerHour: 10, streamsPerAddress: 5, streams: 500, body: 4096, replay: 1000 };
+/** The largest grade `POST /free/grade` takes: a 32,000-unit brief and a 100,000-byte result, as JSON. */
+export const FREE_BODY = 300_000;
 export const KEEPALIVE_MS = 20_000;
 /** A stream is closed after this long; the client opens it again from Last-Event-ID, so no slot is held for good. */
 export const STREAM_MS = 30 * 60_000;
@@ -154,6 +157,8 @@ export interface ServeOptions {
   deliveries?: Deliveries;
   /** The calls read from BrainChain's DecisionLog, for `GET /calls`; a watcher without them answers 404 there. */
   calls?: Pick<CallIndex, "of" | "get" | "page">;
+  /** BrainChain's free checks, for `GET /free`, `GET /free/me` and `POST /free/grade`; a watcher without them answers 404 there. */
+  sponsor?: Sponsor;
   /** Behind a proxy that appends the client's address to X-Forwarded-For, such as Render's, take the address from there. */
   trustProxy?: boolean;
   limits?: ServeLimits;
@@ -290,7 +295,7 @@ export interface Served {
  * /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
  * /watches/:id` with the watch's manage token. Nothing lists watches. Every address is held to `perMinute` requests.
  */
-export function serveEvents({ log, pools, names, health, adminToken, deliveries, calls, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
+export function serveEvents({ log, pools, names, health, adminToken, deliveries, calls, sponsor, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
   const perMinute = new Window(limits.perMinute, 60_000);
   const creations = new Window(limits.watchesPerHour, 3_600_000);
   const streams = new Set<{ response: ServerResponse; address: string; wanted: Pick<Query, "kinds" | "tokens">; cursor: number }>();
@@ -411,7 +416,18 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       if (!status) throw gone();
       return send(response, 200, status);
     }
-    if (["/events", "/events/stream", "/pools", "/robinhood/names", "/calls", "/health", "/health/live", "/watches"].includes(url.pathname) || id !== undefined || grade !== undefined) throw new HttpError(405, "That method is not served here.");
+    const free = ["/free", "/free/me", "/free/grade"].includes(url.pathname);
+    if (free && !sponsor) throw new HttpError(404, "This watcher gives no free checks.");
+    if (sponsor && url.pathname === "/free" && reading) return send(response, 200, sponsor.info(), OPEN);
+    if (sponsor && url.pathname === "/free/me" && reading) {
+      const { status, body } = await sponsor.me(bearer(request));
+      return send(response, status, body);
+    }
+    if (sponsor && url.pathname === "/free/grade" && method === "POST") {
+      const { status, body } = await sponsor.grade(bearer(request), await json(request, FREE_BODY), url.searchParams.get("network"));
+      return send(response, status, body);
+    }
+    if (["/events", "/events/stream", "/pools", "/robinhood/names", "/calls", "/health", "/health/live", "/watches"].includes(url.pathname) || free || id !== undefined || grade !== undefined) throw new HttpError(405, "That method is not served here.");
     throw new HttpError(404, "Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls?after=, GET /calls/:grade, GET /health, POST /watches and GET or DELETE /watches/:id.");
   }
 

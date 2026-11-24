@@ -37,9 +37,9 @@ function createKeyFile(file: string, path: string): boolean {
   }
 }
 
-/** The one line per client that adds this server with the key file and payment chain init set up. */
-export function installCommands(config: Config, version: string, file: string, platform: NodeJS.Platform = process.platform): [string, string][] {
-  const env = Object.fromEntries([...paySettings(config), ["BRAINCHAIN_PAYER_KEY_FILE", file]]);
+/** The one line per client that adds this server with the key file and payment chain init set up, or with no key for free checks. */
+export function installCommands(config: Config, version: string, file: string | undefined, platform: NodeJS.Platform = process.platform): [string, string][] {
+  const env = Object.fromEntries([...paySettings(config), ...(file ? [["BRAINCHAIN_PAYER_KEY_FILE", file] as [string, string]] : [])]);
   const server = { command: "npx", args: ["-y", `brainchain-mcp@${version}`], env };
   const windows = platform === "win32";
   const setting = ([name, value]: [string, string]) => {

@@ -12,6 +12,7 @@ import { ROBINHOOD_RPC } from "../premiums.js";
 import { firstQueued } from "../queued.js";
 import { readinessIn } from "../readiness.js";
 import { sightingsReader, tokenSightings } from "../sightings.js";
+import { sponsorFrom, type Sponsor } from "../sponsor.js";
 import { bitGoLists, bitGoMerges, bitGoPullRequests, bitGoReleases } from "./bitgo.js";
 import { chainFirsts, chainKept, chainPoller } from "./chain.js";
 import { chainTurn, createdIn, eventContext, loadWorth, saveWorth, worthOf } from "./context.js";
@@ -298,7 +299,14 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   if (adminToken && !/^[\w-]{32,100}$/.test(adminToken)) throw new Error("BRAINCHAIN_WATCH_ADMIN_TOKEN must be 32 to 100 letters, digits, - or _.");
   const names = () => (state.source("robinhood-names") as NamesState).names ?? {};
   const calls = new CallIndex({ dir, ...(env.BRAINCHAIN_WATCH_BRAIN ? { brain: env.BRAINCHAIN_WATCH_BRAIN } : {}), say });
-  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, calls, trustProxy: args.trustProxy }) : undefined;
+  // A free-checks setting the watcher cannot use turns the free checks off, and the watcher runs on without them.
+  let sponsor: Sponsor | undefined;
+  try {
+    sponsor = args.serve ? sponsorFrom(env, join(dir, "free"), { say }) : undefined;
+  } catch (error) {
+    say(`Free checks are off: ${(error as Error).message}`);
+  }
+  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, calls, ...(sponsor ? { sponsor } : {}), trustProxy: args.trustProxy }) : undefined;
   let ticking = false;
   const deliver = () => {
     if (ticking) return;

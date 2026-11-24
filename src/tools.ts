@@ -39,6 +39,8 @@ export interface Terms {
   wallet?: string;
   /** A setting that keeps this tool from paying, such as a key given that cannot be used; absent when there is none. */
   problem?: string;
+  /** Set when a server with no wallet can grade through BrainChain's free checks: how to sign in for them. */
+  free?: string;
 }
 
 export const POST_TASK_NAME = "brainchain_post_task";
@@ -208,6 +210,7 @@ export function gradeTool(terms: Terms | string): Tool {
         : (terms.problem ? invalidSetting(terms.problem) : "") +
           about +
           `Each grade costs ${terms.gradeCost} whatever the verdict, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, and counts against its budget and daily limit. ` +
+          (terms.free ? `${terms.free} ` : "") +
           (terms.refuses?.grade ? `${terms.refuses.grade} ` : "") +
           `BrainChain usually answers within seconds; if the reply is not done, read it with ${GET_GRADE_NAME}. If the reply says possiblyCharged, do not send it again: read it with ${GET_GRADE_NAME}. ` +
           `While this server keeps running, an identical request within ${REPOST_AFTER_MINUTES} minutes returns the first grade, marked duplicate, instead of paying again.`,
@@ -617,6 +620,12 @@ export function checkBrief(input: Record<string, unknown>): TaskRequest {
   return { title, brief, levels: sent };
 }
 
+/** A grade request as the tool takes it: its own fields and nothing else, within the desk's limits. */
+export function gradeInput(input: Record<string, unknown>): GradeRequest {
+  refuseUnknownFields(input, GRADE_INPUT);
+  return checkGrade(input);
+}
+
 /** The desk's limits on a grade request, checked before anything is signed. */
 export function checkGrade(input: Record<string, unknown>): GradeRequest {
   const brief = text("brief", input.brief, 32_000);
@@ -798,10 +807,7 @@ export async function callTool(
       if (!/^0x[0-9a-f]{64}$/.test(order)) throw new Error("order must be the 0x-prefixed, 64-character hex id that brainchain_post_task returned.");
       return orderReply(await desk.get(order));
     }
-    if (name === GRADE_NAME) {
-      refuseUnknownFields(input, GRADE_INPUT);
-      return reply(await desk.grade(checkGrade(input)));
-    }
+    if (name === GRADE_NAME) return reply(await desk.grade(gradeInput(input)));
     if (name === GET_GRADE_NAME) {
       refuseUnknownFields(input, GET_GRADE_TOOL.inputSchema);
       const grade = text("grade", input.grade).toLowerCase();
