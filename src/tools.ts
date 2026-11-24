@@ -39,7 +39,7 @@ export interface Terms {
   wallet?: string;
   /** A setting that keeps this tool from paying, such as a key given that cannot be used; absent when there is none. */
   problem?: string;
-  /** Set when a server with no wallet can grade through BrainChain's free checks: how to sign in for them. */
+  /** Set when a server with no wallet can grade through BrainChain's free checks: what they cover and how to sign in, said in place of the wallet's price. */
   free?: string;
 }
 
@@ -209,8 +209,7 @@ export function gradeTool(terms: Terms | string): Tool {
         ? `${invalidSetting(terms)}${about}`
         : (terms.problem ? invalidSetting(terms.problem) : "") +
           about +
-          `Each grade costs ${terms.gradeCost} whatever the verdict, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, and counts against its budget and daily limit. ` +
-          (terms.free ? `${terms.free} ` : "") +
+          (terms.free ? `${terms.free} ` : `Each grade costs ${terms.gradeCost} whatever the verdict, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, and counts against its budget and daily limit. `) +
           (terms.refuses?.grade ? `${terms.refuses.grade} ` : "") +
           `BrainChain usually answers within seconds; if the reply is not done, read it with ${GET_GRADE_NAME}. If the reply says possiblyCharged, do not send it again: read it with ${GET_GRADE_NAME}. ` +
           `While this server keeps running, an identical request within ${REPOST_AFTER_MINUTES} minutes returns the first grade, marked duplicate, instead of paying again.`,

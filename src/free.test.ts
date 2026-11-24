@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import { CALL_NAME } from "./calls.js";
 import { resolveConfig } from "./config.js";
-import { FREE_URL, freeGrader, freeUrl, readLogin, saveLogin, walletNext } from "./free.js";
+import { FREE_URL, freeGrader, freeUrl, readLogin, saveLogin, walletNext, type Login } from "./free.js";
 import { createServer, type ServerOptions } from "./server.js";
 import { GET_GRADE_NAME, GRADE_NAME } from "./tools.js";
 
@@ -18,7 +18,10 @@ const TOKEN = "gho_16C7e42F292c6912E7710c838347Ae178B4a";
 const GRADE = `0x${"cd".repeat(32)}`;
 const request = { brief: "Sort 3, 1 and 2.", result: "1, 2, 3" };
 const mainnet = resolveConfig({});
-const NEXT = "To keep grading, set up a wallet: run `npx -y brainchain-mcp init` in a terminal. It creates a wallet, says how much USDC to send it on Base (a grade costs 0.25 USDC) and prints the line that adds it to this server.";
+const SIGNED_IN: Login = { token: TOKEN, url: `${FREE_URL}/`, network: "mainnet" };
+const INIT = "npx -y brainchain-mcp@0.0.0-test init";
+const SET_UP = `set up a wallet: run \`${INIT}\` in a terminal. It creates a wallet, says how much USDC to send it on Base (a grade costs 0.25 USDC) and prints the line that adds it to this server.`;
+const NEXT = `To keep grading, ${SET_UP}`;
 
 /** BrainChain's free checks answering each grade with `answer`, recording what each request carried. */
 function checks(answer: () => Response = () => Response.json({ grade: GRADE, state: "graded", accepted: true, done: true, free: { used: 1, left: 1 } })) {
@@ -43,15 +46,18 @@ async function connect(env: Record<string, string | undefined>, options: ServerO
 const text = (result: Awaited<ReturnType<Client["callTool"]>>) => (result.content as { text: string }[])[0]!.text;
 
 describe("the GitHub sign-in", () => {
-  it("is kept readable only by this account, and read back as a token or not at all", () => {
+  it("is kept readable only by this account with the checks it was made for, and read back whole or not at all", () => {
     const file = join(mkdtempSync(join(tmpdir(), "brainchain-login-")), "nested", "github.token");
     expect(readLogin(file)).toBeUndefined();
-    saveLogin(TOKEN, file);
-    expect(readLogin(file)).toBe(TOKEN);
+    const testnet: Login = { token: TOKEN, url: "http://127.0.0.1:8787/", network: "testnet" };
+    saveLogin(testnet, file);
+    expect(readLogin(file)).toEqual(testnet);
     if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
-    writeFileSync(file, "not a token at all\n");
-    expect(readLogin(file)).toBeUndefined();
-    expect(() => saveLogin("bad token", file)).toThrow("nothing was saved");
+    for (const kept of ["not a token at all\n", `${TOKEN}\n`, JSON.stringify({ ...testnet, network: "devnet" }), JSON.stringify({ token: TOKEN }), "null"]) {
+      writeFileSync(file, kept);
+      expect(readLogin(file)).toBeUndefined();
+    }
+    expect(() => saveLogin({ ...testnet, token: "bad token" }, file)).toThrow("nothing was saved");
   });
 });
 
@@ -66,7 +72,8 @@ describe("where free checks are asked for", () => {
 });
 
 describe("a free grade", () => {
-  const grade = (fetchImpl: typeof fetch, login: () => string | undefined = () => TOKEN) => freeGrader({ config: mainnet, url: new URL(FREE_URL), login, fetch: fetchImpl });
+  const commands = { init: INIT, login: "npx -y brainchain-mcp@0.0.0-test login" };
+  const grade = (fetchImpl: typeof fetch, login: () => Login | undefined = () => SIGNED_IN) => freeGrader({ config: mainnet, url: new URL(FREE_URL), commands, login, fetch: fetchImpl });
 
   it("sends the request with the sign-in and the network, and says how many checks are left", async () => {
     const { fetchImpl, sent } = checks();
@@ -77,18 +84,25 @@ describe("a free grade", () => {
   it("says how to set up a wallet after the last free check", async () => {
     const { fetchImpl } = checks(() => Response.json({ grade: GRADE, state: "graded", free: { used: 2, left: 0 } }));
     expect(((await grade(fetchImpl)(request)) as { free: { note: string } }).free.note).toBe(`That was the last free check on this GitHub account. ${NEXT}`);
-    expect(NEXT).toBe(walletNext(mainnet));
+    expect(NEXT).toBe(walletNext(mainnet, INIT, "used"));
+  });
+
+  it("tells a repeat it used no check, whatever is left", async () => {
+    const repeat = (left: number) => checks(() => Response.json({ grade: GRADE, state: "graded", duplicate: true, free: { used: 2 - left, left } })).fetchImpl;
+    const note = async (left: number) => ((await grade(repeat(left))(request)) as { free: { note: string } }).free.note;
+    expect(await note(0)).toBe(`You sent this grade before, so this is the same grade again and no free check was used. No free checks are left on this GitHub account. ${NEXT}`);
+    expect(await note(1)).toBe("You sent this grade before, so this is the same grade again and no free check was used. 1 free check left on this GitHub account.");
   });
 
   it("says how to set up a wallet when a limit stops it, and how to sign in again when the sign-in lapsed", async () => {
-    for (const [status, reason, error] of [
-      [403, "used", "@octocat has used its 2 free checks."],
-      [403, "young", "Free checks are for GitHub accounts older than 30 days, and @fresh was created on 2026-11-10."],
-      [429, "daily", "Today's free checks are all taken. More open at 00:00 UTC."],
-      [403, "total", "All of BrainChain's free checks have been given out."],
-      [503, "paused", "BrainChain's free checks are paused for now."],
+    for (const [status, reason, error, lead] of [
+      [403, "used", "@octocat has used its 2 free checks.", "To keep grading"],
+      [403, "young", "Free checks are for GitHub accounts older than 30 days. @fresh was created on 2026-11-10, so it qualifies on 2026-12-10.", "To grade today"],
+      [429, "daily", "Today's free checks are all taken. More open at 00:00 UTC.", "To grade now"],
+      [403, "total", "All of BrainChain's free checks have been given out.", "To grade now"],
+      [503, "paused", "BrainChain's free checks are paused for now.", "To grade now"],
     ] as const) {
-      await expect(grade(checks(() => Response.json({ reason, error }, { status })).fetchImpl)(request)).rejects.toThrow(`${error} ${NEXT}`);
+      await expect(grade(checks(() => Response.json({ reason, error }, { status })).fetchImpl)(request)).rejects.toThrow(`${error} ${lead}, ${SET_UP}`);
     }
     const lapsed = "Your GitHub sign-in has expired or was revoked. Run `npx -y brainchain-mcp login` again.";
     await expect(grade(checks(() => Response.json({ reason: "login", error: lapsed }, { status: 401 })).fetchImpl)(request)).rejects.toThrow(new RegExp(`^${lapsed.replace(/[.*+?^${}()|[\]\\`]/g, "\\$&")}$`));
@@ -97,26 +111,40 @@ describe("a free grade", () => {
   it("asks for a sign-in or a wallet when there is no sign-in, and sends nothing", async () => {
     const { fetchImpl, sent } = checks();
     await expect(grade(fetchImpl, () => undefined)(request)).rejects.toThrow(
-      "This server has no wallet to pay for grades. To grade 2 times free, sign in with GitHub: run `npx -y brainchain-mcp login` in a terminal. To pay as you go, run `npx -y brainchain-mcp init` in a terminal.",
+      `This server has no wallet to pay for grades. To grade 2 times free, sign in with GitHub: run \`npx -y brainchain-mcp@0.0.0-test login\` in a terminal. To pay as you go, run \`${INIT}\` in a terminal.`,
+    );
+    expect(sent).toEqual([]);
+  });
+
+  it("names a sign-in made for other free checks, and sends it nowhere", async () => {
+    const { fetchImpl, sent } = checks();
+    const elsewhere: Login = { token: TOKEN, url: "http://127.0.0.1:8787/", network: "testnet" };
+    await expect(grade(fetchImpl, () => elsewhere)(request)).rejects.toThrow(
+      "This server has no wallet, and the GitHub sign-in on this machine is for the free checks at http://127.0.0.1:8787 on testnet, while this server asks BrainChain's free checks on mainnet. To grade free, add the server again with the line login printed",
     );
     expect(sent).toEqual([]);
   });
 
   it("says when the free checks are not open, and when they did not answer", async () => {
-    await expect(grade(checks(() => Response.json({ error: "Not found." }, { status: 404 })).fetchImpl)(request)).rejects.toThrow(`BrainChain's free checks are not open right now. ${NEXT}`);
+    await expect(grade(checks(() => Response.json({ error: "Not found." }, { status: 404 })).fetchImpl)(request)).rejects.toThrow(`BrainChain's free checks are not open right now. To grade now, ${SET_UP}`);
     const down = (async () => {
       throw new TypeError("fetch failed");
     }) as typeof fetch;
-    await expect(grade(down)(request)).rejects.toThrow("BrainChain's free checks did not answer (fetch failed). Send the same grade again in a minute: if it went through, you get that grade back without using another free check.");
+    await expect(grade(down)(request)).rejects.toThrow(
+      /^BrainChain's free-check service could not be reached\. Send the same grade again in a few minutes: if it went through, you get that grade back without using another free check\. If it keeps failing, check your internet connection\.$/,
+    );
   });
 });
 
 describe("a server with no wallet", () => {
   it("grades through the free checks with a sign-in, and says so in the grade tool", async () => {
     const { fetchImpl, sent } = checks();
-    const client = await connect({}, { fetch: fetchImpl, login: () => TOKEN });
+    const client = await connect({}, { fetch: fetchImpl, login: () => SIGNED_IN });
     const tool = (await client.listTools()).tools.find((t) => t.name === GRADE_NAME)!;
-    expect(tool.description).toContain("With no wallet set, BrainChain pays for the first 2 grades of a GitHub account older than 30 days once your operator signs in with `npx -y brainchain-mcp login` in a terminal.");
+    expect(tool.description).toContain(
+      "This server has no wallet, so its first 2 grades are free: BrainChain pays for them once your operator signs in with GitHub by running `npx -y brainchain-mcp@0.0.0-test login` in a terminal, with an account older than 30 days. After those, each grade costs 0.25 USDC whatever the verdict, paid from a wallet set up with `npx -y brainchain-mcp@0.0.0-test init`.",
+    );
+    expect(tool.description).not.toContain("paid from this server's wallet");
     const result = await client.callTool({ name: GRADE_NAME, arguments: request });
     expect(result.isError).toBe(false);
     expect(JSON.parse(text(result))).toMatchObject({ grade: GRADE, free: { left: 1 } });
@@ -125,7 +153,7 @@ describe("a server with no wallet", () => {
 
   it("checks a grade's fields before it asks, and reads the verdict from the desk as any grade", async () => {
     const { fetchImpl, sent } = checks();
-    const client = await connect({}, { fetch: fetchImpl, login: () => TOKEN });
+    const client = await connect({}, { fetch: fetchImpl, login: () => SIGNED_IN });
     const bad = await client.callTool({ name: GRADE_NAME, arguments: { ...request, extra: 1 } });
     expect(bad.isError).toBe(true);
     expect(sent).toEqual([]);
@@ -142,11 +170,11 @@ describe("a server with no wallet", () => {
       }
       return Response.json({ error: "Not found." }, { status: 404 });
     }) as typeof fetch;
-    const fresh = await connect({}, { fetch: fetchImpl, login: () => TOKEN });
+    const fresh = await connect({}, { fetch: fetchImpl, login: () => SIGNED_IN });
     const unknown = await fresh.callTool({ name: GET_GRADE_NAME, arguments: { grade: GRADE } });
     expect(text(unknown)).toContain("Check the id");
 
-    const client = await connect({}, { fetch: fetchImpl, login: () => TOKEN });
+    const client = await connect({}, { fetch: fetchImpl, login: () => SIGNED_IN });
     await client.callTool({ name: GRADE_NAME, arguments: request });
     const read = await client.callTool({ name: GET_GRADE_NAME, arguments: { grade: GRADE } });
     expect(read.isError).toBe(false);
@@ -158,9 +186,9 @@ describe("a server with no wallet", () => {
     const client = await connect({}, { fetch: fetchImpl, login: () => undefined });
     const result = await client.callTool({ name: GRADE_NAME, arguments: request });
     expect(result.isError).toBe(true);
-    expect(text(result)).toContain("run `npx -y brainchain-mcp login` in a terminal");
+    expect(text(result)).toContain("run `npx -y brainchain-mcp@0.0.0-test login` in a terminal");
     expect(sent).toEqual([]);
-    const signedIn = await connect({}, { fetch: fetchImpl, login: () => TOKEN });
+    const signedIn = await connect({}, { fetch: fetchImpl, login: () => SIGNED_IN });
     const call = await signedIn.callTool({ name: CALL_NAME, arguments: { token: "0x020bfC650A365f8BB26819deAAbF3E21291018b4", venue: "Coinbase", by: "2026-12-31" } });
     expect(call.isError).toBe(true);
     expect(sent.filter(({ url }) => url.includes("/free/"))).toEqual([]);
@@ -171,7 +199,7 @@ describe("a server with a wallet, or on testnet", () => {
   it("never asks the free checks, whatever sign-in is kept", async () => {
     const { fetchImpl, sent } = checks();
     for (const env of [{ BRAINCHAIN_PAYER_KEY: KEY }, { BRAINCHAIN_NETWORK: "testnet" }]) {
-      const client = await connect(env, { fetch: fetchImpl, login: () => TOKEN });
+      const client = await connect(env, { fetch: fetchImpl, login: () => SIGNED_IN });
       const tool = (await client.listTools()).tools.find((t) => t.name === GRADE_NAME)!;
       expect(tool.description).not.toContain("brainchain-mcp login");
       await client.callTool({ name: GRADE_NAME, arguments: request });
@@ -179,8 +207,31 @@ describe("a server with a wallet, or on testnet", () => {
     expect(sent.filter(({ url }) => url.includes("/free/"))).toEqual([]);
   });
 
+  it("on testnet, quotes the commands with the network and the free checks' address", async () => {
+    const env = { BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_FREE_URL: "http://127.0.0.1:8787" };
+    const client = await connect(env, { login: () => undefined });
+    const tool = (await client.listTools()).tools.find((t) => t.name === GRADE_NAME)!;
+    expect(tool.description).toContain("`BRAINCHAIN_NETWORK=testnet BRAINCHAIN_FREE_URL='http://127.0.0.1:8787' npx -y brainchain-mcp@0.0.0-test login`");
+    expect(tool.description).toContain("paid from a wallet set up with `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.0.0-test init`.");
+    expect(text(await client.callTool({ name: GRADE_NAME, arguments: request }))).toContain("To pay as you go, run `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.0.0-test init` in a terminal.");
+  });
+
+  it("names a sign-in made for other free checks when this server has none to ask", async () => {
+    const { fetchImpl, sent } = checks();
+    const client = await connect({ BRAINCHAIN_NETWORK: "testnet" }, { fetch: fetchImpl, login: () => ({ token: TOKEN, url: "http://127.0.0.1:8787/", network: "testnet" }) });
+    const result = await client.callTool({ name: GRADE_NAME, arguments: request });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain(
+      "This server has no wallet, and the GitHub sign-in on this machine is for the free checks at http://127.0.0.1:8787 on testnet, while this server asks none: BRAINCHAIN_FREE_URL is not set, and testnet has no free checks of its own. To grade free, add the server again with the line login printed, or run login with this server's BRAINCHAIN_NETWORK and BRAINCHAIN_FREE_URL.",
+    );
+    expect(text(result)).not.toContain("No paying key is set");
+    expect(sent).toEqual([]);
+    const none = await connect({ BRAINCHAIN_NETWORK: "testnet" }, { fetch: fetchImpl, login: () => undefined });
+    expect(text(await none.callTool({ name: GRADE_NAME, arguments: request }))).toContain("No paying key is set");
+  });
+
   it("stops only the grade tool for a BRAINCHAIN_FREE_URL it cannot use", async () => {
-    const client = await connect({ BRAINCHAIN_FREE_URL: "http://example.com" }, { login: () => TOKEN });
+    const client = await connect({ BRAINCHAIN_FREE_URL: "http://example.com" }, { login: () => SIGNED_IN });
     const result = await client.callTool({ name: GRADE_NAME, arguments: request });
     expect(result.isError).toBe(true);
     expect(text(result)).toContain("BRAINCHAIN_FREE_URL must be an https URL, or http on localhost or 127.0.0.1. Fix it in this server's environment and restart the server.");

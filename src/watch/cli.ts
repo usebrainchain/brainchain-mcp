@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expandHome } from "../config.js";
 import { countsFor } from "../dataset/counts.js";
 import { datasetReader, MANIFEST_MS, type DatasetReader } from "../dataset/published.js";
+import { FREE } from "../free.js";
 import { hasGitHubToken, useGitHubToken } from "../github.js";
 import { ChainError } from "../history.js";
 import { configuredMakers, firstApprovals, MARKET_MAKERS } from "../makers.js";
@@ -66,7 +67,13 @@ address. BRAINCHAIN_WATCH_RPC reads Robinhood Chain from another RPC, with the p
 BRAINCHAIN_MAKER_WALLETS adds wallets to follow. BRAINCHAIN_DATASET reads the dataset from a directory or another address
 in place of BrainChain's published copy. GET /health shows anyone whether each source is reading, and its full
 detail to a request with BRAINCHAIN_WATCH_ADMIN_TOKEN as a Bearer token. BRAINCHAIN_WATCH_DISCORD_RELAY sends Discord
-deliveries through a relay, signed with BRAINCHAIN_WATCH_DISCORD_RELAY_KEY, for an address Discord refuses.`;
+deliveries through a relay, signed with BRAINCHAIN_WATCH_DISCORD_RELAY_KEY, for an address Discord refuses.
+BRAINCHAIN_SPONSOR_KEY_FILE and GITHUB_CLIENT_ID turn on free checks, and both are needed: with only one, the watcher says
+so and runs without them. BRAINCHAIN_SPONSOR_KEY_FILE names a file holding the private key of the wallet that pays for
+them, in USDC on Base (Base Sepolia with BRAINCHAIN_NETWORK=testnet). GITHUB_CLIENT_ID is the client id of the GitHub
+OAuth app people sign in with through brainchain-mcp login, with device flow on; it needs no secret. With both set, --serve
+also answers GET /free, GET /free/me and POST /free/grade, and pays for the first ${FREE.perAccount} grades of each GitHub
+account older than ${FREE.minAccountDays} days, at most ${FREE.perDay} a day and ${FREE.total} in all.`;
 
 /** The relay Discord deliveries go through, from BRAINCHAIN_WATCH_DISCORD_RELAY and its key, or none. */
 export function discordRelay(env: Record<string, string | undefined>): Relay | undefined {

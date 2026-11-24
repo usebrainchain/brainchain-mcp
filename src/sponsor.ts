@@ -221,7 +221,7 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
   /** Why this account can take no free check now, or nothing when it can. */
   function refusal({ id, login, createdAt }: Account): Answer | undefined {
     if (now() - createdAt < FREE.minAccountDays * DAY_MS) {
-      return answer(403, "young", `Free checks are for GitHub accounts older than ${FREE.minAccountDays} days, and @${login} was created on ${new Date(createdAt).toISOString().slice(0, 10)}.`);
+      return answer(403, "young", `Free checks are for GitHub accounts older than ${FREE.minAccountDays} days. @${login} was created on ${dayOf(createdAt)}, so it qualifies on ${dayOf(createdAt + FREE.minAccountDays * DAY_MS)}.`);
     }
     if (left(id) === 0) return answer(403, "used", `@${login} has used its ${FREE.perAccount} free checks.`);
     if (counts.total >= FREE.total) return answer(403, "total", "All of BrainChain's free checks have been given out.");

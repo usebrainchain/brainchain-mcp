@@ -132,10 +132,10 @@ describe("free checks", () => {
     expect((await sponsor({ where }).sponsor.grade(TOKEN, nth(3), "mainnet")).body.reason).toBe("used");
   });
 
-  it("refuse accounts younger than 30 days, and say when the account was made", async () => {
+  it("refuse accounts younger than 30 days, and say when the account was made and when it qualifies", async () => {
     const created = new Date(NOW - 29 * 86_400_000).toISOString();
     const { sponsor: s, payments } = sponsor({ users: { [TOKEN]: { id: 9, login: "fresh", created_at: created } } });
-    expect(await s.grade(TOKEN, request, "mainnet")).toEqual({ status: 403, body: { reason: "young", error: "Free checks are for GitHub accounts older than 30 days, and @fresh was created on 2026-11-10." } });
+    expect(await s.grade(TOKEN, request, "mainnet")).toEqual({ status: 403, body: { reason: "young", error: "Free checks are for GitHub accounts older than 30 days. @fresh was created on 2026-11-10, so it qualifies on 2026-12-10." } });
     expect((await s.me(TOKEN)).body).toMatchObject({ login: "fresh", left: 0, reason: "young" });
     expect(payments).toHaveLength(0);
   });
@@ -385,9 +385,20 @@ describe("the watcher's free routes", () => {
     expect([(await me()).status, (await me()).status]).toEqual([200, 200]);
     const refused = await me();
     expect([refused.status, refused.headers.get("retry-after")]).toEqual([429, "60"]);
-    expect(await refused.json()).toEqual({ error: "This address has sent more than the 2 free-check requests a minute the watcher takes from one address. Wait a minute, then try again." });
+    expect(await refused.json()).toEqual({
+      error: "Too many free-check requests from your network address. BrainChain takes 2 a minute from one address, and people on the same network, such as an office, share one. Wait a minute, then try again.",
+    });
     expect((await post(base, "/free/grade", request, `Bearer ${TOKEN}`)).status).toBe(429);
     expect([(await fetch(`${base}/free`)).status, (await fetch(`${base}/health/live`)).status]).toEqual([200, 200]);
+  });
+
+  it("take 20 sign-in requests a minute from one address by default, enough for login and grading from a shared office", async () => {
+    const { sponsor: s } = sponsor();
+    const base = await serving(s);
+    const me = () => fetch(`${base}/free/me`, { headers: { authorization: `Bearer ${TOKEN}` } });
+    const statuses = [];
+    for (let i = 0; i < 21; i++) statuses.push((await me()).status);
+    expect(statuses).toEqual([...Array(20).fill(200), 429]);
   });
 
   it("say on /health whether the free checks are open or paused", async () => {

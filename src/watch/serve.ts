@@ -67,7 +67,7 @@ export interface ServeLimits {
   replay: number;
 }
 
-export const SERVE_LIMITS: ServeLimits = { perMinute: 120, freePerMinute: 6, watchesPerHour: 10, streamsPerAddress: 5, streams: 500, body: 4096, replay: 1000 };
+export const SERVE_LIMITS: ServeLimits = { perMinute: 120, freePerMinute: 20, watchesPerHour: 10, streamsPerAddress: 5, streams: 500, body: 4096, replay: 1000 };
 /** The largest grade `POST /free/grade` takes: a 32,000-unit brief and a 100,000-byte result, as JSON. */
 export const FREE_BODY = 300_000;
 export const KEEPALIVE_MS = 20_000;
@@ -427,7 +427,9 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
     if (free && !sponsor) throw new HttpError(404, "This watcher gives no free checks.");
     if (sponsor && url.pathname === "/free" && reading) return send(response, 200, sponsor.info(), OPEN);
     if (sponsor && ((url.pathname === "/free/me" && reading) || (url.pathname === "/free/grade" && method === "POST"))) {
-      if (!freePerMinute.take(address, clock())) throw new HttpError(429, `This address has sent more than the ${limits.freePerMinute} free-check requests a minute the watcher takes from one address. Wait a minute, then try again.`);
+      if (!freePerMinute.take(address, clock())) {
+        throw new HttpError(429, `Too many free-check requests from your network address. BrainChain takes ${limits.freePerMinute} a minute from one address, and people on the same network, such as an office, share one. Wait a minute, then try again.`);
+      }
       // A request without a sign-in is turned away before its body is read.
       const token = bearer(request);
       if (!token) return send(response, SIGN_IN.status, SIGN_IN.body);

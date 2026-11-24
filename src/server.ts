@@ -14,7 +14,7 @@ import { expandHome, formatUnits, PRICE, resolveConfig, type Config } from "./co
 import { CUSTODY_NAME, CUSTODY_TOOL } from "./custody.js";
 import { stateDirProblem } from "./daily.js";
 import { datasetReader, type DatasetReader } from "./dataset/published.js";
-import { FREE, freeGrader, freeUrl, LOGIN_COMMAND } from "./free.js";
+import { FREE, freeGrader, freeSetting, freeUrl, readLogin, signedInElsewhere, type Login } from "./free.js";
 import { useGitHubToken } from "./github.js";
 import { createLimits } from "./limits.js";
 import { configuredMakers, MAKERS_NAME, makersTool, MARKET_MAKERS, readMakerHoldings, type MakerWallet } from "./makers.js";
@@ -245,11 +245,11 @@ export function paySettings(config: Config): [string, string][] {
  * the form the local shell runs: an inline assignment on macOS and Linux,
  * PowerShell's $env: on Windows, where `NAME=value command` is not a command at all.
  */
-export function cliCommand(command: string, config: Config, version: string, env: Record<string, string | undefined>, platform: NodeJS.Platform = process.platform): string {
+export function cliCommand(command: string, config: Config, version: string, env: Record<string, string | undefined>, platform: NodeJS.Platform = process.platform, extra: Record<string, string> = {}): string {
   const file = env.BRAINCHAIN_PAYER_KEY_FILE?.trim();
   // The command is a new process that sees only its own environment. A value that is no path may be a key in the wrong variable, so it is never printed.
   const named = file && isAbsolute(expandHome(file)) ? file : undefined;
-  const settings: [string, string][] = [...paySettings(config), ...(named ? [["BRAINCHAIN_PAYER_KEY_FILE", named] as [string, string]] : [])];
+  const settings: [string, string][] = [...paySettings(config), ...(named ? [["BRAINCHAIN_PAYER_KEY_FILE", named] as [string, string]] : []), ...Object.entries(extra)];
   const run = `npx -y brainchain-mcp@${version} ${command}`;
   if (platform === "win32") return [...settings.map(([name, value]) => `$env:${name}=${powershellWord(value)}`), run].join("; ");
   return [...settings.map(([name, value]) => `${name}=${shellWord(value)}`), run].join(" ");
@@ -259,7 +259,7 @@ export const approveCommand = (config: Config, version: string, env: Record<stri
 
 interface Wiring {
   desk: Desk;
-  /** Grades through BrainChain's free checks, for a server with no wallet. */
+  /** How a server with no wallet grades: through BrainChain's free checks, or by naming the sign-in it has for others. */
   free?: (request: GradeRequest) => Promise<unknown>;
   terms: Terms | string;
   bonds: Bonds;
@@ -291,7 +291,7 @@ function unreadable(problem: string): Wiring {
 }
 
 /** A missing key or a bad setting is reported when a tool needs it, so the server always starts and lists its tools. */
-export function deskFor(env: Record<string, string | undefined>, version: string, fetchImpl?: typeof fetch, login?: () => string | undefined): Wiring {
+export function deskFor(env: Record<string, string | undefined>, version: string, fetchImpl?: typeof fetch, login?: () => Login | undefined): Wiring {
   const fix = (error: unknown) => `${messageOf(error)} Fix it in this server's environment and restart the server.`;
   let config: Config;
   let paymentProblem: string | undefined;
@@ -342,15 +342,30 @@ export function deskFor(env: Record<string, string | undefined>, version: string
   if (keyProblem) for (const name of [BOND_STATUS_NAME, EXAM_SUBMIT_NAME]) refused.set(name, `${keyProblem} ${KEY_HELP}`);
   // With no wallet at all, and BrainChain's own desk, a GitHub sign-in grades through the free checks. A wallet always pays itself.
   let free: Wiring["free"];
+  let signIn: string | undefined;
   if (!env.BRAINCHAIN_PAYER_KEY?.trim() && !env.BRAINCHAIN_PAYER_KEY_FILE?.trim() && !env.BRAINCHAIN_DESK_URL?.trim()) {
+    const read = login ?? readLogin;
+    const init = cliCommand("init", config, version, {});
     try {
       const url = freeUrl(env, config.name);
-      if (url) free = freeGrader({ config, url, track: desk.track, ...(login ? { login } : {}), ...(fetchImpl ? { fetch: fetchImpl } : {}) });
+      if (url) {
+        const commands = { init, login: cliCommand("login", config, version, {}, process.platform, freeSetting(url, config.name)) };
+        free = freeGrader({ config, url, commands, login: read, track: desk.track, ...(fetchImpl ? { fetch: fetchImpl } : {}) });
+        signIn =
+          `This server has no wallet, so its first ${FREE.perAccount} grades are free: BrainChain pays for them once your operator signs in with GitHub by running \`${commands.login}\` in a terminal, with an account older than ${FREE.minAccountDays} days. ` +
+          `After those, each grade costs ${config.terms.gradeCost} whatever the verdict, paid from a wallet set up with \`${init}\`.`;
+      } else {
+        // No free checks here, but a sign-in made for others is named, so the refusal does not read as if login did nothing.
+        free = async (request) => {
+          const kept = read();
+          if (kept) throw new Error(signedInElsewhere(kept, config, undefined, init));
+          return desk.grade(request);
+        };
+      }
     } catch (error) {
       refused.set(GRADE_NAME, fix(error));
     }
   }
-  const signIn = free ? `With no wallet set, BrainChain pays for the first ${FREE.perAccount} grades of a GitHub account older than ${FREE.minAccountDays} days once your operator signs in with \`${LOGIN_COMMAND}\` in a terminal.` : undefined;
   const terms = { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(problem ? { problem } : {}), ...(signIn ? { free: signIn } : {}) };
   return {
     desk,
@@ -367,7 +382,7 @@ export function deskFor(env: Record<string, string | undefined>, version: string
 export interface ServerOptions {
   fetch?: typeof fetch;
   /** Reads the GitHub sign-in for free checks; the file `login` writes by default. */
-  login?: () => string | undefined;
+  login?: () => Login | undefined;
   /** Where a configuration error is reported once at startup; stderr by default, since stdout carries the protocol. */
   log?: (message: string) => void;
 }

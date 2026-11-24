@@ -32,9 +32,10 @@ Usage:
                                  Prints the wallet's address, what to send it, and the command that adds the server
                                  to Claude Code, Cursor or VS Code. Run it again to check the balance: an existing
                                  key is never replaced, and the exit code is then the same as wallet's.
-  brainchain-mcp login           Sign in with GitHub for free checks: BrainChain pays for the first ${FREE.perAccount} grades of an
+  brainchain-mcp login [--again] Sign in with GitHub for free checks: BrainChain pays for the first ${FREE.perAccount} grades of an
                                  account older than ${FREE.minAccountDays} days, for a server with no paying key. Shows a code to
-                                 approve on github.com and keeps the sign-in in ${LOGIN_FILE}.
+                                 approve on github.com and keeps the sign-in in ${LOGIN_FILE}. Run it again to see who
+                                 is signed in and how many free checks are left; --again signs in anew.
   brainchain-mcp approve [USDG]  Let Permit2 spend the paying wallet's USDG. Run it with BRAINCHAIN_PAY_ON=robinhood.
                                  Default 100 USDG; pass a number, "max", or 0 to revoke.
                                  Not needed when paying in USDC on Base.
@@ -116,8 +117,11 @@ if (command === "--version" || command === "-v" || command === "version") {
   process.exit(0);
 }
 if (command !== undefined && !["approve", "wallet", "init", "login", "watch", "dataset", "solve"].includes(command)) fail(`Unknown command ${command}.\n\n${USAGE}`);
-const extra = process.argv[command === "approve" ? 4 : 3];
-if (command !== undefined && command !== "watch" && command !== "dataset" && command !== "solve" && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : `${command} takes none`}.\n\n${USAGE}`);
+const again = command === "login" && process.argv[3] === "--again";
+const extra = process.argv[command === "approve" || again ? 4 : 3];
+if (command !== undefined && command !== "watch" && command !== "dataset" && command !== "solve" && extra !== undefined) {
+  fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : command === "login" ? "login takes only --again" : `${command} takes none`}.\n\n${USAGE}`);
+}
 
 if (command === undefined) {
   const hint = terminalHint(process.stdin, version);
@@ -146,7 +150,7 @@ if (command === undefined) {
     })
     .catch((error: unknown) => fail(error instanceof solve.SolveUsageError ? `${error.message}\n\n${solve.SOLVE_USAGE}` : error instanceof Error ? error.message : String(error)));
 } else if (command === "login") {
-  process.exitCode = await runLogin(process.env, version).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
+  process.exitCode = await runLogin(process.env, version, { again }).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
 } else if (command === "init") {
   const { text, code } = await runInit(process.env, version).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
   console.log(text);

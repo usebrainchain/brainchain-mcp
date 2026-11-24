@@ -133,7 +133,7 @@ describe("installCommands", () => {
 
   it("adds the server to Claude Code, Cursor and VS Code with the key file, each command one line that a shell reads back unchanged", () => {
     if (!posix) return;
-    const [[claude, toClaude], [cursor, toCursor], [code, toCode]] = installCommands(base, "1.2.3", path, "darwin") as [[string, string], [string, string], [string, string]];
+    const [[claude, toClaude], [cursor, toCursor], [code, toCode]] = installCommands(base, "1.2.3", { BRAINCHAIN_PAYER_KEY_FILE: path }, "darwin") as [[string, string], [string, string], [string, string]];
     expect([claude, cursor, code]).toEqual(["Claude Code", "Cursor", "VS Code"]);
     for (const command of [toClaude, toCursor, toCode]) expect(command).not.toContain("\n");
 
@@ -152,15 +152,15 @@ describe("installCommands", () => {
   });
 
   it("opens links with the platform's own opener, and VS Code's install link on Windows, where a .cmd loses the quotes in JSON", () => {
-    expect(installCommands(base, "1.2.3", "~/.brainchain/payer.key", "linux")[1]![1]).toMatch(/^xdg-open 'cursor:\/\//);
-    const [[, claude], [, cursor], [, code]] = installCommands(base, "1.2.3", "~/.brainchain/payer.key", "win32") as [string, string][];
+    expect(installCommands(base, "1.2.3", { BRAINCHAIN_PAYER_KEY_FILE: "~/.brainchain/payer.key" }, "linux")[1]![1]).toMatch(/^xdg-open 'cursor:\/\//);
+    const [[, claude], [, cursor], [, code]] = installCommands(base, "1.2.3", { BRAINCHAIN_PAYER_KEY_FILE: "~/.brainchain/payer.key" }, "win32") as [string, string][];
     expect(claude).toBe("claude mcp add brainchain --scope user -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp@1.2.3");
     expect(cursor).toMatch(/^Start-Process 'cursor:\/\/anysphere\.cursor-deeplink\/mcp\/install\?name=brainchain&config=[\w%]+'$/);
     expect(code).toMatch(/^Start-Process 'https:\/\/vscode\.dev\/redirect\/mcp\/install\?name=brainchain&config=/);
     const config = new URL(code.slice("Start-Process '".length, -1)).searchParams.get("config")!;
     expect(JSON.parse(config)).toEqual({ command: "npx", args: ["-y", "brainchain-mcp@1.2.3"], env: { BRAINCHAIN_PAYER_KEY_FILE: "~/.brainchain/payer.key" } });
     // PowerShell takes a quoted word as written, with '' for a quote.
-    expect(installCommands(base, "1.2.3", "C:\\Users\\me\\it's.key", "win32")[0]![1]).toContain(" -e 'BRAINCHAIN_PAYER_KEY_FILE=C:\\Users\\me\\it''s.key' -- ");
+    expect(installCommands(base, "1.2.3", { BRAINCHAIN_PAYER_KEY_FILE: "C:\\Users\\me\\it's.key" }, "win32")[0]![1]).toContain(" -e 'BRAINCHAIN_PAYER_KEY_FILE=C:\\Users\\me\\it''s.key' -- ");
   });
 });
 
