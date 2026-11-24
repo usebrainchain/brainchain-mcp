@@ -49,7 +49,7 @@ async function decide(change: Change): Promise<string> {
   return line.join(" | ");
 }
 
-await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.23.1"] }));
+await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.24.0"] }));
 
 // Only the kinds brainchain_trace_outcomes counts, read from its own schema so new ones are picked up.
 const { tools } = await client.listTools();
