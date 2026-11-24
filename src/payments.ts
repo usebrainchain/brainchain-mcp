@@ -157,7 +157,7 @@ async function jsonObject(response: Response): Promise<Record<string, unknown> |
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
-export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
+export function createDesk(options: DeskOptions): Desk & { spent(): bigint; track(grade: string): void } {
   const { config, signer, approveCommand } = options;
   const fetchImpl = options.fetch ?? fetch;
   const account = () => (typeof signer === "function" ? signer() : signer);
@@ -431,7 +431,8 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     } catch (error) {
       limit.clear();
       if (payment.signed) return possiblyCharged(kind, receipt(orderIdOf(payment.signed)), `The desk did not confirm the ${kind === "task" ? "order" : "grade"} (${firstLine(error)}).`);
-      throw new Error(await explainUnsigned(kind, error, payment.refused));
+      const why = await explainUnsigned(kind, error, payment.refused);
+      throw /Payment creation aborted: |rejected by spendControls/.test(firstLine(error)) ? new PaymentRefused(why) : new Error(why);
     }
     // A desk or proxy can send its headers and then stall, so the deadline holds until the body is read.
     const reply = (await until(limit.signal, jsonObject(response)).catch(() => undefined)) ?? {};
@@ -463,7 +464,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     }
 
     await unreserve(payment);
-    if (response.status === 402 || response.status === 412) throw new Error(await explainRefusal(kind, refusalCode(response.status, reply), PRICE[kind], payment.permit2));
+    if (response.status === 402 || response.status === 412) throw new PaymentRefused(await explainRefusal(kind, refusalCode(response.status, reply), PRICE[kind], payment.permit2));
     throw new Error(typeof reply.error === "string" && reply.error.trim() ? `${sentence(reply.error)} Nothing was charged.` : `The desk answered ${response.status}. Nothing was charged.`);
   }
 
@@ -890,7 +891,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     if (response.status === 404) {
       if (paid.has(keyed("task", id))) throw new Error("This id is a task's order, not a grade. Read it with brainchain_get_task.");
       const at = paid.get(keyed("grade", id))?.at;
-      if (at === undefined) throw new Error("The desk has no grade with this id. Check the id: it must be one that brainchain_grade returned.");
+      if (at === undefined) throw new NoGrade("The desk has no grade with this id. Check the id: it must be one that brainchain_grade returned.");
       if (Date.now() - at < REPOST_AFTER_MINUTES * 60_000) {
         return {
           grade: id,
@@ -901,7 +902,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
         };
       }
       await release("grade", id);
-      throw new Error(`The desk has no grade with this id. This server sent it more than ${REPOST_AFTER_MINUTES} minutes ago, so it was never charged, and it can be sent again.`);
+      throw new NoGrade(`The desk has no grade with this id. This server sent it more than ${REPOST_AFTER_MINUTES} minutes ago, so it was never charged, and it can be sent again.`);
     }
     if (response.status >= 500 || RETRY_LATER.has(response.status)) {
       return { grade: id, error: `The desk answered ${response.status}.`, done: false, next: "The desk is busy or briefly unavailable. Read the grade again after retryAfterSeconds.", retryAfterSeconds: retryAfter(response) ?? 30 };
@@ -912,8 +913,19 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint } {
     return { ...view, ...gradeGuidance(view) };
   }
 
-  return { post, get, grade, getGrade, examInfo, sit, submitExam, examStatus, licences, agentRecord, spent: () => limits.spent() };
+  /** A grade paid for this server from elsewhere, such as BrainChain's free checks, read back like one it paid itself. */
+  function track(id: string): void {
+    paid.set(keyed("grade", id), { at: Date.now(), forget: () => {} });
+  }
+
+  return { post, get, grade, getGrade, track, examInfo, sit, submitExam, examStatus, licences, agentRecord, spent: () => limits.spent() };
 }
+
+/** A payment the wallet's own limits or the desk turned down, so nothing was charged and sending it again changes nothing yet. */
+export class PaymentRefused extends Error {}
+
+/** The desk has no record of a grade. */
+export class NoGrade extends Error {}
 
 /** What this server pays the desk for. A task and a grade are read back at a route of their own; a sitting is asked for again with its payment. */
 type Kind = "task" | "grade" | "exam";

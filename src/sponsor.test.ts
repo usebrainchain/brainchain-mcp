@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -7,48 +8,74 @@ import { privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { FREE } from "./free.js";
-import { orderIdOf } from "./payments.js";
-import { createSponsor, sponsorConfig, sponsorFrom, type Sponsor } from "./sponsor.js";
+import { canonicalStringify, orderIdOf } from "./payments.js";
+import { createSponsor, PAUSE_MS, sponsorConfig, sponsorFrom, type Sponsor } from "./sponsor.js";
 import { EventLog } from "./watch/events.js";
-import { FREE_BODY, serveEvents } from "./watch/serve.js";
+import { FREE_BODY, SERVE_LIMITS, serveEvents, type ServeLimits } from "./watch/serve.js";
 
 // Anvil's second default account: a public test key that holds nothing anywhere.
 const KEY = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 const signer = privateKeyToAccount(`0x${KEY}`);
+const CLIENT = "Ov23liAbCdEfGhIjKlMn";
 const TOKEN = "gho_16C7e42F292c6912E7710c838347Ae178B4a";
 const NOW = Date.parse("2026-12-09T08:01:00Z");
+const MINUTE = 60_000;
 const OLD = "2015-03-01T10:00:00Z";
 const request = { brief: "Sort 3, 1 and 2.", result: "1, 2, 3" };
 const dir = () => mkdtempSync(join(tmpdir(), "brainchain-free-"));
+const hashOf = (sent: object) => createHash("sha256").update(canonicalStringify(sent)).digest("hex");
 
-interface Fakes {
-  users?: Record<string, { id: number; login: string; created_at: string }>;
-  paid?: (payment: { payload: unknown }) => Response;
+interface User {
+  id: number;
+  login: string;
+  created_at: string;
+  /** The OAuth app GitHub names for the token: BrainChain's by default, another's, or none for a personal token. */
+  app?: string | null;
 }
 
-/** GitHub's /user for the tokens in `users`, and a desk that offers USDC on Base and answers each paid grade with `paid`. */
+interface Fakes {
+  users?: Record<string, User>;
+  paid?: (payment: { payload: unknown }, views: Map<string, Record<string, unknown>>) => Response;
+}
+
+/**
+ * GitHub's /user for the tokens in `users`, and a desk that offers USDC on Base, answers each paid grade with `paid`,
+ * and reads back each grade it keeps in `views`.
+ */
 function fakes(config: ReturnType<typeof sponsorConfig>, { users = { [TOKEN]: { id: 583231, login: "octocat", created_at: OLD } }, paid }: Fakes = {}) {
   const payments: { payload: unknown }[] = [];
   const github: string[] = [];
+  const views = new Map<string, Record<string, unknown>>();
   const grades = `${config.desk}/x402/grades`;
   const accepts = [{ scheme: "exact", network: config.network, amount: "250000", asset: config.asset, payTo: config.payTo, maxTimeoutSeconds: 300, extra: { name: "USDC", version: "2" } }];
   const challenge = Buffer.from(JSON.stringify({ x402Version: 2, error: "Payment required", resource: { url: grades, mimeType: "application/json" }, accepts })).toString("base64");
+  const graded = (payment: { payload: unknown }) => {
+    const view = { grade: orderIdOf(payment), state: "graded", accepted: true, answer: "accept", passProbability: 0.93, bar: 0.8 };
+    views.set(view.grade, view);
+    return Response.json(view);
+  };
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const req = new Request(input, init);
     if (req.url === "https://api.github.com/user") {
       const token = /^Bearer (.+)$/.exec(req.headers.get("authorization") ?? "")?.[1] ?? "";
       github.push(token);
       const user = users[token];
-      return user ? Response.json(user) : Response.json({ message: "Bad credentials" }, { status: 401 });
+      if (!user) return Response.json({ message: "Bad credentials" }, { status: 401 });
+      const { app = CLIENT, ...profile } = user;
+      return Response.json(profile, { headers: app === null ? {} : { "x-oauth-client-id": app } });
+    }
+    if (req.method === "GET" && req.url.startsWith(`${grades}/`)) {
+      const view = views.get(req.url.slice(grades.length + 1));
+      return view ? Response.json(view) : Response.json({ error: "Not found." }, { status: 404 });
     }
     if (req.url !== grades) return new Response("{}", { status: 404 });
     const header = req.headers.get("payment-signature");
     if (!header) return new Response("{}", { status: 402, headers: { "payment-required": challenge } });
     const payment = JSON.parse(Buffer.from(header, "base64").toString("utf8")) as { payload: unknown };
     payments.push(payment);
-    return paid ? paid(payment) : Response.json({ grade: orderIdOf(payment), state: "graded", accepted: true, answer: "accept", passProbability: 0.93, bar: 0.8 });
+    return paid ? paid(payment, views) : graded(payment);
   }) as typeof fetch;
-  return { fetchImpl, payments, github };
+  return { fetchImpl, payments, github, views };
 }
 
 function sponsor(options: Fakes & { where?: string; now?: () => number } = {}) {
@@ -56,11 +83,20 @@ function sponsor(options: Fakes & { where?: string; now?: () => number } = {}) {
   const config = sponsorConfig("mainnet", where);
   const fake = fakes(config, options);
   const logged: string[] = [];
-  const made = createSponsor({ config, signer, clientId: "Ov23liAbCdEfGhIjKlMn", dir: where, fetch: fake.fetchImpl, now: options.now ?? (() => NOW), say: (line) => logged.push(line) });
+  const made = createSponsor({ config, signer, clientId: CLIENT, dir: where, fetch: fake.fetchImpl, now: options.now ?? (() => NOW), say: (line) => logged.push(line) });
   return { sponsor: made, where, logged, ...fake };
 }
 
 const nth = (n: number) => ({ ...request, result: `${request.result} (${n})` });
+const counts = (where: string) => JSON.parse(readFileSync(join(where, "free-checks.json"), "utf8")) as { total: number; grades: Record<string, unknown>[] };
+/** What the sponsor's wallet holds against its daily limit, in base units. */
+const heldToday = (where: string) => JSON.parse(readFileSync(join(where, `spend-mainnet-${signer.address.toLowerCase()}.json`), "utf8")).units as string;
+/** A desk that takes the payment and answers with the grade in `state`, which it then reads back until changed. */
+const settling = (state: string) => (payment: { payload: unknown }, views: Map<string, Record<string, unknown>>) => {
+  const view = { grade: orderIdOf(payment), state };
+  views.set(view.grade, view);
+  return Response.json(view);
+};
 
 describe("free checks", () => {
   it("pay the grade route the usual price in USDC on Base, twice per GitHub account, then refuse with what to do", async () => {
@@ -79,14 +115,13 @@ describe("free checks", () => {
     expect(payments).toHaveLength(2);
   });
 
-  it("keep only each account's id and counts, never the sign-in", async () => {
-    const { sponsor: s, where } = sponsor();
+  it("keep each account's id, its counts and its grades' ids with a hash of the request, never the sign-in or the request", async () => {
+    const { sponsor: s, where, payments } = sponsor();
     await s.grade(TOKEN, nth(1), "mainnet");
-    expect(JSON.parse(readFileSync(join(where, "free-checks.json"), "utf8"))).toEqual({ accounts: { "583231": 1 }, days: { "2026-12-09": 1 }, total: 1 });
+    expect(counts(where)).toEqual({ accounts: { "583231": 1 }, days: { "2026-12-09": 1 }, total: 1, grades: [{ account: "583231", hash: hashOf(nth(1)), grade: orderIdOf(payments[0]!), at: NOW, graded: true }] });
     for (const file of readdirSync(where)) {
       const text = readFileSync(join(where, file), "utf8");
-      expect(text).not.toContain(TOKEN);
-      expect(text).not.toContain("octocat");
+      for (const kept of [TOKEN, "octocat", request.brief]) expect(text).not.toContain(kept);
     }
   });
 
@@ -105,7 +140,7 @@ describe("free checks", () => {
     expect(payments).toHaveLength(0);
   });
 
-  it("stop at 60 a day, open again the next UTC day, and never pass the wallet's own daily limit", async () => {
+  it("stop at 60 a day, open again the next UTC day, and pause rather than pass the wallet's own daily limit", async () => {
     const users = Object.fromEntries(Array.from({ length: 31 }, (_, i) => [`gho_${String(i).padStart(36, "0")}`, { id: 1000 + i, login: `u${i}`, created_at: OLD }]));
     let now = NOW;
     const { sponsor: s, payments } = sponsor({ users, now: () => now });
@@ -115,8 +150,9 @@ describe("free checks", () => {
     now += 86_400_000;
     expect((await s.me(tokens[30]!)).body).toEqual({ login: "u30", left: 2 });
     // The wallet's own daily limit, kept on the real clock, still holds 15 USDC for today: a fault in the counts cannot spend more.
-    expect((await s.grade(tokens[30]!, nth(1000), "mainnet")).status).toBe(503);
+    expect(await s.grade(tokens[30]!, nth(1000), "mainnet")).toEqual({ status: 503, body: { reason: "paused", error: "BrainChain's free checks are paused for now." } });
     expect(payments).toHaveLength(FREE.perDay);
+    expect((await s.me(tokens[30]!)).body).toMatchObject({ left: 2 });
   });
 
   it("stop for good once 250 are given out", async () => {
@@ -136,20 +172,33 @@ describe("free checks", () => {
     expect(payments).toHaveLength(2);
   });
 
-  it("count nothing for a payment that did not go through, or for a repeat answered from the first grade", async () => {
+  it("count nothing for a payment that did not go through, and answer a repeat from the first grade without paying", async () => {
     let state = "failed";
-    const { sponsor: s } = sponsor({ paid: (payment) => Response.json({ grade: orderIdOf(payment), state }) });
+    const { sponsor: s, payments } = sponsor({ paid: (payment, views) => settling(state)(payment, views) });
     expect((await s.grade(TOKEN, nth(1), "mainnet")).body).toMatchObject({ state: "failed", free: { used: 0, left: 2 } });
     state = "graded";
     expect((await s.grade(TOKEN, nth(2), "mainnet")).body).toMatchObject({ free: { used: 1, left: 1 } });
-    expect((await s.grade(TOKEN, nth(2), "mainnet")).body).toMatchObject({ duplicate: true, free: { used: 1, left: 1 } });
+    expect((await s.grade(TOKEN, nth(2), "mainnet")).body).toMatchObject({ state: "graded", duplicate: true, free: { used: 1, left: 1 } });
+    expect(payments).toHaveLength(2);
   });
 
-  it("count nothing when the desk refuses the payment, and keep the sponsor's details in the log", async () => {
-    const { sponsor: s, logged } = sponsor({ paid: () => Response.json({ error: "insufficient_funds" }, { status: 402 }) });
-    expect(await s.grade(TOKEN, request, "mainnet")).toEqual({ status: 503, body: { reason: "unavailable", error: "The free check could not be paid just now, and none was used. Try again in a few minutes." } });
-    expect((await s.me(TOKEN)).body).toMatchObject({ left: 2 });
+  it("pause when the wallet cannot pay, give the check back, and open again after the pause", async () => {
+    let now = NOW;
+    const { sponsor: s, logged, payments } = sponsor({ now: () => now, paid: () => Response.json({ error: "insufficient_funds" }, { status: 402 }) });
+    expect(await s.grade(TOKEN, nth(1), "mainnet")).toEqual({ status: 503, body: { reason: "paused", error: "BrainChain's free checks are paused for now." } });
+    expect((await s.me(TOKEN)).body).toEqual({ login: "octocat", left: 2, reason: "paused", error: "BrainChain's free checks are paused for now." });
+    expect(s.info()).toMatchObject({ open: false, paused: true });
+    expect((await s.grade(TOKEN, nth(2), "mainnet")).body.reason).toBe("paused");
+    expect(payments).toHaveLength(1);
     expect(logged.join("\n")).toMatch(/a grade was not paid/);
+    now += PAUSE_MS;
+    expect(s.info()).toMatchObject({ open: true, paused: false });
+  });
+
+  it("treat a desk that turns one grade away as a moment's trouble, not a pause", async () => {
+    const { sponsor: s } = sponsor({ paid: () => Response.json({ error: "bad request" }, { status: 400 }) });
+    expect((await s.grade(TOKEN, request, "mainnet")).body).toEqual({ reason: "unavailable", error: "The free check could not be paid just now, and none was used. Try again in a few minutes." });
+    expect(s.info()).toMatchObject({ open: true, paused: false });
   });
 
   it("ask for a sign-in, a working one, the same network and a grade the desk would take, before anything is paid", async () => {
@@ -162,10 +211,23 @@ describe("free checks", () => {
     expect(payments).toHaveLength(0);
   });
 
+  it("take only sign-ins made with BrainChain's own GitHub app, and none GitHub names no app for", async () => {
+    const other = "gho_otherappotherappotherappotherapp00";
+    const personal = "github_pat_11AAAAAAA0personalpersonal";
+    const { sponsor: s, payments } = sponsor({
+      users: { [other]: { id: 7, login: "elsewhere", created_at: OLD, app: "Iv1.someoneelse00" }, [personal]: { id: 8, login: "pat", created_at: OLD, app: null } },
+    });
+    const refused = { status: 401, body: { reason: "login", error: "That GitHub sign-in was not made with BrainChain's login. Run `npx -y brainchain-mcp login` to sign in, then try again." } };
+    expect(await s.grade(other, request, "mainnet")).toEqual(refused);
+    expect(await s.grade(personal, request, "mainnet")).toEqual(refused);
+    expect(await s.me(personal)).toEqual(refused);
+    expect(payments).toHaveLength(0);
+  });
+
   it("say who is signed in and what is left, using nothing", async () => {
     const { sponsor: s, payments } = sponsor();
     expect(await s.me(TOKEN)).toEqual({ status: 200, body: { login: "octocat", left: 2 } });
-    expect(s.info()).toEqual({ network: "mainnet", chain: "Base", clientId: "Ov23liAbCdEfGhIjKlMn", ...FREE, open: true });
+    expect(s.info()).toEqual({ network: "mainnet", chain: "Base", clientId: CLIENT, ...FREE, open: true, paused: false });
     expect(payments).toHaveLength(0);
   });
 
@@ -176,19 +238,85 @@ describe("free checks", () => {
   });
 });
 
+describe("a free check the desk has not settled", () => {
+  it("stays used while the desk settles it, closes once graded, and comes back with the wallet's hold if the desk fails it", async () => {
+    const { sponsor: s, where, views, payments } = sponsor({ paid: settling("unconfirmed") });
+    expect((await s.grade(TOKEN, nth(1), "mainnet")).body).toMatchObject({ state: "unconfirmed", free: { used: 1, left: 1 } });
+    const first = orderIdOf(payments[0]!);
+    expect(counts(where).grades).toEqual([{ account: "583231", hash: hashOf(nth(1)), grade: first, at: NOW }]);
+    expect(heldToday(where)).toBe("250000");
+    expect((await s.me(TOKEN)).body).toEqual({ login: "octocat", left: 1 });
+
+    views.set(first, { grade: first, state: "failed" });
+    expect((await s.me(TOKEN)).body).toEqual({ login: "octocat", left: 2 });
+    expect(counts(where)).toMatchObject({ total: 0, grades: [] });
+    expect(heldToday(where)).toBe("0");
+
+    await s.grade(TOKEN, nth(2), "mainnet");
+    const second = orderIdOf(payments[1]!);
+    views.set(second, { grade: second, state: "graded", accepted: true });
+    expect((await s.me(TOKEN)).body).toEqual({ login: "octocat", left: 1 });
+    expect(counts(where).grades).toEqual([{ account: "583231", hash: hashOf(nth(2)), grade: second, at: NOW, graded: true }]);
+    expect(heldToday(where)).toBe("250000");
+  });
+
+  it("comes back when the desk still has no record of it 15 minutes after it was taken", async () => {
+    const where = dir();
+    const { sponsor: s } = sponsor({ where, paid: () => new Response("upstream", { status: 500 }) });
+    expect((await s.grade(TOKEN, request, "mainnet")).body).toMatchObject({ possiblyCharged: true, free: { used: 1, left: 1 } });
+    expect((await sponsor({ where, now: () => NOW + 14 * MINUTE }).sponsor.me(TOKEN)).body).toMatchObject({ left: 1 });
+    expect((await sponsor({ where, now: () => NOW + 15 * MINUTE }).sponsor.me(TOKEN)).body).toMatchObject({ left: 2 });
+    expect(counts(where)).toMatchObject({ total: 0, grades: [] });
+  });
+
+  it("comes back 15 minutes on when the watcher stopped between taking it and signing", async () => {
+    const where = dir();
+    const grades = [
+      { account: "583231", hash: "a".repeat(64), at: NOW - 16 * MINUTE },
+      { account: "583231", hash: "b".repeat(64), at: NOW - 5 * MINUTE },
+    ];
+    writeFileSync(join(where, "free-checks.json"), JSON.stringify({ accounts: { "583231": 2 }, days: { "2026-12-09": 2 }, total: 2, grades }));
+    const { sponsor: s } = sponsor({ where });
+    expect((await s.me(TOKEN)).body).toEqual({ login: "octocat", left: 1 });
+    expect(counts(where)).toEqual({ accounts: { "583231": 1 }, days: { "2026-12-09": 1 }, total: 1, grades: [grades[1]] });
+  });
+
+  it("answers a repeat from its entry without signing again, while it settles, once graded and after a restart", async () => {
+    const where = dir();
+    const { sponsor: s, views, payments } = sponsor({ where, paid: settling("unconfirmed") });
+    const first = await s.grade(TOKEN, request, "mainnet");
+    const again = await s.grade(TOKEN, request, "mainnet");
+    expect(again).toEqual({ status: 200, body: expect.objectContaining({ grade: first.body.grade, state: "unconfirmed", duplicate: true, free: { used: 1, left: 1 } }) });
+    views.set(String(first.body.grade), { grade: first.body.grade, state: "graded", accepted: true });
+    expect((await s.grade(TOKEN, request, "mainnet")).body).toMatchObject({ grade: first.body.grade, state: "graded", accepted: true, duplicate: true, done: true });
+    const restarted = sponsor({ where });
+    restarted.views.set(String(first.body.grade), { grade: first.body.grade, state: "graded", accepted: true });
+    expect((await restarted.sponsor.grade(TOKEN, request, "mainnet")).body).toMatchObject({ grade: first.body.grade, state: "graded", duplicate: true, free: { used: 1, left: 1 } });
+    expect([...payments, ...restarted.payments]).toHaveLength(1);
+  });
+
+  it("pays once for the same grade sent twice at once, and tells the second what to do", async () => {
+    const { sponsor: s, payments } = sponsor();
+    const both = await Promise.all([s.grade(TOKEN, request, "mainnet"), s.grade(TOKEN, request, "mainnet")]);
+    expect(both.map(({ status }) => status).sort()).toEqual([200, 409]);
+    expect(both.find(({ status }) => status === 409)!.body).toEqual({ reason: "pending", error: "This grade is already being paid for. Send it again in a few minutes to read it; that uses no other free check." });
+    expect(payments).toHaveLength(1);
+  });
+});
+
 describe("the sponsor's settings", () => {
   it("are both set or neither, and say what is wrong without the key", () => {
     const where = dir();
     const file = join(where, "sponsor.key");
     writeFileSync(file, `0x${KEY}\n`);
     expect(sponsorFrom({}, where)).toBeUndefined();
-    expect(() => sponsorFrom({ GITHUB_CLIENT_ID: "Ov23liAbCdEfGhIjKlMn" }, where)).toThrow("Set both, or neither.");
+    expect(() => sponsorFrom({ GITHUB_CLIENT_ID: CLIENT }, where)).toThrow("Set both, or neither.");
     expect(() => sponsorFrom({ BRAINCHAIN_SPONSOR_KEY_FILE: file, GITHUB_CLIENT_ID: "no spaces" }, where)).toThrow("GITHUB_CLIENT_ID is not a GitHub client id.");
     const bad = join(where, "bad.key");
     writeFileSync(bad, "not a key");
-    expect(() => sponsorFrom({ BRAINCHAIN_SPONSOR_KEY_FILE: bad, GITHUB_CLIENT_ID: "Ov23liAbCdEfGhIjKlMn" }, where)).toThrow(/^BRAINCHAIN_SPONSOR_KEY_FILE must hold only a private key/);
+    expect(() => sponsorFrom({ BRAINCHAIN_SPONSOR_KEY_FILE: bad, GITHUB_CLIENT_ID: CLIENT }, where)).toThrow(/^BRAINCHAIN_SPONSOR_KEY_FILE must hold only a private key/);
     const said: string[] = [];
-    const made = sponsorFrom({ BRAINCHAIN_SPONSOR_KEY_FILE: file, GITHUB_CLIENT_ID: "Ov23liAbCdEfGhIjKlMn", BRAINCHAIN_NETWORK: "testnet" }, where, { say: (line) => said.push(line) });
+    const made = sponsorFrom({ BRAINCHAIN_SPONSOR_KEY_FILE: file, GITHUB_CLIENT_ID: CLIENT, BRAINCHAIN_NETWORK: "testnet" }, where, { say: (line) => said.push(line) });
     expect(made?.info()).toMatchObject({ network: "testnet", chain: "Base Sepolia" });
     expect(said.join("\n")).toContain(`from ${signer.address}`);
     expect(said.join("\n")).not.toContain(KEY);
@@ -199,34 +327,92 @@ describe("the watcher's free routes", () => {
   let close: (() => void) | undefined;
   afterEach(() => close?.());
 
-  async function serving(sponsor?: Sponsor) {
+  async function serving(sponsor?: Sponsor, limits: ServeLimits = SERVE_LIMITS) {
     const log = new EventLog(dir());
-    const served = serveEvents({ log, health: () => ({ ok: true, sources: {} }), ...(sponsor ? { sponsor } : {}) });
+    const served = serveEvents({ log, health: () => ({ ok: true, sources: {} }), limits, ...(sponsor ? { sponsor } : {}) });
     await new Promise<void>((resolve) => served.server.listen(0, "127.0.0.1", resolve));
     close = () => served.close();
     return `http://127.0.0.1:${(served.server.address() as AddressInfo).port}`;
   }
 
+  const post = (base: string, path: string, body: unknown, authorization?: string) =>
+    fetch(`${base}${path}`, { method: "POST", headers: { ...(authorization ? { authorization } : {}), "content-type": "application/json" }, body: JSON.stringify(body) });
+
   it("serve the sign-in details, the account's status and a grade, passing the sign-in and the network on", async () => {
     const { sponsor: s } = sponsor();
     const base = await serving(s);
-    expect(await (await fetch(`${base}/free`)).json()).toMatchObject({ network: "mainnet", clientId: "Ov23liAbCdEfGhIjKlMn", perAccount: 2 });
+    expect(await (await fetch(`${base}/free`)).json()).toMatchObject({ network: "mainnet", clientId: CLIENT, perAccount: 2, open: true, paused: false });
     expect(await (await fetch(`${base}/free/me`, { headers: { authorization: `Bearer ${TOKEN}` } })).json()).toEqual({ login: "octocat", left: 2 });
-    const graded = await fetch(`${base}/free/grade?network=mainnet`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify(request) });
+    const graded = await post(base, "/free/grade?network=mainnet", request, `Bearer ${TOKEN}`);
     expect(graded.status).toBe(200);
     expect(await graded.json()).toMatchObject({ state: "graded", free: { used: 1, left: 1 } });
-    const wrong = await fetch(`${base}/free/grade?network=testnet`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify(request) });
-    expect(wrong.status).toBe(409);
+    expect((await post(base, "/free/grade?network=testnet", nth(2), `Bearer ${TOKEN}`)).status).toBe(409);
     expect((await fetch(`${base}/free/grade`, { headers: { authorization: `Bearer ${TOKEN}` } })).status).toBe(405);
   });
 
   it("take a grade up to the desk's own limits, and nothing larger", async () => {
     const { sponsor: s } = sponsor();
     const base = await serving(s);
-    const big = await fetch(`${base}/free/grade`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ ...request, result: "x".repeat(FREE_BODY) }) });
-    expect(big.status).toBe(413);
-    const most = await fetch(`${base}/free/grade`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ brief: "é".repeat(32_000), result: "é".repeat(50_000) }) });
-    expect(most.status).toBe(200);
+    expect((await post(base, "/free/grade", { ...request, result: "x".repeat(FREE_BODY) }, `Bearer ${TOKEN}`)).status).toBe(413);
+    expect((await post(base, "/free/grade", { brief: "é".repeat(32_000), result: "é".repeat(50_000) }, `Bearer ${TOKEN}`)).status).toBe(200);
+  });
+
+  it("turn away a missing or malformed sign-in before reading the body", async () => {
+    const { sponsor: s, github } = sponsor();
+    const base = await serving(s);
+    const signIn = { reason: "login", error: "Sign in with GitHub first: run `npx -y brainchain-mcp login` in a terminal." };
+    for (const authorization of [undefined, "Bearer short", `Basic ${TOKEN}`]) {
+      const refused = await post(base, "/free/grade", { ...request, result: "x".repeat(FREE_BODY) }, authorization);
+      expect([refused.status, await refused.json()]).toEqual([401, signIn]);
+    }
+    expect(await (await fetch(`${base}/free/me`)).json()).toEqual(signIn);
+    expect(github).toEqual([]);
+  });
+
+  it("take a sign-in of up to 255 characters, as login keeps", async () => {
+    const longest = `gho_${"a".repeat(251)}`;
+    const { sponsor: s, github } = sponsor({ users: { [longest]: { id: 583231, login: "octocat", created_at: OLD } } });
+    const base = await serving(s);
+    expect(await (await fetch(`${base}/free/me`, { headers: { authorization: `Bearer ${longest}` } })).json()).toEqual({ login: "octocat", left: 2 });
+    expect((await fetch(`${base}/free/me`, { headers: { authorization: `Bearer ${longest}a` } })).status).toBe(401);
+    expect(github).toEqual([longest]);
+  });
+
+  it("hold each address to a few sign-in requests a minute of their own, apart from the shared limit", async () => {
+    const { sponsor: s } = sponsor();
+    const base = await serving(s, { ...SERVE_LIMITS, freePerMinute: 2 });
+    const me = () => fetch(`${base}/free/me`, { headers: { authorization: `Bearer ${TOKEN}` } });
+    expect([(await me()).status, (await me()).status]).toEqual([200, 200]);
+    const refused = await me();
+    expect([refused.status, refused.headers.get("retry-after")]).toEqual([429, "60"]);
+    expect(await refused.json()).toEqual({ error: "This address has sent more than the 2 free-check requests a minute the watcher takes from one address. Wait a minute, then try again." });
+    expect((await post(base, "/free/grade", request, `Bearer ${TOKEN}`)).status).toBe(429);
+    expect([(await fetch(`${base}/free`)).status, (await fetch(`${base}/health/live`)).status]).toEqual([200, 200]);
+  });
+
+  it("say on /health whether the free checks are open or paused", async () => {
+    const { sponsor: s } = sponsor({ paid: () => Response.json({ error: "insufficient_funds" }, { status: 402 }) });
+    const base = await serving(s);
+    expect(await (await fetch(`${base}/health`)).json()).toMatchObject({ ok: true, free: { open: true, paused: false } });
+    await s.grade(TOKEN, request, "mainnet");
+    expect(await (await fetch(`${base}/health`)).json()).toMatchObject({ ok: true, free: { open: false, paused: true } });
+    expect((await fetch(`${base}/health`)).status).toBe(200);
+  });
+
+  it("tell a grade the watcher failed on to be sent again, and anything else to try again", async () => {
+    const broken: Sponsor = {
+      info: () => ({ open: true, paused: false }),
+      me: async () => {
+        throw new Error("disk full");
+      },
+      grade: async () => {
+        throw new Error("disk full");
+      },
+    };
+    const base = await serving(broken);
+    const grade = await post(base, "/free/grade", request, `Bearer ${TOKEN}`);
+    expect([grade.status, await grade.json()]).toEqual([500, { error: "The free check failed on BrainChain's side. Send the same grade again in a minute: if it went through, you get it back without using another free check." }]);
+    expect(await (await fetch(`${base}/free/me`, { headers: { authorization: `Bearer ${TOKEN}` } })).json()).toEqual({ error: "The watcher failed on its side while answering. Try again in a minute." });
   });
 
   it("answer 404 on a watcher that gives no free checks", async () => {

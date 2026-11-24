@@ -451,6 +451,7 @@ describe("the watcher's HTTP surface", () => {
     await fetch(new URL("/health/live", base));
     const refused = await fetch(new URL("/events", base));
     expect([refused.status, refused.headers.get("retry-after")]).toEqual([429, "60"]);
+    expect(await refused.json()).toEqual({ error: "This address has sent more than the 2 requests a minute the watcher takes from one address. Wait a minute, then try again." });
   });
 
   it("takes a client's address from Cloudflare's header, or the hop before Render's, only when told to trust the proxy", async () => {

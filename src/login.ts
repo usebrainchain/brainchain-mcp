@@ -1,5 +1,5 @@
 import { resolveConfig } from "./config.js";
-import { FREE, freeUrl, LOGIN_FILE, needsWallet, saveLogin, walletNext } from "./free.js";
+import { freeUrl, LOGIN_FILE, needsWallet, saveLogin, walletNext } from "./free.js";
 import { installCommands } from "./init.js";
 import { brief } from "./payments.js";
 
@@ -57,7 +57,7 @@ export async function runLogin(env: Record<string, string | undefined>, version:
   } catch (error) {
     throw new Error(`BrainChain's free checks could not be reached (${brief(error).replace(/\.$/, "")}). Check your connection and run login again.`);
   }
-  if (!info || typeof info.clientId !== "string") throw new Error(`BrainChain's free checks are not open right now. ${walletNext(config)}`);
+  if (!info || typeof info.clientId !== "string" || typeof info.perAccount !== "number" || info.open !== true) throw new Error(`BrainChain's free checks are not open right now. ${walletNext(config)}`);
   if (info.network !== config.name) throw new Error(`Those free checks pay for grades on BrainChain ${String(info.network)}, and BRAINCHAIN_NETWORK is ${config.name}.`);
 
   const device = await post(fetchImpl, `${GITHUB}/login/device/code`, { client_id: info.clientId });
@@ -72,7 +72,8 @@ export async function runLogin(env: Record<string, string | undefined>, version:
   while (!token) {
     await wait(interval);
     if (now() > deadline) throw signInFailed("expired_token", undefined);
-    const answer = await post(fetchImpl, `${GITHUB}/login/oauth/access_token`, { client_id: info.clientId, device_code: device.device_code, grant_type: GRANT });
+    // A dropped connection or an unreadable answer is waited out like a pending approval, up to the code's expiry.
+    const answer = await post(fetchImpl, `${GITHUB}/login/oauth/access_token`, { client_id: info.clientId, device_code: device.device_code, grant_type: GRANT }).catch(() => ({ error: "authorization_pending" }) as Record<string, unknown>);
     if (typeof answer.access_token === "string") token = answer.access_token;
     else if (answer.error === "slow_down") interval = 1000 * (Number(answer.interval) || interval / 1000 + 5);
     else if (answer.error !== "authorization_pending") throw signInFailed(answer.error, answer.error_description);
@@ -85,12 +86,12 @@ export async function runLogin(env: Record<string, string | undefined>, version:
   const lines: string[] = [];
   const who = typeof status?.login === "string" ? `@${status.login}` : "your GitHub account";
   const left = typeof status?.left === "number" ? status.left : undefined;
-  if (typeof status?.error === "string") lines.push(`Signed in as ${who}. ${status.error}${needsWallet(status.reason) ? ` ${walletNext(config)}` : ""}`);
-  else if (left === undefined) lines.push(`Signed in as ${who}. How many free checks it has left could not be read just now; your agent's first grade will say.`);
+  if (typeof status?.error === "string" && needsWallet(status.reason)) lines.push(`Signed in as ${who}. ${status.error} ${walletNext(config)}`);
+  else if (left === undefined || typeof status?.error === "string") lines.push(`Signed in as ${who}, and the sign-in is saved. BrainChain could not say just now how many free checks you have left: ask your agent to grade work with brainchain_grade, and its reply will say.`);
   else lines.push(`Signed in as ${who}. You have ${left} free ${left === 1 ? "check" : "checks"}: ask your agent to grade work with brainchain_grade.`);
   lines.push(
     "",
-    `The sign-in is kept in ${LOGIN_FILE}${platform === "win32" ? "" : ", readable only by your account"}. BrainChain reads only your public GitHub profile with it, and keeps only your account's id and how many of its ${FREE.perAccount} free checks it used. Delete the file to sign out.`,
+    `The sign-in is kept in ${LOGIN_FILE}${platform === "win32" ? "" : ", readable only by your account"}. BrainChain reads only your public GitHub profile with it, and keeps only your account's id, how many of its ${info.perAccount} free checks it used, and each free grade's id with a hash of its request. Delete the file to sign out.`,
     "",
     "If BrainChain is not in your MCP client yet, add it:",
     ...installCommands(config, version, undefined, platform).flatMap(([client, command]) => ["", client, `  ${command}`]),

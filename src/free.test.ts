@@ -86,6 +86,7 @@ describe("a free grade", () => {
       [403, "young", "Free checks are for GitHub accounts older than 30 days, and @fresh was created on 2026-11-10."],
       [429, "daily", "Today's free checks are all taken. More open at 00:00 UTC."],
       [403, "total", "All of BrainChain's free checks have been given out."],
+      [503, "paused", "BrainChain's free checks are paused for now."],
     ] as const) {
       await expect(grade(checks(() => Response.json({ reason, error }, { status })).fetchImpl)(request)).rejects.toThrow(`${error} ${NEXT}`);
     }
@@ -130,6 +131,26 @@ describe("a server with no wallet", () => {
     expect(sent).toEqual([]);
     await client.callTool({ name: GET_GRADE_NAME, arguments: { grade: GRADE } });
     expect(sent.map(({ url }) => url)).toEqual([`https://brain.usebrainchain.com/x402/grades/${GRADE}`]);
+  });
+
+  it("reads back a free grade the desk has not settled as settling, not as an id it never sent", async () => {
+    const statusUrl = `https://brain.usebrainchain.com/x402/grades/${GRADE}`;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const req = new Request(input, init);
+      if (req.url.startsWith(`${FREE_URL}/free/grade`)) {
+        return Response.json({ grade: GRADE, price: "0.25 USDC", statusUrl, possiblyCharged: true, error: "The desk answered 502. The payment may have gone through.", free: { used: 1, left: 1 } });
+      }
+      return Response.json({ error: "Not found." }, { status: 404 });
+    }) as typeof fetch;
+    const fresh = await connect({}, { fetch: fetchImpl, login: () => TOKEN });
+    const unknown = await fresh.callTool({ name: GET_GRADE_NAME, arguments: { grade: GRADE } });
+    expect(text(unknown)).toContain("Check the id");
+
+    const client = await connect({}, { fetch: fetchImpl, login: () => TOKEN });
+    await client.callTool({ name: GRADE_NAME, arguments: request });
+    const read = await client.callTool({ name: GET_GRADE_NAME, arguments: { grade: GRADE } });
+    expect(read.isError).toBe(false);
+    expect(JSON.parse(text(read))).toMatchObject({ grade: GRADE, done: false, next: expect.stringContaining("the payment is still settling or never reached the desk") });
   });
 
   it("asks for a sign-in or a wallet without one, and pays calls from a wallet only", async () => {

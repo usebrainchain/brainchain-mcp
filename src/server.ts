@@ -345,7 +345,7 @@ export function deskFor(env: Record<string, string | undefined>, version: string
   if (!env.BRAINCHAIN_PAYER_KEY?.trim() && !env.BRAINCHAIN_PAYER_KEY_FILE?.trim() && !env.BRAINCHAIN_DESK_URL?.trim()) {
     try {
       const url = freeUrl(env, config.name);
-      if (url) free = freeGrader({ config, url, ...(login ? { login } : {}), ...(fetchImpl ? { fetch: fetchImpl } : {}) });
+      if (url) free = freeGrader({ config, url, track: desk.track, ...(login ? { login } : {}), ...(fetchImpl ? { fetch: fetchImpl } : {}) });
     } catch (error) {
       refused.set(GRADE_NAME, fix(error));
     }

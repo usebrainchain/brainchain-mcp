@@ -15,7 +15,7 @@ export const LOGIN_FILE = "~/.brainchain/github.token";
 const TOKEN = /^[A-Za-z0-9_]{20,255}$/;
 
 /** Refusals that end the free path for now, after which the next grade needs a wallet. */
-export const needsWallet = (reason: unknown) => ["used", "young", "daily", "total"].includes(String(reason));
+export const needsWallet = (reason: unknown) => ["used", "young", "daily", "total", "paused"].includes(String(reason));
 
 export const LOGIN_COMMAND = "npx -y brainchain-mcp login";
 
@@ -70,13 +70,15 @@ export interface FreeOptions {
   url: URL;
   login?: () => string | undefined;
   fetch?: typeof fetch;
+  /** Told each grade id the free checks answer with, so reading it back knows this server sent it. */
+  track?: (grade: string) => void;
 }
 
 /**
  * A grade paid by BrainChain's free checks, for a server with no wallet: the sign-in from `login` goes with the request, and
  * BrainChain pays the grade route the usual price. The grade and its record are the same as any other.
  */
-export function freeGrader({ config, url, login = readLogin, fetch: fetchImpl = fetch }: FreeOptions): (request: GradeRequest) => Promise<unknown> {
+export function freeGrader({ config, url, login = readLogin, fetch: fetchImpl = fetch, track }: FreeOptions): (request: GradeRequest) => Promise<unknown> {
   const next = walletNext(config);
   const name = "BrainChain's free checks";
   return async (request) => {
@@ -103,6 +105,7 @@ export function freeGrader({ config, url, login = readLogin, fetch: fetchImpl = 
       const why = typeof body.error === "string" && body.error.trim() ? sentence(body.error) : `${name} answered ${response.status}.`;
       throw new Error(needsWallet(body.reason) ? `${why} ${next}` : why);
     }
+    if (typeof body.grade === "string") track?.(body.grade);
     const free = (body.free ?? {}) as { used?: number; left?: number };
     return { ...body, free: { ...free, note: checksLeft(free.left ?? 0, config) } };
   };
