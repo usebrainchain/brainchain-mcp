@@ -1018,11 +1018,40 @@ interface Unopened {
   permit2?: boolean;
 }
 
+const percent = (p: number) => `${Math.round(p * 100)}%`;
+const fields = (value: unknown): Record<string, unknown> => (value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {});
+
+/**
+ * Why the pass probability is below what `levels` shows, from the desk's rule: it is the lower of the panel's two graders,
+ * and zero when the result failed checks the brief carries. The reply carries no reasons, so only those two are said.
+ */
+function basis(view: Record<string, unknown>, pass: number): string {
+  const levels = Array.isArray(view.levels) ? view.levels.map(fields) : [];
+  if (!levels.some((level) => level.passes === true)) return "";
+  const own = levels.reduce((sum, level) => sum + (level.passes === true && typeof level.probability === "number" ? level.probability : 0), 0);
+  const second = fields(view.second);
+  const other = typeof second.passProbability === "number" ? second.passProbability : undefined;
+  const near = (a: number, b: number) => Math.abs(a - b) < 0.005;
+  if (near(pass, own)) return "";
+  const named = typeof second.model === "string" ? ` (${second.model})` : "";
+  if (other !== undefined && near(pass, other)) return ` Jev put ${percent(own)} on a passing level, as levels shows. The second grader${named} put ${percent(other)}, and the lower of the two counts.`;
+  if (pass === 0 && Math.min(own, other ?? own) >= 0.005) {
+    return ` Jev put ${percent(own)} on a passing level${other === undefined ? "" : ` and the second grader${named} ${percent(other)}`}, but the result failed the checks in the brief, which counts as 0%.`;
+  }
+  return "";
+}
+
 /** What a grade's state means for the caller. */
 export function gradeGuidance(view: Record<string, unknown>): Guidance {
   if (view.state === "graded") {
-    const pass = typeof view.passProbability === "number" ? ` at ${Math.round(view.passProbability * 100)}%` : "";
-    return { done: true, next: view.accepted === true ? `BrainChain accepts the work${pass}. The record is at decision.page.` : `BrainChain does not accept the work${pass}. The record is at decision.page.` };
+    const pass = typeof view.passProbability === "number" ? view.passProbability : undefined;
+    const at = pass === undefined ? "" : ` at ${percent(pass)}`;
+    const why = pass === undefined ? "" : basis(view, pass);
+    // The desk links a page for the record on mainnet only; `record`, the record's own file, is always there.
+    const decision = fields(view.decision);
+    const field = ["page", "record"].find((name) => typeof decision[name] === "string");
+    const record = field ? ` The record is at decision.${field}.` : "";
+    return { done: true, next: `${view.accepted === true ? `BrainChain accepts the work${at}.` : `BrainChain does not accept the work${at}.`}${why}${record}` };
   }
   if (view.state === "failed") return { done: true, next: "The payment did not go through, so nothing was charged and the work was not graded. Send it again with brainchain_grade." };
   if (view.state === "unconfirmed") return { done: false, next: "The desk is confirming the payment on chain. Read the grade with brainchain_get_grade after retryAfterSeconds; do not send it again.", retryAfterSeconds: 30 };
