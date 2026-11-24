@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hear of public changes to Robinhood Chain tokens as they happen and read their history at any block.",
-  "version": "0.23.1",
+  "version": "0.23.2",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.23.1",
+      "version": "0.23.2",
       "transport": {
         "type": "stdio"
       },

@@ -1,6 +1,6 @@
 {
   "name": "brainchain-mcp",
-  "version": "0.23.1",
+  "version": "0.23.2",
   "description": "The BrainChain MCP: hear when something public changes about a Robinhood Chain token, with its worth and earlier steps, read its history and market cap at any past block, count how often each kind of change was followed by a listing, and hire a frontier model for a task, paid only for work that meets the bar you set.",
   "mcpName": "com.usebrainchain/brainchain",
   "license": "MIT",
