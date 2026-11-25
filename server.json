@@ -3,7 +3,7 @@
   "name": "com.usebrainchain/brainchain",
   "title": "BrainChain",
   "description": "Hear of public changes to Robinhood Chain tokens as they happen and read their history at any block.",
-  "version": "0.23.2",
+  "version": "0.24.0",
   "websiteUrl": "https://docs.usebrainchain.com/agents",
   "repository": {
     "url": "https://github.com/usebrainchain/brainchain-mcp",
@@ -23,7 +23,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "brainchain-mcp",
-      "version": "0.23.2",
+      "version": "0.24.0",
       "transport": {
         "type": "stdio"
       },
@@ -119,6 +119,12 @@
           "description": "A GitHub token with no scopes. BitGo's history and the dates of Trust Wallet's and MetaMask's listings are then read with its allowance in place of the 60 requests an hour GitHub allows one IP address. Sent to api.github.com only and never logged.",
           "isRequired": false,
           "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "BRAINCHAIN_FREE_URL",
+          "description": "Advanced: where a server with no paying key asks for free checks after brainchain-mcp login. BrainChain's own on mainnet by default, none on testnet. An https URL, or http on localhost or 127.0.0.1.",
+          "isRequired": false,
           "format": "string"
         },
         {

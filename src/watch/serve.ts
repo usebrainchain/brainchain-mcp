@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
 
+import { SIGN_IN, type Sponsor } from "../sponsor.js";
 import { BASES } from "./chain.js";
 import type { CallIndex } from "./calls.js";
 import type { Deliveries } from "./deliver.js";
@@ -53,6 +54,8 @@ export interface Health {
 export interface ServeLimits {
   /** Requests one address can make in a minute, across every route. */
   perMinute: number;
+  /** Of those, the requests one address can make to `GET /free/me` and `POST /free/grade` in a minute. */
+  freePerMinute: number;
   /** Watches one address can make in an hour. */
   watchesPerHour: number;
   /** Streams one address can hold open, and streams in all. */
@@ -64,7 +67,9 @@ export interface ServeLimits {
   replay: number;
 }
 
-export const SERVE_LIMITS: ServeLimits = { perMinute: 120, watchesPerHour: 10, streamsPerAddress: 5, streams: 500, body: 4096, replay: 1000 };
+export const SERVE_LIMITS: ServeLimits = { perMinute: 120, freePerMinute: 20, watchesPerHour: 10, streamsPerAddress: 5, streams: 500, body: 4096, replay: 1000 };
+/** The largest grade `POST /free/grade` takes: a brief of 32,000 UTF-16 units and a 100,000-byte result, as JSON. */
+export const FREE_BODY = 300_000;
 export const KEEPALIVE_MS = 20_000;
 /** A stream is closed after this long; the client opens it again from Last-Event-ID, so no slot is held for good. */
 export const STREAM_MS = 30 * 60_000;
@@ -154,6 +159,8 @@ export interface ServeOptions {
   deliveries?: Deliveries;
   /** The calls read from BrainChain's DecisionLog, for `GET /calls`; a watcher without them answers 404 there. */
   calls?: Pick<CallIndex, "of" | "get" | "page">;
+  /** BrainChain's free checks, for `GET /free`, `GET /free/me` and `POST /free/grade`; a watcher without them answers 404 there. */
+  sponsor?: Sponsor;
   /** Behind a proxy that appends the client's address to X-Forwarded-For, such as Render's, take the address from there. */
   trustProxy?: boolean;
   limits?: ServeLimits;
@@ -271,7 +278,7 @@ function watchRequest(body: unknown): { url: string; kinds?: string[]; tokens?: 
   }
 }
 
-const bearer = (request: IncomingMessage) => /^Bearer ([\w-]{20,100})$/.exec(request.headers.authorization ?? "")?.[1];
+const bearer = (request: IncomingMessage) => /^Bearer ([\w-]{20,255})$/.exec(request.headers.authorization ?? "")?.[1];
 
 export interface Served {
   server: Server;
@@ -288,10 +295,13 @@ export interface Served {
  * /robinhood/names` (Robinhood's name on each crypto page), `GET /calls?caller=` (a wallet's calls), `GET /calls?after=`
  * (every call a page at a time), `GET /calls/:grade`, `GET /health` (503 while a source keeps failing) and `GET
  * /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
- * /watches/:id` with the watch's manage token. Nothing lists watches. Every address is held to `perMinute` requests.
+ * /watches/:id` with the watch's manage token. Nothing lists watches. Free checks: `GET /free`, and `GET /free/me` and
+ * `POST /free/grade` with a GitHub sign-in. Every address is held to `perMinute` requests, and to `freePerMinute` of them
+ * on the two routes that take a sign-in.
  */
-export function serveEvents({ log, pools, names, health, adminToken, deliveries, calls, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
+export function serveEvents({ log, pools, names, health, adminToken, deliveries, calls, sponsor, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
   const perMinute = new Window(limits.perMinute, 60_000);
+  const freePerMinute = new Window(limits.freePerMinute, 60_000);
   const creations = new Window(limits.watchesPerHour, 3_600_000);
   const streams = new Set<{ response: ServerResponse; address: string; wanted: Pick<Query, "kinds" | "tokens">; cursor: number }>();
 
@@ -341,7 +351,7 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
   async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const address = keyOf(clientOf(request, trustProxy));
     if ((request.url ?? "").length > 2048) throw new HttpError(414, "The address is too long.");
-    if (!perMinute.take(address, clock())) throw new HttpError(429, `An address can make ${limits.perMinute} requests a minute.`);
+    if (!perMinute.take(address, clock())) throw new HttpError(429, `Too many requests from your network address: the watcher takes ${limits.perMinute} a minute from one address. Wait a minute, then try again.`);
     const url = new URL(request.url ?? "/", "http://watcher");
     const method = request.method ?? "GET";
     const reading = method === "GET" || method === "HEAD";
@@ -352,8 +362,10 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       // The detail names hosts, limits and errors; only its operator reads it. Anyone can see whether the sources are reading.
       const admin = adminToken !== undefined && given !== undefined && given.length === adminToken.length && timingSafeEqual(Buffer.from(given), Buffer.from(adminToken));
       const sources = (state.sources ?? {}) as Record<string, { failures?: number; baselined?: boolean }>;
-      const summary = { ok: state.ok, events: state.events, sources: Object.fromEntries(Object.entries(sources).map(([name, { failures = 0, baselined }]) => [name, { reading: failures < 3, baselined: baselined === true }])) };
-      return send(response, state.ok ? 200 : 503, admin ? state : summary, admin ? {} : OPEN);
+      const checks = sponsor?.info();
+      const free = checks ? { free: { open: checks.open, paused: checks.paused } } : {};
+      const summary = { ok: state.ok, events: state.events, sources: Object.fromEntries(Object.entries(sources).map(([name, { failures = 0, baselined }]) => [name, { reading: failures < 3, baselined: baselined === true }])), ...free };
+      return send(response, state.ok ? 200 : 503, admin ? { ...state, ...free } : summary, admin ? {} : OPEN);
     }
     if (url.pathname === "/events" && reading) return send(response, 200, { readAt: new Date(clock()).toISOString(), ...log.query(eventsQuery(url.searchParams)) }, OPEN);
     if (url.pathname === "/events/stream" && reading) return stream(request, response, url, address);
@@ -411,8 +423,22 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       if (!status) throw gone();
       return send(response, 200, status);
     }
-    if (["/events", "/events/stream", "/pools", "/robinhood/names", "/calls", "/health", "/health/live", "/watches"].includes(url.pathname) || id !== undefined || grade !== undefined) throw new HttpError(405, "That method is not served here.");
-    throw new HttpError(404, "Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls?after=, GET /calls/:grade, GET /health, POST /watches and GET or DELETE /watches/:id.");
+    const freeRoute = ["/free", "/free/me", "/free/grade"].includes(url.pathname);
+    if (freeRoute && !sponsor) throw new HttpError(404, "This watcher gives no free checks.");
+    if (sponsor && url.pathname === "/free" && reading) return send(response, 200, sponsor.info(), OPEN);
+    if (sponsor && ((url.pathname === "/free/me" && reading) || (url.pathname === "/free/grade" && method === "POST"))) {
+      if (!freePerMinute.take(address, clock())) {
+        throw new HttpError(429, `Too many free-check requests from your network address. BrainChain takes ${limits.freePerMinute} a minute from one address, and people on the same network, such as an office, share one. Wait a minute, then try again.`);
+      }
+      // A request without a sign-in is turned away before its body is read.
+      const token = bearer(request);
+      if (!token) return send(response, SIGN_IN.status, SIGN_IN.body);
+      const { status, body } = url.pathname === "/free/me" ? await sponsor.me(token) : await sponsor.grade(token, await json(request, FREE_BODY), url.searchParams.get("network"));
+      return send(response, status, body);
+    }
+    if (["/events", "/events/stream", "/pools", "/robinhood/names", "/calls", "/health", "/health/live", "/watches"].includes(url.pathname) || freeRoute || id !== undefined || grade !== undefined) throw new HttpError(405, "That method is not served here.");
+    const freeRoutes = sponsor ? ", GET /free, GET /free/me, POST /free/grade" : "";
+    throw new HttpError(404, `Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls?after=, GET /calls/:grade, GET /health${freeRoutes}, POST /watches and GET or DELETE /watches/:id.`);
   }
 
   const server = createServer((request, response) => {
@@ -421,7 +447,12 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       if (error instanceof HttpError) return send(response, error.status, { error: error.message }, error.status === 429 ? { "Retry-After": "60" } : {});
       if (error instanceof QueryError) return send(response, 400, { error: error.message });
       // Anything else is the watcher's own failure, and the answer says nothing of how.
-      return send(response, 500, { error: "Something went wrong reading that. Try again." });
+      const grading = request.method === "POST" && (request.url ?? "").startsWith("/free/grade");
+      return send(response, 500, {
+        error: grading
+          ? "The free check failed on BrainChain's side. Send the same grade again in a minute: if it went through, you get it back without using another free check."
+          : "The watcher hit an error answering that. Try again in a minute.",
+      });
     });
   });
   server.headersTimeout = 10_000;

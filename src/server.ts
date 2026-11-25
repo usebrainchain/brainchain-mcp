@@ -14,6 +14,7 @@ import { expandHome, formatUnits, PRICE, resolveConfig, type Config } from "./co
 import { CUSTODY_NAME, CUSTODY_TOOL } from "./custody.js";
 import { stateDirProblem } from "./daily.js";
 import { datasetReader, type DatasetReader } from "./dataset/published.js";
+import { FREE, freeGrader, freeSetting, freeUrl, readLogin, signedInElsewhere, walletSaved, type Login } from "./free.js";
 import { useGitHubToken } from "./github.js";
 import { createLimits } from "./limits.js";
 import { configuredMakers, MAKERS_NAME, makersTool, MARKET_MAKERS, readMakerHoldings, type MakerWallet } from "./makers.js";
@@ -51,6 +52,7 @@ import {
   SIT_EXAM_NAME,
   sitExamTool,
   type Desk,
+  type GradeRequest,
   type Readers,
   type Terms,
 } from "./tools.js";
@@ -243,11 +245,11 @@ export function paySettings(config: Config): [string, string][] {
  * the form the local shell runs: an inline assignment on macOS and Linux,
  * PowerShell's $env: on Windows, where `NAME=value command` is not a command at all.
  */
-export function cliCommand(command: string, config: Config, version: string, env: Record<string, string | undefined>, platform: NodeJS.Platform = process.platform): string {
+export function cliCommand(command: string, config: Config, version: string, env: Record<string, string | undefined>, platform: NodeJS.Platform = process.platform, extra: Record<string, string> = {}): string {
   const file = env.BRAINCHAIN_PAYER_KEY_FILE?.trim();
   // The command is a new process that sees only its own environment. A value that is no path may be a key in the wrong variable, so it is never printed.
   const named = file && isAbsolute(expandHome(file)) ? file : undefined;
-  const settings: [string, string][] = [...paySettings(config), ...(named ? [["BRAINCHAIN_PAYER_KEY_FILE", named] as [string, string]] : [])];
+  const settings: [string, string][] = [...paySettings(config), ...(named ? [["BRAINCHAIN_PAYER_KEY_FILE", named] as [string, string]] : []), ...Object.entries(extra)];
   const run = `npx -y brainchain-mcp@${version} ${command}`;
   if (platform === "win32") return [...settings.map(([name, value]) => `$env:${name}=${powershellWord(value)}`), run].join("; ");
   return [...settings.map(([name, value]) => `${name}=${shellWord(value)}`), run].join(" ");
@@ -257,6 +259,8 @@ export const approveCommand = (config: Config, version: string, env: Record<stri
 
 interface Wiring {
   desk: Desk;
+  /** How a server with no wallet grades: through BrainChain's free checks, or by naming the sign-in it has for others. */
+  free?: (request: GradeRequest) => Promise<unknown>;
   terms: Terms | string;
   bonds: Bonds;
   bondTools: [Tool, Tool];
@@ -287,7 +291,7 @@ function unreadable(problem: string): Wiring {
 }
 
 /** A missing key or a bad setting is reported when a tool needs it, so the server always starts and lists its tools. */
-export function deskFor(env: Record<string, string | undefined>, version: string, fetchImpl?: typeof fetch): Wiring {
+export function deskFor(env: Record<string, string | undefined>, version: string, fetchImpl?: typeof fetch, login?: () => Login | undefined, saved: () => boolean = walletSaved): Wiring {
   const fix = (error: unknown) => `${messageOf(error)} Fix it in this server's environment and restart the server.`;
   let config: Config;
   let paymentProblem: string | undefined;
@@ -336,9 +340,36 @@ export function deskFor(env: Record<string, string | undefined>, version: string
   const refused = new Map<string, string>();
   if (problem) for (const name of [POST_TASK_NAME, GRADE_NAME, CALL_NAME, BOND_TASK_NAME, SIT_EXAM_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);
   if (keyProblem) for (const name of [BOND_STATUS_NAME, EXAM_SUBMIT_NAME]) refused.set(name, `${keyProblem} ${KEY_HELP}`);
-  const terms = { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(problem ? { problem } : {}) };
+  // With no wallet at all, and BrainChain's own desk, a GitHub sign-in grades through the free checks. A server with a wallet always pays from it.
+  let free: Wiring["free"];
+  let signIn: string | undefined;
+  if (!env.BRAINCHAIN_PAYER_KEY?.trim() && !env.BRAINCHAIN_PAYER_KEY_FILE?.trim() && !env.BRAINCHAIN_DESK_URL?.trim()) {
+    const read = login ?? readLogin;
+    const init = cliCommand("init", config, version, {});
+    try {
+      const url = freeUrl(env, config.name);
+      if (url) {
+        const commands = { init, login: cliCommand("login", config, version, {}, process.platform, freeSetting(url, config.name)) };
+        free = freeGrader({ config, url, commands, login: read, track: desk.track, walletSaved: saved, ...(fetchImpl ? { fetch: fetchImpl } : {}) });
+        signIn =
+          `This server has no wallet. BrainChain pays for ${FREE.perAccount} free checks per GitHub account older than ${FREE.minAccountDays} days: your operator signs in by running \`${commands.login}\` in a terminal. ` +
+          `After those, each grade costs ${config.terms.gradeCost} whatever the verdict, paid from a wallet set up with \`${init}\`.`;
+      } else {
+        // No free checks here, but a sign-in made for another free-check service is named, so the refusal does not read as if login did nothing.
+        free = async (request) => {
+          const kept = read();
+          if (kept) throw new Error(signedInElsewhere(kept, config, undefined, init, { saved: saved() }));
+          return desk.grade(request);
+        };
+      }
+    } catch (error) {
+      refused.set(GRADE_NAME, fix(error));
+    }
+  }
+  const terms = { ...config.terms, ...(account ? { wallet: account.address } : {}), ...(problem ? { problem } : {}), ...(signIn ? { free: signIn } : {}) };
   return {
     desk,
+    ...(free ? { free } : {}),
     terms,
     gradeTool: gradeTool(terms),
     examTools: examTools(terms, keyProblem),
@@ -350,6 +381,10 @@ export function deskFor(env: Record<string, string | undefined>, version: string
 
 export interface ServerOptions {
   fetch?: typeof fetch;
+  /** Reads the GitHub sign-in for free checks; the file `login` writes by default. */
+  login?: () => Login | undefined;
+  /** Whether init's key file exists, for the words a server with no key setting answers with. */
+  walletSaved?: () => boolean;
   /** Where a configuration error is reported once at startup; stderr by default, since stdout carries the protocol. */
   log?: (message: string) => void;
 }
@@ -397,7 +432,7 @@ function subscribeChanges(server: Server, watcher: URL | undefined, fetchImpl?: 
 }
 
 export function createServer(env: Record<string, string | undefined>, version: string, options: ServerOptions = {}): Server {
-  const { desk, terms, bonds, bondTools: bondToolList, gradeTool: gradeToolDef, examTools: examToolList, refused } = deskFor(env, version, options.fetch);
+  const { desk, free, terms, bonds, bondTools: bondToolList, gradeTool: gradeToolDef, examTools: examToolList, refused } = deskFor(env, version, options.fetch, options.login, options.walletSaved);
   const problem = typeof terms === "string" ? terms : terms.problem;
   const log = options.log ?? console.error;
   if (problem) log(`brainchain-mcp has an invalid setting: ${problem}`);
@@ -467,7 +502,9 @@ export function createServer(env: Record<string, string | undefined>, version: s
   ];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {}, resources: { subscribe: true } }, instructions: INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
-  server.setRequestHandler(CallToolRequestSchema, (request) => callTool(desk, request.params.name, request.params.arguments, undefined, bonds, refused, readers));
+  // Only brainchain_grade takes free checks. brainchain_call records each call under the wallet that paid, so it needs this server's own.
+  const gradeDesk = free ? { ...desk, grade: free } : desk;
+  server.setRequestHandler(CallToolRequestSchema, (request) => callTool(request.params.name === GRADE_NAME ? gradeDesk : desk, request.params.name, request.params.arguments, undefined, bonds, refused, readers));
   subscribeChanges(server, watchProblem ? undefined : watcher, options.fetch);
   return server;
 }

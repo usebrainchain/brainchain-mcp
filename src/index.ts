@@ -6,7 +6,9 @@ import { createWalletClient, http, maxUint256, type Hex, type PrivateKeyAccount 
 
 import { DECIMALS, formatUnits, resolveConfig, type Config } from "./config.js";
 import { stateDirProblem } from "./daily.js";
+import { FREE, FREE_URL, LOGIN_FILE } from "./free.js";
 import { initWallet, runInit } from "./init.js";
+import { runLogin } from "./login.js";
 import { erc20 } from "./payments.js";
 import { approvalFailure, approvalUnconfirmed, approveCommand, chainClients, createServer, deskFor, pastedKey, payerAccount, PERMIT2, terminalHint, walletExitCode, walletFunds, walletReport } from "./server.js";
 
@@ -30,6 +32,11 @@ Usage:
                                  Prints the wallet's address, what to send it, and the command that adds the server
                                  to Claude Code, Cursor or VS Code. Run it again to check the balance: an existing
                                  key is never replaced, and the exit code is then the same as wallet's.
+  brainchain-mcp login [--again] Sign in with GitHub for free checks: BrainChain pays for the first ${FREE.perAccount} grades of an
+                                 account older than ${FREE.minAccountDays} days, for a server with no paying key. Shows a code to
+                                 approve on github.com and keeps the sign-in in ${LOGIN_FILE}. Run it again to see who
+                                 is signed in and how many free checks are left; --again replaces the sign-in, such as
+                                 with another account.
   brainchain-mcp approve [USDG]  Let Permit2 spend the paying wallet's USDG. Run it with BRAINCHAIN_PAY_ON=robinhood.
                                  Default 100 USDG; pass a number, "max", or 0 to revoke.
                                  Not needed when paying in USDC on Base.
@@ -72,6 +79,7 @@ Environment:
                               a directory, absolute or starting with ~/, or an https address (default BrainChain's published copy).
   GITHUB_TOKEN                A GitHub token with no scopes, to read GitHub's API with its allowance in place of the 60
                               requests an hour GitHub allows one IP address. Sent to api.github.com only.
+  BRAINCHAIN_FREE_URL         Where free checks are asked for (default ${FREE_URL} on mainnet; none on testnet).
   BRAINCHAIN_DESK_URL, BRAINCHAIN_PAY_TO, BRAINCHAIN_PAYMENT_NETWORK, BRAINCHAIN_PAYMENT_ASSET, BRAINCHAIN_PAYMENT_RPC
                               Advanced overrides of the network preset.
 `;
@@ -85,7 +93,7 @@ const pasted = pastedKey(process.argv.slice(2));
 if (pasted) fail(pasted);
 const command = process.argv[2];
 const HELP = ["--help", "-h", "help"];
-if ((command !== undefined && HELP.includes(command)) || (["approve", "wallet", "init"].includes(command ?? "") && HELP.includes(process.argv[3] ?? ""))) {
+if ((command !== undefined && HELP.includes(command)) || (["approve", "wallet", "init", "login"].includes(command ?? "") && HELP.includes(process.argv[3] ?? ""))) {
   console.log(USAGE);
   process.exit(0);
 }
@@ -109,9 +117,12 @@ if (command === "--version" || command === "-v" || command === "version") {
   console.log(version);
   process.exit(0);
 }
-if (command !== undefined && !["approve", "wallet", "init", "watch", "dataset", "solve"].includes(command)) fail(`Unknown command ${command}.\n\n${USAGE}`);
-const extra = process.argv[command === "approve" ? 4 : 3];
-if (command !== undefined && command !== "watch" && command !== "dataset" && command !== "solve" && extra !== undefined) fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : `${command} takes none`}.\n\n${USAGE}`);
+if (command !== undefined && !["approve", "wallet", "init", "login", "watch", "dataset", "solve"].includes(command)) fail(`Unknown command ${command}.\n\n${USAGE}`);
+const again = command === "login" && process.argv[3] === "--again";
+const extra = process.argv[command === "approve" || again ? 4 : 3];
+if (command !== undefined && command !== "watch" && command !== "dataset" && command !== "solve" && extra !== undefined) {
+  fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : command === "login" ? "login takes only --again" : `${command} takes none`}.\n\n${USAGE}`);
+}
 
 if (command === undefined) {
   const hint = terminalHint(process.stdin, version);
@@ -139,6 +150,8 @@ if (command === undefined) {
       now: Date.now,
     })
     .catch((error: unknown) => fail(error instanceof solve.SolveUsageError ? `${error.message}\n\n${solve.SOLVE_USAGE}` : error instanceof Error ? error.message : String(error)));
+} else if (command === "login") {
+  process.exitCode = await runLogin(process.env, version, { again }).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
 } else if (command === "init") {
   const { text, code } = await runInit(process.env, version).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
   console.log(text);

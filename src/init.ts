@@ -3,10 +3,8 @@ import { dirname, isAbsolute } from "node:path";
 
 import { generatePrivateKey } from "viem/accounts";
 
-import { expandHome, resolveConfig, type Config } from "./config.js";
+import { expandHome, KEY_FILE, resolveConfig, type Config } from "./config.js";
 import { cliCommand, payerAccount, paySettings, powershellWord, shellWord, walletExitCode, walletFunds, walletReport, type WalletFunds } from "./server.js";
-
-export const KEY_FILE = "~/.brainchain/payer.key";
 
 /** In a terminal, wallet, approve and solve pay from the wallet init made, unless the shell names another key. */
 export function initWallet(env: Record<string, string | undefined>, exists: (path: string) => boolean = existsSync): Record<string, string | undefined> {
@@ -37,9 +35,9 @@ function createKeyFile(file: string, path: string): boolean {
   }
 }
 
-/** The one line per client that adds this server with the key file and payment chain init set up. */
-export function installCommands(config: Config, version: string, file: string, platform: NodeJS.Platform = process.platform): [string, string][] {
-  const env = Object.fromEntries([...paySettings(config), ["BRAINCHAIN_PAYER_KEY_FILE", file]]);
+/** The one line per client that adds this server with its payment chain and `settings`: the key file init set up, or where login signed in. */
+export function installCommands(config: Config, version: string, settings: Record<string, string>, platform: NodeJS.Platform = process.platform): [string, string][] {
+  const env = { ...Object.fromEntries(paySettings(config)), ...settings };
   const server = { command: "npx", args: ["-y", `brainchain-mcp@${version}`], env };
   const windows = platform === "win32";
   const setting = ([name, value]: [string, string]) => {
@@ -79,7 +77,7 @@ export async function runInit(env: Record<string, string | undefined>, version: 
   const { address } = payerAccount({ BRAINCHAIN_PAYER_KEY_FILE: file });
   const approve = cliCommand("approve", config, version, { BRAINCHAIN_PAYER_KEY_FILE: file }, platform);
   const again = cliCommand("init", config, version, file === KEY_FILE ? {} : { BRAINCHAIN_PAYER_KEY_FILE: file }, platform);
-  const install = ["Add the server to your client:", ...installCommands(config, version, file, platform).flatMap(([client, command]) => ["", client, `  ${command}`])];
+  const install = ["Add the server to your client:", ...installCommands(config, version, { BRAINCHAIN_PAYER_KEY_FILE: file }, platform).flatMap(([client, command]) => ["", client, `  ${command}`])];
 
   if (created) {
     const empty: WalletFunds = { balance: 0n, ...(config.permit2 ? { allowance: 0n } : {}), eth: 0n };

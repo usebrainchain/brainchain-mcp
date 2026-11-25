@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expandHome } from "../config.js";
 import { countsFor } from "../dataset/counts.js";
 import { datasetReader, MANIFEST_MS, type DatasetReader } from "../dataset/published.js";
+import { FREE } from "../free.js";
 import { hasGitHubToken, useGitHubToken } from "../github.js";
 import { ChainError } from "../history.js";
 import { configuredMakers, firstApprovals, MARKET_MAKERS } from "../makers.js";
@@ -12,6 +13,7 @@ import { ROBINHOOD_RPC } from "../premiums.js";
 import { firstQueued } from "../queued.js";
 import { readinessIn } from "../readiness.js";
 import { sightingsReader, tokenSightings } from "../sightings.js";
+import { sponsorFrom, type Sponsor } from "../sponsor.js";
 import { bitGoLists, bitGoMerges, bitGoPullRequests, bitGoReleases } from "./bitgo.js";
 import { chainFirsts, chainKept, chainPoller } from "./chain.js";
 import { chainTurn, createdIn, eventContext, loadWorth, saveWorth, worthOf } from "./context.js";
@@ -65,7 +67,13 @@ address. BRAINCHAIN_WATCH_RPC reads Robinhood Chain from another RPC, with the p
 BRAINCHAIN_MAKER_WALLETS adds wallets to follow. BRAINCHAIN_DATASET reads the dataset from a directory or another address
 in place of BrainChain's published copy. GET /health shows anyone whether each source is reading, and its full
 detail to a request with BRAINCHAIN_WATCH_ADMIN_TOKEN as a Bearer token. BRAINCHAIN_WATCH_DISCORD_RELAY sends Discord
-deliveries through a relay, signed with BRAINCHAIN_WATCH_DISCORD_RELAY_KEY, for an address Discord refuses.`;
+deliveries through a relay, signed with BRAINCHAIN_WATCH_DISCORD_RELAY_KEY, for an address Discord refuses.
+BRAINCHAIN_SPONSOR_KEY_FILE and GITHUB_CLIENT_ID turn on free checks, and both are needed: with only one, the watcher says
+so and runs without them. BRAINCHAIN_SPONSOR_KEY_FILE names a file holding the private key of the wallet that pays for
+them, in USDC on Base (Base Sepolia with BRAINCHAIN_NETWORK=testnet). GITHUB_CLIENT_ID is the client id of the GitHub
+OAuth app people sign in with through brainchain-mcp login, with device flow on; it needs no secret. With both set, --serve
+also answers GET /free, GET /free/me and POST /free/grade, and pays for the first ${FREE.perAccount} grades of each GitHub
+account older than ${FREE.minAccountDays} days, at most ${FREE.perDay} a day and ${FREE.total} in all.`;
 
 /** The relay Discord deliveries go through, from BRAINCHAIN_WATCH_DISCORD_RELAY and its key, or none. */
 export function discordRelay(env: Record<string, string | undefined>): Relay | undefined {
@@ -298,7 +306,14 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   if (adminToken && !/^[\w-]{32,100}$/.test(adminToken)) throw new Error("BRAINCHAIN_WATCH_ADMIN_TOKEN must be 32 to 100 letters, digits, - or _.");
   const names = () => (state.source("robinhood-names") as NamesState).names ?? {};
   const calls = new CallIndex({ dir, ...(env.BRAINCHAIN_WATCH_BRAIN ? { brain: env.BRAINCHAIN_WATCH_BRAIN } : {}), say });
-  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, calls, trustProxy: args.trustProxy }) : undefined;
+  // A free-checks setting the watcher cannot use turns the free checks off, and the watcher runs on without them.
+  let sponsor: Sponsor | undefined;
+  try {
+    sponsor = args.serve ? sponsorFrom(env, join(dir, "free"), { say }) : undefined;
+  } catch (error) {
+    say(`Free checks are off: ${(error as Error).message}`);
+  }
+  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, calls, ...(sponsor ? { sponsor } : {}), trustProxy: args.trustProxy }) : undefined;
   let ticking = false;
   const deliver = () => {
     if (ticking) return;

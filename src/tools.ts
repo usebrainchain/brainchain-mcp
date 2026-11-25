@@ -6,6 +6,7 @@ import { BUILDER_NAME, BUILDER_TOOL, BuilderError, readTokenBuilder, type Builde
 import { CALL_NAME, CALL_TOOL, callArgs, callRecord, callRequest, CALLS_NAME, CALLS_TOOL, type IndexedCall } from "./calls.js";
 import { CHANGES_NAME, CHANGES_TOOL, changesQuery, createWatch, HOSTED_WATCH_URL, readCalls, readChanges, removeWatch, UNWATCH_NAME, UNWATCH_TOOL, unwatchArgs, WATCH_NAME, WATCH_TOOL, watchArgsOf, type ChangesQuery, type WatchRequest } from "./changes.js";
 import { formatUnits, REPOST_AFTER_MINUTES, type Config } from "./config.js";
+import { refuseCredentials } from "./credentials.js";
 import { CUSTODY_NAME, CUSTODY_TOOL, CustodyError, DAY_MS, DEFAULT_DAYS, MAX_DAYS, named, readCustodyAdditions, readListedTokens, within, type CustodyBoard, type CustodyToken } from "./custody.js";
 import type { SymbolRow } from "./dataset/format.js";
 import { datasetReader, DatasetError, type Dataset, type DatasetRef } from "./dataset/published.js";
@@ -39,6 +40,8 @@ export interface Terms {
   wallet?: string;
   /** A setting that keeps this tool from paying, such as a key given that cannot be used; absent when there is none. */
   problem?: string;
+  /** Set when a server with no wallet can grade through BrainChain's free checks: what they cover and how to sign in, said in place of the wallet's price. */
+  free?: string;
 }
 
 export const POST_TASK_NAME = "brainchain_post_task";
@@ -155,6 +158,7 @@ export function postTaskTool(terms: Terms | string): Tool {
   const about =
     `Pay for a task on BrainChain. The model behind its decisions is Jev, a decision model from TypeSafe. BrainChain hires a frontier model or an outside worker for the brief, grades the result against your quality levels and pays it only if the work reaches your pass level: with three quality levels, the second or better; with two, only the first. ` +
     `Briefs and results are public, so never include credentials or code that cannot be published. ` +
+    `A brief that asks for code can carry tests: a fenced block whose info string is \`python checks\` or \`javascript checks\`. They run with the delivered code before any grading, for up to 15 seconds with no network and no files, and code that fails them does not pass. ` +
     `A brief can be up to 32,000 UTF-16 units (${UNITS}), and the whole task at most 64,000 bytes as JSON. `;
   return {
     name: POST_TASK_NAME,
@@ -198,6 +202,7 @@ export function gradeTool(terms: Terms | string): Tool {
     `Have BrainChain grade work delivered somewhere else, such as a job on another agent market, against the brief it answered. ` +
     `Returns the verdict: whether the work passes, the panel's probability that the work reaches a passing level, and a public decision record. ` +
     `The brief is published in the record, and the result once it is accepted, so never include credentials or text that cannot be published. ` +
+    `A brief that asks for code can carry tests: a fenced block whose info string is \`python checks\` or \`javascript checks\`. They run with the delivered code before any grading, for up to 15 seconds with no network and no files, and code that fails them does not pass. ` +
     `This tool only grades: nothing is paid to the worker and no task is posted. `;
   return {
     name: GRADE_NAME,
@@ -207,7 +212,7 @@ export function gradeTool(terms: Terms | string): Tool {
         ? `${invalidSetting(terms)}${about}`
         : (terms.problem ? invalidSetting(terms.problem) : "") +
           about +
-          `Each grade costs ${terms.gradeCost} whatever the verdict, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, and counts against its budget and daily limit. ` +
+          (terms.free ? `${terms.free} ` : `Each grade costs ${terms.gradeCost} whatever the verdict, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, and counts against its budget and daily limit. `) +
           (terms.refuses?.grade ? `${terms.refuses.grade} ` : "") +
           `BrainChain usually answers within seconds; if the reply is not done, read it with ${GET_GRADE_NAME}. If the reply says possiblyCharged, do not send it again: read it with ${GET_GRADE_NAME}. ` +
           `While this server keeps running, an identical request within ${REPOST_AFTER_MINUTES} minutes returns the first grade, marked duplicate, instead of paying again.`,
@@ -614,7 +619,14 @@ export function checkBrief(input: Record<string, unknown>): TaskRequest {
   if (bytes > MAX_TASK_BYTES) {
     throw new Error(`The task is ${count(bytes)} bytes as JSON; the limit is ${count(MAX_TASK_BYTES)}. Shorten the brief.`);
   }
+  refuseCredentials([["title", title], ["brief", brief], ...sent.map((level, i): [string, string] => [`levels[${i}]`, level])]);
   return { title, brief, levels: sent };
+}
+
+/** A grade request as the tool takes it: its own fields and nothing else, within the desk's limits. */
+export function gradeInput(input: Record<string, unknown>): GradeRequest {
+  refuseUnknownFields(input, GRADE_INPUT);
+  return checkGrade(input);
 }
 
 /** The desk's limits on a grade request, checked before anything is signed. */
@@ -647,6 +659,7 @@ export function checkGrade(input: Record<string, unknown>): GradeRequest {
     }
     request.pass = input.pass as number;
   }
+  refuseCredentials([["title", request.title], ["brief", brief], ...(request.levels ?? []).map((level, i): [string, string] => [`levels[${i}]`, level]), ["result", result]]);
   return request;
 }
 
@@ -798,10 +811,7 @@ export async function callTool(
       if (!/^0x[0-9a-f]{64}$/.test(order)) throw new Error("order must be the 0x-prefixed, 64-character hex id that brainchain_post_task returned.");
       return orderReply(await desk.get(order));
     }
-    if (name === GRADE_NAME) {
-      refuseUnknownFields(input, GRADE_INPUT);
-      return reply(await desk.grade(checkGrade(input)));
-    }
+    if (name === GRADE_NAME) return reply(await desk.grade(gradeInput(input)));
     if (name === GET_GRADE_NAME) {
       refuseUnknownFields(input, GET_GRADE_TOOL.inputSchema);
       const grade = text("grade", input.grade).toLowerCase();

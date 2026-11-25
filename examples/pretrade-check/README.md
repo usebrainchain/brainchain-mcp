@@ -102,7 +102,7 @@ The mandate is a short JSON file. Each rule below prints one line in the run, pa
 
 The checks read the trade from the calldata, the part the wallet signs: AllowanceHolder's `exec` call and the Settler `execute` call inside it, whose recipient, buy token and minimum Settler enforces on chain. The quote's own summary fields are compared with it and never trusted alone. The Settler's actions, the route itself, are covered by 0x's signature and not decoded. 0x's own fee and any surplus are paid inside them, and the recipient is guaranteed the minimum whatever they pay.
 
-The grade has two levels: every rule passes, or one does not. A run that fails is refused at full confidence, whatever the models say. A run that passes is read by two models: Jev, the model BrainChain grades with, and a second one. BrainChain accepts the trade when the lower of their two probabilities reaches its bar, 80% today.
+The grade has two levels: every rule passes, or one does not. A run that fails is refused at full confidence, whatever the models say. A run that passes is read by BrainChain's grading panel: Jev, the model BrainChain grades with, and other models. BrainChain accepts the trade when the panel's probability reaches its bar, 80% today.
 
 ## What it does not check or protect
 

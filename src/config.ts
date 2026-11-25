@@ -162,6 +162,9 @@ function envAddress(env: Record<string, string | undefined>, name: string, fallb
   return value as `0x${string}`;
 }
 
+/** Where init saves a new wallet's key. */
+export const KEY_FILE = "~/.brainchain/payer.key";
+
 /** MCP clients start servers without a shell, so nothing else expands the ~ in a config file. */
 export function expandHome(path: string): string {
   return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;

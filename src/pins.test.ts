@@ -78,7 +78,7 @@ describe("the settings each file lists", () => {
     const listed = server.packages[0]!.environmentVariables.map((variable) => variable.name);
     const usage = read("src/index.ts").split("\nEnvironment:\n")[1]!.split("`;")[0]!;
     const helped = usage.split("\n").flatMap((line) => (/^ {2}(BRAINCHAIN_|GITHUB_TOKEN)/.test(line) ? (line.match(setting) ?? []) : []));
-    expect(documented).toHaveLength(18);
+    expect(documented).toHaveLength(19);
     expect([...listed].sort()).toEqual([...documented].sort());
     expect([...helped].sort()).toEqual([...documented].sort());
   });
