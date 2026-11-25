@@ -19,7 +19,7 @@
     "@x402/fetch": "2.29.0",
     "express": "^5.3.0",
     "hono": "^4.13.18",
-    "viem": "^2.0.0"
+    "viem": "^2.58.4"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
