@@ -1,5 +1,5 @@
-import { resolveConfig, type Config } from "./config.js";
-import { freeSetting, freeUrl, LOGIN_FILE, needsWallet, readLogin, saveLogin, walletNext, type Login } from "./free.js";
+import { resolveConfig } from "./config.js";
+import { freeSetting, freeUrl, LOGIN_FILE, needsWallet, readLogin, saveLogin, walletNext, walletSaved, type Login, type Wallet } from "./free.js";
 import { installCommands } from "./init.js";
 import { cliCommand } from "./server.js";
 
@@ -17,6 +17,8 @@ export interface LoginOptions {
   platform?: NodeJS.Platform;
   /** Sign in anew even when the kept sign-in works. */
   again?: boolean;
+  /** Whether init's key file exists. */
+  walletSaved?: () => boolean;
 }
 
 /** GitHub answers device-flow errors with 200 and an `error` field, so the status is not checked. */
@@ -33,20 +35,20 @@ async function post(fetchImpl: typeof fetch, url: string, form: Record<string, s
 }
 
 /** What GitHub's error means for the person signing in. */
-function signInFailed(code: unknown, description: unknown, init: string): Error {
+function signInFailed(code: unknown, description: unknown, next: string): Error {
   if (code === "expired_token") return new Error("The code expired before it was approved. Run login again for a new one.");
   if (code === "access_denied") return new Error("The sign-in was cancelled on GitHub. Run login again to sign in.");
   if (code === "device_flow_disabled" || code === "incorrect_client_credentials" || code === "Not Found") {
-    return new Error(`BrainChain's GitHub sign-in is not open right now. Try again later, or set up a wallet with \`${init}\`.`);
+    return new Error(`BrainChain's GitHub sign-in is not open right now. Try again later. ${next}`);
   }
   const detail = typeof description === "string" && description ? `: ${description.replace(/[.!?]+$/, "")}` : typeof code === "string" ? ` (${code})` : "";
   return new Error(`GitHub refused the sign-in${detail}. Run login again.`);
 }
 
 /** The account's free checks as the service tells them, and login's exit code: 1 for an account too new to have any yet. */
-function standing(status: Record<string, unknown> | undefined, lead: string, config: Config, init: string): { line: string; code: number } {
+function standing(status: Record<string, unknown> | undefined, lead: string, next: (reason: unknown) => string): { line: string; code: number } {
   const who = typeof status?.login === "string" ? `as @${status.login}` : "with GitHub";
-  if (typeof status?.error === "string" && needsWallet(status.reason)) return { line: `${lead} ${who}. ${status.error} ${walletNext(config, init, status.reason)}`, code: status.reason === "young" ? 1 : 0 };
+  if (typeof status?.error === "string" && needsWallet(status.reason)) return { line: `${lead} ${who}. ${status.error} ${next(status.reason)}`, code: status.reason === "young" ? 1 : 0 };
   const left = typeof status?.left === "number" && typeof status.error !== "string" ? status.left : undefined;
   if (left === undefined) {
     return { line: `${lead} ${who}, and the sign-in is saved. The number of free checks left could not be read just now; your agent's first brainchain_grade reply will show it.`, code: 0 };
@@ -60,11 +62,15 @@ function standing(status: Record<string, unknown> | undefined, lead: string, con
  * the public profile. A working sign-in already kept is reported, not replaced, unless `again` is set. Returns the exit code.
  */
 export async function runLogin(env: Record<string, string | undefined>, version: string, options: LoginOptions = {}): Promise<number> {
-  const { fetch: fetchImpl = fetch, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), log = console.log, now = Date.now, read = readLogin, save = saveLogin, platform = process.platform, again = false } = options;
+  const { fetch: fetchImpl = fetch, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), log = console.log, now = Date.now, read = readLogin, save = saveLogin, platform = process.platform, again = false, walletSaved: saved = walletSaved } = options;
   const config = resolveConfig(env, { payments: false });
   const init = cliCommand("init", config, version, {}, platform);
+  // A shell that already names a key is told to give it to the server, never to run init again.
+  const setting = ["BRAINCHAIN_PAYER_KEY_FILE", "BRAINCHAIN_PAYER_KEY"].find((name) => env[name]?.trim());
+  const wallet: Wallet = { saved: saved(), ...(setting ? { setting } : {}) };
+  const next = (reason: unknown) => walletNext(config, init, reason, wallet);
   const url = freeUrl(env, config.name);
-  if (!url) throw new Error(`Free checks are for BrainChain mainnet, and BRAINCHAIN_NETWORK is ${config.name}. On testnet, pay with test USDC from a wallet: run \`${init}\` in a terminal.`);
+  if (!url) throw new Error(`Free checks are for BrainChain mainnet, and BRAINCHAIN_NETWORK is ${config.name}. ${next("closed")}`);
   const base = url.href.replace(/\/+$/, "");
   const settings = freeSetting(url, config.name);
   const install = ["If BrainChain is not in your MCP client yet, add it:", ...installCommands(config, version, settings, platform).flatMap(([client, command]) => ["", client, `  ${command}`])];
@@ -76,7 +82,7 @@ export async function runLogin(env: Record<string, string | undefined>, version:
   } catch {
     throw new Error(UNREACHABLE);
   }
-  if (!info || typeof info.clientId !== "string" || typeof info.perAccount !== "number" || info.open !== true) throw new Error(`BrainChain's free checks are not open right now. ${walletNext(config, init, "closed")}`);
+  if (!info || typeof info.clientId !== "string" || typeof info.perAccount !== "number" || info.open !== true) throw new Error(`BrainChain's free checks are not open right now. ${next("closed")}`);
   if (info.network !== config.name) throw new Error(`The free checks at ${base} pay for grades on BrainChain ${String(info.network)}, and BRAINCHAIN_NETWORK is ${config.name}. Set BRAINCHAIN_NETWORK=${String(info.network)}, or point BRAINCHAIN_FREE_URL at free checks for ${config.name}.`);
   const me = (token: string) => fetchImpl(`${base}/free/me`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000) }).then((response) => response.json().catch(() => ({})) as Promise<Record<string, unknown>>);
 
@@ -87,7 +93,7 @@ export async function runLogin(env: Record<string, string | undefined>, version:
     });
     // Only a sign-in GitHub no longer takes is replaced; any other refusal is said as it is, and the sign-in kept.
     if (typeof status.login === "string") {
-      const { line, code } = standing(status, "Already signed in", config, init);
+      const { line, code } = standing(status, "Already signed in", next);
       log([line, "", `To sign in with another GitHub account, run \`${cliCommand("login --again", config, version, {}, platform, settings)}\`.`, "", ...install].join("\n"));
       return code;
     }
@@ -95,7 +101,7 @@ export async function runLogin(env: Record<string, string | undefined>, version:
   }
 
   const device = await post(fetchImpl, `${GITHUB}/login/device/code`, { client_id: info.clientId });
-  if (typeof device.device_code !== "string" || typeof device.user_code !== "string") throw signInFailed(device.error, device.error_description ?? device.message, init);
+  if (typeof device.device_code !== "string" || typeof device.user_code !== "string") throw signInFailed(device.error, device.error_description ?? device.message, next("closed"));
   const page = typeof device.verification_uri === "string" && device.verification_uri.startsWith("https://") ? device.verification_uri : `${GITHUB}/login/device`;
   log(`Open ${page} and enter the code ${device.user_code}.`);
   log("Waiting for you to approve BrainChain on GitHub…");
@@ -105,16 +111,16 @@ export async function runLogin(env: Record<string, string | undefined>, version:
   let token: string | undefined;
   while (!token) {
     await wait(interval);
-    if (now() > deadline) throw signInFailed("expired_token", undefined, init);
+    if (now() > deadline) throw signInFailed("expired_token", undefined, next("closed"));
     // A dropped connection or an unreadable answer is waited out like a pending approval, up to the code's expiry.
     const answer = await post(fetchImpl, `${GITHUB}/login/oauth/access_token`, { client_id: info.clientId, device_code: device.device_code, grant_type: GRANT }).catch(() => ({ error: "authorization_pending" }) as Record<string, unknown>);
     if (typeof answer.access_token === "string") token = answer.access_token;
     else if (answer.error === "slow_down") interval = 1000 * (Number(answer.interval) || interval / 1000 + 5);
-    else if (answer.error !== "authorization_pending") throw signInFailed(answer.error, answer.error_description, init);
+    else if (answer.error !== "authorization_pending") throw signInFailed(answer.error, answer.error_description, next("closed"));
   }
   save({ token, url: url.href, network: config.name });
 
-  const { line, code } = standing(await me(token).catch(() => undefined), "Signed in", config, init);
+  const { line, code } = standing(await me(token).catch(() => undefined), "Signed in", next);
   log(
     [
       line,

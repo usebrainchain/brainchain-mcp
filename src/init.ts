@@ -3,10 +3,8 @@ import { dirname, isAbsolute } from "node:path";
 
 import { generatePrivateKey } from "viem/accounts";
 
-import { expandHome, resolveConfig, type Config } from "./config.js";
+import { expandHome, KEY_FILE, resolveConfig, type Config } from "./config.js";
 import { cliCommand, payerAccount, paySettings, powershellWord, shellWord, walletExitCode, walletFunds, walletReport, type WalletFunds } from "./server.js";
-
-export const KEY_FILE = "~/.brainchain/payer.key";
 
 /** In a terminal, wallet, approve and solve pay from the wallet init made, unless the shell names another key. */
 export function initWallet(env: Record<string, string | undefined>, exists: (path: string) => boolean = existsSync): Record<string, string | undefined> {

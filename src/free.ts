@@ -1,7 +1,7 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { expandHome, type Config } from "./config.js";
+import { expandHome, KEY_FILE, type Config } from "./config.js";
 import { sentence } from "./payments.js";
 import type { GradeRequest } from "./tools.js";
 
@@ -78,27 +78,47 @@ export interface Commands {
   login: string;
 }
 
-const setUp = (config: Prices, init: string) =>
-  `run \`${init}\` in a terminal. It creates a wallet, says how much ${config.token} to send it on ${config.chain} (a grade costs ${config.terms.gradeCost}) and prints the line that adds it to this server.`;
-
-/** Setting up a wallet: the way to keep grading after the last free check, and to grade at all for an account the checks turned away. */
-export function walletNext(config: Prices, init: string, reason: unknown): string {
-  const lead = reason === "used" ? "To keep grading" : reason === "young" ? "To grade today" : "To grade now";
-  return `${lead}, set up a wallet: ${setUp(config, init)}`;
+/**
+ * A wallet already there to pay from: the key file init saved, or a key setting in the shell `login` runs in. A server
+ * with no key setting never pays from the saved file on its own, so it is named, not made again.
+ */
+export interface Wallet {
+  saved?: boolean;
+  setting?: string;
 }
 
-export function checksLeft(left: number, config: Prices, init: string, repeat = false): string {
-  const count = left > 0 ? `${left} free ${left === 1 ? "check" : "checks"} left on this GitHub account.` : `No free checks are left on this GitHub account. ${walletNext(config, init, "used")}`;
-  if (repeat) return `You sent this grade before, so this is the same grade again and no free check was used. ${count}`;
-  return left > 0 ? count : `That was the last free check on this GitHub account. ${walletNext(config, init, "used")}`;
+export const walletSaved = () => existsSync(expandHome(KEY_FILE));
+
+/** After `lead`, the step to a wallet this server can pay from; `step` leads the way to set one up when there is none. */
+function toWallet(config: Prices, init: string, lead: string, wallet: Wallet, step: string): string {
+  if (wallet.setting) return `This shell sets ${wallet.setting}. ${lead}, add the server again with ${wallet.setting} in its settings, and it pays from that wallet.`;
+  if (wallet.saved) return `A wallet is already set up at ${KEY_FILE}. ${lead}, add the server again with the line \`${init}\` prints, which sets BRAINCHAIN_PAYER_KEY_FILE.`;
+  return `${lead}, ${step}run \`${init}\` in a terminal. It creates a wallet, says how much ${config.token} to send it on ${config.chain} (a grade costs ${config.terms.gradeCost}) and prints the line that adds it to this server.`;
+}
+
+/** Paying as you go, for a server with no wallet that cannot grade free. */
+const payAsYouGo = (config: Prices, init: string, wallet: Wallet) => toWallet(config, init, "To pay as you go", wallet, "");
+
+/** Setting up a wallet: the way to keep grading after the last free check, and to grade at all for an account the checks turned away. */
+export function walletNext(config: Prices, init: string, reason: unknown, wallet: Wallet = {}): string {
+  const lead = reason === "used" ? "To keep grading" : reason === "young" ? "To grade today" : "To grade now";
+  return toWallet(config, init, lead, wallet, "set up a wallet: ");
+}
+
+/** `repeat` is "yours" for a request this account sent before, "earlier" for one another account's request graded. */
+export function checksLeft(left: number, config: Prices, init: string, repeat?: "yours" | "earlier", wallet: Wallet = {}): string {
+  const count = left > 0 ? `${left} free ${left === 1 ? "check" : "checks"} left on this GitHub account.` : `No free checks are left on this GitHub account. ${walletNext(config, init, "used", wallet)}`;
+  if (repeat === "yours") return `You sent this grade before, so this is the same grade again and no free check was used. ${count}`;
+  if (repeat === "earlier") return `This exact work was already graded; here is that grade. No free check was used. ${count}`;
+  return left > 0 ? count : `That was the last free check on this GitHub account. ${walletNext(config, init, "used", wallet)}`;
 }
 
 /** What to change when the kept sign-in was made for a different free-check service than this server uses. */
-export function signedInElsewhere(login: Login, config: Prices & Pick<Config, "name">, url: URL | undefined, init: string): string {
+export function signedInElsewhere(login: Login, config: Prices & Pick<Config, "name">, url: URL | undefined, init: string, wallet: Wallet = {}): string {
   const here = url ? `this server uses ${named(url.href, config.name)}` : `this server uses none: BRAINCHAIN_FREE_URL is not set, and ${config.name} has no free checks of its own`;
   return (
     `This server has no wallet, and the GitHub sign-in on this machine is for ${named(login.url, login.network)}, but ${here}. ` +
-    `To use your free checks, add the server again with the line \`login\` printed, or run \`login\` with this server's BRAINCHAIN_NETWORK and BRAINCHAIN_FREE_URL. To pay as you go, ${setUp(config, init)}`
+    `To use your free checks, add the server again with the line \`login\` printed, or run \`login\` with this server's BRAINCHAIN_NETWORK and BRAINCHAIN_FREE_URL. ${payAsYouGo(config, init, wallet)}`
   );
 }
 
@@ -110,20 +130,23 @@ export interface FreeOptions {
   fetch?: typeof fetch;
   /** Told each grade id the free checks answer with, so reading it back knows this server sent it. */
   track?: (grade: string) => void;
+  /** Whether init's key file exists; this server pays from it only once its settings name it. */
+  walletSaved?: () => boolean;
 }
 
 /**
  * A grade paid by BrainChain's free checks, for a server with no wallet: the sign-in from `login` goes with the request, and
  * BrainChain pays the grade route the usual price. The grade and its record are the same as any other.
  */
-export function freeGrader({ config, url, commands, login = readLogin, fetch: fetchImpl = fetch, track }: FreeOptions): (request: GradeRequest) => Promise<unknown> {
+export function freeGrader({ config, url, commands, login = readLogin, fetch: fetchImpl = fetch, track, walletSaved: saved = walletSaved }: FreeOptions): (request: GradeRequest) => Promise<unknown> {
   const name = "BrainChain's free-check service";
   return async (request) => {
+    const wallet = { saved: saved() };
     const kept = login();
     if (!kept) {
-      throw new Error(`This server has no wallet to pay for grades. For ${FREE.perAccount} free checks, sign in with GitHub: run \`${commands.login}\` in a terminal. To pay as you go, ${setUp(config, commands.init)}`);
+      throw new Error(`This server has no wallet to pay for grades. For ${FREE.perAccount} free checks, sign in with GitHub: run \`${commands.login}\` in a terminal. ${payAsYouGo(config, commands.init, wallet)}`);
     }
-    if (kept.url !== url.href || kept.network !== config.name) throw new Error(signedInElsewhere(kept, config, url, commands.init));
+    if (kept.url !== url.href || kept.network !== config.name) throw new Error(signedInElsewhere(kept, config, url, commands.init, wallet));
     let response: Response;
     try {
       response = await fetchImpl(`${url.href.replace(/\/+$/, "")}/free/grade?network=${config.name}`, {
@@ -137,13 +160,14 @@ export function freeGrader({ config, url, commands, login = readLogin, fetch: fe
     }
     const body = (await response.json().catch(() => undefined)) as Record<string, unknown> | undefined;
     if (!body || typeof body !== "object") throw new Error(`${name} answered ${response.status} with nothing readable. Try again in a minute.`);
-    if (response.status === 404 && typeof body.reason !== "string") throw new Error(`BrainChain's free checks are not open right now. ${walletNext(config, commands.init, "closed")}`);
+    if (response.status === 404 && typeof body.reason !== "string") throw new Error(`BrainChain's free checks are not open right now. ${walletNext(config, commands.init, "closed", wallet)}`);
     if (!response.ok) {
       const why = typeof body.error === "string" && body.error.trim() ? sentence(body.error) : `${name} answered ${response.status}.`;
-      throw new Error(needsWallet(body.reason) ? `${why} ${walletNext(config, commands.init, body.reason)}` : why);
+      throw new Error(needsWallet(body.reason) ? `${why} ${walletNext(config, commands.init, body.reason, wallet)}` : why);
     }
     if (typeof body.grade === "string") track?.(body.grade);
-    const free = (body.free ?? {}) as { used?: number; left?: number };
-    return { ...body, free: { ...free, note: checksLeft(free.left ?? 0, config, commands.init, body.duplicate === true) } };
+    const free = (body.free ?? {}) as { used?: number; left?: number; alreadyGraded?: boolean };
+    const repeat = free.alreadyGraded === true ? "earlier" : body.duplicate === true ? "yours" : undefined;
+    return { ...body, free: { ...free, note: checksLeft(free.left ?? 0, config, commands.init, repeat, wallet) } };
   };
 }

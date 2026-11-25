@@ -14,7 +14,7 @@ import { expandHome, formatUnits, PRICE, resolveConfig, type Config } from "./co
 import { CUSTODY_NAME, CUSTODY_TOOL } from "./custody.js";
 import { stateDirProblem } from "./daily.js";
 import { datasetReader, type DatasetReader } from "./dataset/published.js";
-import { FREE, freeGrader, freeSetting, freeUrl, readLogin, signedInElsewhere, type Login } from "./free.js";
+import { FREE, freeGrader, freeSetting, freeUrl, readLogin, signedInElsewhere, walletSaved, type Login } from "./free.js";
 import { useGitHubToken } from "./github.js";
 import { createLimits } from "./limits.js";
 import { configuredMakers, MAKERS_NAME, makersTool, MARKET_MAKERS, readMakerHoldings, type MakerWallet } from "./makers.js";
@@ -291,7 +291,7 @@ function unreadable(problem: string): Wiring {
 }
 
 /** A missing key or a bad setting is reported when a tool needs it, so the server always starts and lists its tools. */
-export function deskFor(env: Record<string, string | undefined>, version: string, fetchImpl?: typeof fetch, login?: () => Login | undefined): Wiring {
+export function deskFor(env: Record<string, string | undefined>, version: string, fetchImpl?: typeof fetch, login?: () => Login | undefined, saved: () => boolean = walletSaved): Wiring {
   const fix = (error: unknown) => `${messageOf(error)} Fix it in this server's environment and restart the server.`;
   let config: Config;
   let paymentProblem: string | undefined;
@@ -350,7 +350,7 @@ export function deskFor(env: Record<string, string | undefined>, version: string
       const url = freeUrl(env, config.name);
       if (url) {
         const commands = { init, login: cliCommand("login", config, version, {}, process.platform, freeSetting(url, config.name)) };
-        free = freeGrader({ config, url, commands, login: read, track: desk.track, ...(fetchImpl ? { fetch: fetchImpl } : {}) });
+        free = freeGrader({ config, url, commands, login: read, track: desk.track, walletSaved: saved, ...(fetchImpl ? { fetch: fetchImpl } : {}) });
         signIn =
           `This server has no wallet. BrainChain pays for ${FREE.perAccount} free checks per GitHub account older than ${FREE.minAccountDays} days: your operator signs in by running \`${commands.login}\` in a terminal. ` +
           `After those, each grade costs ${config.terms.gradeCost} whatever the verdict, paid from a wallet set up with \`${init}\`.`;
@@ -358,7 +358,7 @@ export function deskFor(env: Record<string, string | undefined>, version: string
         // No free checks here, but a sign-in made for another free-check service is named, so the refusal does not read as if login did nothing.
         free = async (request) => {
           const kept = read();
-          if (kept) throw new Error(signedInElsewhere(kept, config, undefined, init));
+          if (kept) throw new Error(signedInElsewhere(kept, config, undefined, init, { saved: saved() }));
           return desk.grade(request);
         };
       }
@@ -383,6 +383,8 @@ export interface ServerOptions {
   fetch?: typeof fetch;
   /** Reads the GitHub sign-in for free checks; the file `login` writes by default. */
   login?: () => Login | undefined;
+  /** Whether init's key file exists, for the words a server with no key setting answers with. */
+  walletSaved?: () => boolean;
   /** Where a configuration error is reported once at startup; stderr by default, since stdout carries the protocol. */
   log?: (message: string) => void;
 }
@@ -430,7 +432,7 @@ function subscribeChanges(server: Server, watcher: URL | undefined, fetchImpl?: 
 }
 
 export function createServer(env: Record<string, string | undefined>, version: string, options: ServerOptions = {}): Server {
-  const { desk, free, terms, bonds, bondTools: bondToolList, gradeTool: gradeToolDef, examTools: examToolList, refused } = deskFor(env, version, options.fetch, options.login);
+  const { desk, free, terms, bonds, bondTools: bondToolList, gradeTool: gradeToolDef, examTools: examToolList, refused } = deskFor(env, version, options.fetch, options.login, options.walletSaved);
   const problem = typeof terms === "string" ? terms : terms.problem;
   const log = options.log ?? console.error;
   if (problem) log(`brainchain-mcp has an invalid setting: ${problem}`);

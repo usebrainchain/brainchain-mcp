@@ -295,6 +295,38 @@ describe("a free check the desk has not settled", () => {
     expect([...payments, ...restarted.payments]).toHaveLength(1);
   });
 
+  it("answers another account's exact work with that grade, using none of this account's checks, whether it has any left or not", async () => {
+    const OTHER = "gho_secondsecondsecondsecondsecond0000";
+    const { sponsor: s, payments } = sponsor({ users: { [TOKEN]: { id: 583231, login: "octocat", created_at: OLD }, [OTHER]: { id: 9, login: "hubot", created_at: OLD } } });
+    const first = await s.grade(TOKEN, request, "mainnet");
+    const theirs = { grade: first.body.grade, state: "graded", duplicate: true };
+    expect((await s.grade(OTHER, request, "mainnet")).body).toMatchObject({ ...theirs, free: { used: 0, left: 2, alreadyGraded: true } });
+    await s.grade(OTHER, nth(1), "mainnet");
+    await s.grade(OTHER, nth(2), "mainnet");
+    expect(await s.grade(OTHER, request, "mainnet")).toEqual({ status: 200, body: expect.objectContaining({ ...theirs, free: { used: 2, left: 0, alreadyGraded: true } }) });
+    expect((await s.grade(TOKEN, request, "mainnet")).body.free).toEqual({ used: 1, left: 1 });
+    expect(payments).toHaveLength(3);
+  });
+
+  it("pays once when two accounts send the same work at once, and gives the second its check back", async () => {
+    const OTHER = "gho_secondsecondsecondsecondsecond0000";
+    const { sponsor: s, where, payments } = sponsor({ users: { [TOKEN]: { id: 583231, login: "octocat", created_at: OLD }, [OTHER]: { id: 9, login: "hubot", created_at: OLD } } });
+    const both = await Promise.all([s.grade(TOKEN, request, "mainnet"), s.grade(OTHER, request, "mainnet")]);
+    expect(both.map(({ body }) => body.grade)).toEqual([both[0]!.body.grade, both[0]!.body.grade]);
+    expect(both.map(({ body }) => body.free).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))).toEqual([{ used: 0, left: 2, alreadyGraded: true }, { used: 1, left: 1 }]);
+    expect(counts(where)).toMatchObject({ total: 1 });
+    expect(payments).toHaveLength(1);
+  });
+
+  it("refuses a grade that carries a credential before anything is counted or paid", async () => {
+    const { sponsor: s, where, payments } = sponsor();
+    const key = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    expect((await s.grade(TOKEN, { ...request, result: `key ${key}` }, "mainnet")).body).toMatchObject({ reason: "request", error: expect.stringContaining("result contains an AWS access key id") });
+    expect(payments).toHaveLength(0);
+    expect((await s.me(TOKEN)).body).toEqual({ login: "octocat", left: 2 });
+    expect(readdirSync(where)).not.toContain("free-checks.json");
+  });
+
   it("pays once for the same grade sent twice at once, and tells the second what to do", async () => {
     const { sponsor: s, payments } = sponsor();
     const both = await Promise.all([s.grade(TOKEN, request, "mainnet"), s.grade(TOKEN, request, "mainnet")]);

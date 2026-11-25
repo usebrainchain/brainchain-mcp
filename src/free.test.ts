@@ -37,7 +37,7 @@ function checks(answer: () => Response = () => Response.json({ grade: GRADE, sta
 
 async function connect(env: Record<string, string | undefined>, options: ServerOptions = {}) {
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-  await createServer(env, "0.0.0-test", { log: () => {}, ...options }).connect(serverSide);
+  await createServer(env, "0.0.0-test", { log: () => {}, walletSaved: () => false, ...options }).connect(serverSide);
   const client = new Client({ name: "test", version: "0" });
   await client.connect(clientSide);
   return client;
@@ -73,7 +73,7 @@ describe("where free checks are asked for", () => {
 
 describe("a free grade", () => {
   const commands = { init: INIT, login: "npx -y brainchain-mcp@0.0.0-test login" };
-  const grade = (fetchImpl: typeof fetch, login: () => Login | undefined = () => SIGNED_IN) => freeGrader({ config: mainnet, url: new URL(FREE_URL), commands, login, fetch: fetchImpl });
+  const grade = (fetchImpl: typeof fetch, login: () => Login | undefined = () => SIGNED_IN, saved = false) => freeGrader({ config: mainnet, url: new URL(FREE_URL), commands, login, fetch: fetchImpl, walletSaved: () => saved });
 
   it("sends the request with the sign-in and the network, and says how many checks are left", async () => {
     const { fetchImpl, sent } = checks();
@@ -92,6 +92,19 @@ describe("a free grade", () => {
     const note = async (left: number) => ((await grade(repeat(left))(request)) as { free: { note: string } }).free.note;
     expect(await note(0)).toBe(`You sent this grade before, so this is the same grade again and no free check was used. No free checks are left on this GitHub account. ${NEXT}`);
     expect(await note(1)).toBe("You sent this grade before, so this is the same grade again and no free check was used. 1 free check left on this GitHub account.");
+    const earlier = checks(() => Response.json({ grade: GRADE, state: "graded", duplicate: true, free: { used: 2, left: 0, alreadyGraded: true } })).fetchImpl;
+    expect(((await grade(earlier)(request)) as { free: { note: string } }).free.note).toBe(
+      `This exact work was already graded; here is that grade. No free check was used. No free checks are left on this GitHub account. ${NEXT}`,
+    );
+  });
+
+  it("names a wallet init already saved, which this server pays from only once its settings name it", async () => {
+    const saved = (lead: string) => `A wallet is already set up at ~/.brainchain/payer.key. ${lead}, add the server again with the line \`${INIT}\` prints, which sets BRAINCHAIN_PAYER_KEY_FILE.`;
+    const last = checks(() => Response.json({ grade: GRADE, state: "graded", free: { used: 2, left: 0 } })).fetchImpl;
+    expect(((await grade(last, () => SIGNED_IN, true)(request)) as { free: { note: string } }).free.note).toBe(`That was the last free check on this GitHub account. ${saved("To keep grading")}`);
+    const used = checks(() => Response.json({ reason: "used", error: "@octocat has used its 2 free checks." }, { status: 403 })).fetchImpl;
+    await expect(grade(used, () => SIGNED_IN, true)(request)).rejects.toThrow(`@octocat has used its 2 free checks. ${saved("To keep grading")}`);
+    await expect(grade(checks().fetchImpl, () => undefined, true)(request)).rejects.toThrow(saved("To pay as you go"));
   });
 
   it("says how to set up a wallet when a limit stops it, and how to sign in again when the sign-in lapsed", async () => {
@@ -156,6 +169,8 @@ describe("a server with no wallet", () => {
     const client = await connect({}, { fetch: fetchImpl, login: () => SIGNED_IN });
     const bad = await client.callTool({ name: GRADE_NAME, arguments: { ...request, extra: 1 } });
     expect(bad.isError).toBe(true);
+    const secret = await client.callTool({ name: GRADE_NAME, arguments: { ...request, brief: `Use ${["AKIA", "IOSFODNN7EXAMPLE"].join("")}.` } });
+    expect(text(secret)).toContain("brief contains an AWS access key id");
     expect(sent).toEqual([]);
     await client.callTool({ name: GET_GRADE_NAME, arguments: { grade: GRADE } });
     expect(sent.map(({ url }) => url)).toEqual([`https://brain.usebrainchain.com/x402/grades/${GRADE}`]);

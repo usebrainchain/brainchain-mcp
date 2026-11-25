@@ -97,7 +97,6 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
   const dayOf = (at: number) => new Date(at).toISOString().slice(0, 10);
   const today = () => dayOf(now());
   const left = (id: string) => Math.max(0, FREE.perAccount - (counts.accounts[id] ?? 0));
-  const used = (id: string) => ({ used: FREE.perAccount - left(id), left: left(id) });
   let pausedUntil = 0;
   const paused = () => now() < pausedUntil;
 
@@ -184,12 +183,15 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
     return read;
   }
 
-  /** A request the account sent before, answered from its entry without signing again. */
-  async function repeat(entry: Entry, read: Map<string, unknown>): Promise<Answer> {
+  /** What `account` has used and has left, and whether the reply is a grade another account's request made. */
+  const tally = (account: string, alreadyGraded: boolean) => ({ used: FREE.perAccount - left(account), left: left(account), ...(alreadyGraded ? { alreadyGraded: true } : {}) });
+
+  /** A request sent before, by this account or another, answered from its entry without signing again. */
+  async function repeat(entry: Entry, read: Map<string, unknown>, account: string): Promise<Answer> {
     if (!entry.grade) return answer(409, "pending", "This grade is already being paid for. Send it again in a few minutes to read it; that does not use another free check.");
     const view = read.get(entry.grade) ?? (await desk.getGrade(entry.grade).catch(() => undefined));
     const known = view && typeof view === "object" ? view : { error: "The desk has no record of this grade yet.", done: false, next: "Read it with brainchain_get_grade in a minute.", retryAfterSeconds: 60 };
-    return { status: 200, body: { ...known, grade: entry.grade, statusUrl: `${config.desk}/x402/grades/${entry.grade}`, duplicate: true, free: used(entry.account) } };
+    return { status: 200, body: { ...known, grade: entry.grade, statusUrl: `${config.desk}/x402/grades/${entry.grade}`, duplicate: true, free: tally(account, entry.account !== account) } };
   }
 
   async function account(token: string | undefined): Promise<Account | Answer> {
@@ -258,7 +260,14 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
       const read = await reconcile(user.id);
       const hash = createHash("sha256").update(canonicalStringify(request)).digest("hex");
       const earlier = counts.grades.find((entry) => entry.account === user.id && entry.hash === hash);
-      if (earlier) return repeat(earlier, read);
+      if (earlier) return repeat(earlier, read, user.id);
+      // The desk answers the same work from this wallet with its earlier grade and charges nothing, so another account's
+      // grade of it is answered from that grade before any limit is looked at, unless the desk failed it.
+      const other = counts.grades.find((entry) => entry.hash === hash && entry.grade !== undefined);
+      if (other) {
+        const theirs = await repeat(other, read, user.id);
+        if (theirs.body.state !== "failed") return theirs;
+      }
       const refused = refusal(user);
       if (refused) return refused;
 
@@ -285,7 +294,7 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
       if (reply.duplicate === true || reply.state === "failed") give(entry);
       else record(entry, reply.grade, reply.state === "graded");
       say(`free checks: grade ${String(reply.grade)} ${reply.possiblyCharged ? `possibly charged (${firstLine(reply.error)})` : String(reply.state)}${reply.duplicate ? ", a repeat" : ""}`);
-      return { status: 200, body: { ...reply, free: used(user.id) } };
+      return { status: 200, body: { ...reply, free: tally(user.id, reply.duplicate === true) } };
     },
   };
 }

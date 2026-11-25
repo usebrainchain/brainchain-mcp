@@ -62,6 +62,7 @@ function run(script: Script = {}, env: Record<string, string | undefined> = {}, 
     read: () => undefined,
     save: (login) => saved.push(login),
     platform: "darwin",
+    walletSaved: () => false,
     ...options,
   });
   return { done, out, waits, saved, requests };
@@ -123,6 +124,20 @@ describe("login", () => {
     expect(out[2]).toContain("Signed in as @octocat. @octocat has used its 2 free checks. To keep grading, set up a wallet: run `npx -y brainchain-mcp@0.0.0-test init` in a terminal.");
   });
 
+  it("names a wallet init already saved, and with a key setting in the shell never says to run init", async () => {
+    const used = { me: { login: "octocat", left: 0, reason: "used", error: "@octocat has used its 2 free checks." } };
+    const saved = run(used, {}, { walletSaved: () => true });
+    await saved.done;
+    expect(saved.out[2]).toContain(
+      "@octocat has used its 2 free checks. A wallet is already set up at ~/.brainchain/payer.key. To keep grading, add the server again with the line `npx -y brainchain-mcp@0.0.0-test init` prints, which sets BRAINCHAIN_PAYER_KEY_FILE.",
+    );
+    const set = run(used, { BRAINCHAIN_PAYER_KEY_FILE: "~/.brainchain/payer.key" }, { walletSaved: () => true });
+    await set.done;
+    expect(set.out[2]).toContain("@octocat has used its 2 free checks. This shell sets BRAINCHAIN_PAYER_KEY_FILE. To keep grading, add the server again with BRAINCHAIN_PAYER_KEY_FILE in its settings, and it pays from that wallet.");
+    expect(set.out.join("\n")).not.toMatch(/\binit\b/);
+    await expect(run({}, { BRAINCHAIN_NETWORK: "testnet", BRAINCHAIN_PAYER_KEY: "0x1" }).done).rejects.toThrow(/^(?![\s\S]*\binit\b)[\s\S]*This shell sets BRAINCHAIN_PAYER_KEY\./);
+  });
+
   it("says the sign-in worked when what is left cannot be read just then", async () => {
     const { done, out, saved } = run({ me: { reason: "unavailable", error: "GitHub could not be reached to check your sign-in, and no free check was used. Try again in a minute." } });
     expect(await done).toBe(0);
@@ -146,7 +161,7 @@ describe("login", () => {
     await expect(run({ info: Response.json({ error: "This watcher gives no free checks." }, { status: 404 }) }).done).rejects.toThrow("BrainChain's free checks are not open right now.");
     await expect(run({ device: { error: "device_flow_disabled" } }).done).rejects.toThrow("BrainChain's GitHub sign-in is not open right now.");
     const testnet = run({}, { BRAINCHAIN_NETWORK: "testnet" });
-    await expect(testnet.done).rejects.toThrow("Free checks are for BrainChain mainnet, and BRAINCHAIN_NETWORK is testnet. On testnet, pay with test USDC from a wallet: run `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.0.0-test init` in a terminal.");
+    await expect(testnet.done).rejects.toThrow("Free checks are for BrainChain mainnet, and BRAINCHAIN_NETWORK is testnet. To grade now, set up a wallet: run `BRAINCHAIN_NETWORK=testnet npx -y brainchain-mcp@0.0.0-test init` in a terminal.");
     expect(testnet.requests).toEqual([]);
   });
 
