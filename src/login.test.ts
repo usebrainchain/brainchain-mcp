@@ -127,7 +127,7 @@ describe("login", () => {
     const { done, out, saved } = run({ me: { reason: "unavailable", error: "GitHub could not be reached to check your sign-in, and no free check was used. Try again in a minute." } });
     expect(await done).toBe(0);
     expect(saved).toEqual([SIGNED_IN]);
-    expect(out[2]).toContain("Signed in as your GitHub account, and the sign-in is saved. BrainChain could not say just now how many free checks you have left: ask your agent to grade work with brainchain_grade, and its reply will say.");
+    expect(out[2]).toContain("Signed in with GitHub, and the sign-in is saved. The number of free checks left could not be read just now; your agent's first brainchain_grade reply will show it.");
     expect(out[2]).not.toMatch(/try again|run login/i);
   });
 
@@ -153,7 +153,7 @@ describe("login", () => {
   it("blames the service before the connection when the free checks cannot be reached", async () => {
     const down = run({ info: new TypeError("fetch failed") });
     await expect(down.done).rejects.toThrow(
-      /^BrainChain's free-check service could not be reached, so nothing was used\. Try again in a few minutes\. If it keeps failing, check your internet connection\.$/,
+      /^BrainChain's free-check service could not be reached, and no free check was used\. Try again in a few minutes\. If it keeps failing, check your internet connection\.$/,
     );
   });
 
@@ -206,7 +206,7 @@ describe("login run again", () => {
     const busy = run({ me: answers({ [KEPT]: limited }) }, {}, kept());
     await expect(busy.done).rejects.toThrow("Too many free-check requests from your network address. Your sign-in is kept as it was.");
     const down = run({ me: answers({ [KEPT]: new TypeError("fetch failed") }) }, {}, kept());
-    await expect(down.done).rejects.toThrow("BrainChain's free-check service could not be reached, so nothing was used.");
+    await expect(down.done).rejects.toThrow("BrainChain's free-check service could not be reached, and no free check was used.");
     expect([...busy.saved, ...down.saved]).toEqual([]);
   });
 

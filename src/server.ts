@@ -340,7 +340,7 @@ export function deskFor(env: Record<string, string | undefined>, version: string
   const refused = new Map<string, string>();
   if (problem) for (const name of [POST_TASK_NAME, GRADE_NAME, CALL_NAME, BOND_TASK_NAME, SIT_EXAM_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);
   if (keyProblem) for (const name of [BOND_STATUS_NAME, EXAM_SUBMIT_NAME]) refused.set(name, `${keyProblem} ${KEY_HELP}`);
-  // With no wallet at all, and BrainChain's own desk, a GitHub sign-in grades through the free checks. A wallet always pays itself.
+  // With no wallet at all, and BrainChain's own desk, a GitHub sign-in grades through the free checks. A server with a wallet always pays from it.
   let free: Wiring["free"];
   let signIn: string | undefined;
   if (!env.BRAINCHAIN_PAYER_KEY?.trim() && !env.BRAINCHAIN_PAYER_KEY_FILE?.trim() && !env.BRAINCHAIN_DESK_URL?.trim()) {
@@ -352,10 +352,10 @@ export function deskFor(env: Record<string, string | undefined>, version: string
         const commands = { init, login: cliCommand("login", config, version, {}, process.platform, freeSetting(url, config.name)) };
         free = freeGrader({ config, url, commands, login: read, track: desk.track, ...(fetchImpl ? { fetch: fetchImpl } : {}) });
         signIn =
-          `This server has no wallet, so its first ${FREE.perAccount} grades are free: BrainChain pays for them once your operator signs in with GitHub by running \`${commands.login}\` in a terminal, with an account older than ${FREE.minAccountDays} days. ` +
+          `This server has no wallet. BrainChain pays for ${FREE.perAccount} free checks per GitHub account older than ${FREE.minAccountDays} days: your operator signs in by running \`${commands.login}\` in a terminal. ` +
           `After those, each grade costs ${config.terms.gradeCost} whatever the verdict, paid from a wallet set up with \`${init}\`.`;
       } else {
-        // No free checks here, but a sign-in made for others is named, so the refusal does not read as if login did nothing.
+        // No free checks here, but a sign-in made for another free-check service is named, so the refusal does not read as if login did nothing.
         free = async (request) => {
           const kept = read();
           if (kept) throw new Error(signedInElsewhere(kept, config, undefined, init));
@@ -500,7 +500,7 @@ export function createServer(env: Record<string, string | undefined>, version: s
   ];
   const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {}, resources: { subscribe: true } }, instructions: INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
-  // Only the grade tool takes free checks: a call is recorded under the wallet that paid for it, so it needs a wallet of its own.
+  // Only brainchain_grade takes free checks. brainchain_call records each call under the wallet that paid, so it needs this server's own.
   const gradeDesk = free ? { ...desk, grade: free } : desk;
   server.setRequestHandler(CallToolRequestSchema, (request) => callTool(request.params.name === GRADE_NAME ? gradeDesk : desk, request.params.name, request.params.arguments, undefined, bonds, refused, readers));
   subscribeChanges(server, watchProblem ? undefined : watcher, options.fetch);

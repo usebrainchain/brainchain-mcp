@@ -68,7 +68,7 @@ export interface ServeLimits {
 }
 
 export const SERVE_LIMITS: ServeLimits = { perMinute: 120, freePerMinute: 20, watchesPerHour: 10, streamsPerAddress: 5, streams: 500, body: 4096, replay: 1000 };
-/** The largest grade `POST /free/grade` takes: a 32,000-unit brief and a 100,000-byte result, as JSON. */
+/** The largest grade `POST /free/grade` takes: a brief of 32,000 UTF-16 units and a 100,000-byte result, as JSON. */
 export const FREE_BODY = 300_000;
 export const KEEPALIVE_MS = 20_000;
 /** A stream is closed after this long; the client opens it again from Last-Event-ID, so no slot is held for good. */
@@ -351,7 +351,7 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
   async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const address = keyOf(clientOf(request, trustProxy));
     if ((request.url ?? "").length > 2048) throw new HttpError(414, "The address is too long.");
-    if (!perMinute.take(address, clock())) throw new HttpError(429, `This address has sent more than the ${limits.perMinute} requests a minute the watcher takes from one address. Wait a minute, then try again.`);
+    if (!perMinute.take(address, clock())) throw new HttpError(429, `Too many requests from your network address: the watcher takes ${limits.perMinute} a minute from one address. Wait a minute, then try again.`);
     const url = new URL(request.url ?? "/", "http://watcher");
     const method = request.method ?? "GET";
     const reading = method === "GET" || method === "HEAD";
@@ -423,8 +423,8 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       if (!status) throw gone();
       return send(response, 200, status);
     }
-    const free = ["/free", "/free/me", "/free/grade"].includes(url.pathname);
-    if (free && !sponsor) throw new HttpError(404, "This watcher gives no free checks.");
+    const freeRoute = ["/free", "/free/me", "/free/grade"].includes(url.pathname);
+    if (freeRoute && !sponsor) throw new HttpError(404, "This watcher gives no free checks.");
     if (sponsor && url.pathname === "/free" && reading) return send(response, 200, sponsor.info(), OPEN);
     if (sponsor && ((url.pathname === "/free/me" && reading) || (url.pathname === "/free/grade" && method === "POST"))) {
       if (!freePerMinute.take(address, clock())) {
@@ -436,8 +436,9 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       const { status, body } = url.pathname === "/free/me" ? await sponsor.me(token) : await sponsor.grade(token, await json(request, FREE_BODY), url.searchParams.get("network"));
       return send(response, status, body);
     }
-    if (["/events", "/events/stream", "/pools", "/robinhood/names", "/calls", "/health", "/health/live", "/watches"].includes(url.pathname) || free || id !== undefined || grade !== undefined) throw new HttpError(405, "That method is not served here.");
-    throw new HttpError(404, "Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls?after=, GET /calls/:grade, GET /health, POST /watches and GET or DELETE /watches/:id.");
+    if (["/events", "/events/stream", "/pools", "/robinhood/names", "/calls", "/health", "/health/live", "/watches"].includes(url.pathname) || freeRoute || id !== undefined || grade !== undefined) throw new HttpError(405, "That method is not served here.");
+    const freeRoutes = sponsor ? ", GET /free, GET /free/me, POST /free/grade" : "";
+    throw new HttpError(404, `Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls?after=, GET /calls/:grade, GET /health${freeRoutes}, POST /watches and GET or DELETE /watches/:id.`);
   }
 
   const server = createServer((request, response) => {
@@ -450,7 +451,7 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       return send(response, 500, {
         error: grading
           ? "The free check failed on BrainChain's side. Send the same grade again in a minute: if it went through, you get it back without using another free check."
-          : "The watcher failed on its side while answering. Try again in a minute.",
+          : "The watcher hit an error answering that. Try again in a minute.",
       });
     });
   });

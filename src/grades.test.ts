@@ -104,7 +104,7 @@ describe("reading a grade", () => {
     expect(await read({ id: "465" })).toBe("BrainChain accepts the work at 97%.");
   });
 
-  it("says why a rejection is below what levels shows: the lower grader, or checks the result failed", async () => {
+  it("says why a pass probability differs from what levels shows: the panel's probability counts, or the result failed checks", async () => {
     const levels = [
       { level: "Does everything the brief asks", probability: 0.12, passes: true },
       { level: "Does what the brief asks, with minor gaps", probability: 0.05, passes: true },
@@ -114,13 +114,14 @@ describe("reading a grade", () => {
     const read = async (passProbability: number, extra: Record<string, unknown>) =>
       ((await reader(Response.json({ grade: id, state: "graded", accepted: false, passProbability, bar: 0.8, levels, decision: { id: "466", record: "https://x/r.json" }, ...extra })).getGrade(id)) as { next: string }).next;
     expect(await read(0, { second: second(0) })).toBe(
-      "BrainChain does not accept the work at 0%. Jev put 17% on a passing level, as levels shows. The second grader (deepseek/deepseek-v4.1-flash-1017) put 0%, and the lower of the two counts. The record is at decision.record.",
+      "BrainChain does not accept the work at 0%. Jev put 17% on a passing level, as levels shows, and the second grader (deepseek/deepseek-v4.1-flash-1017) 0%. The grading panel's probability, 0%, is the one that counts. The record is at decision.record.",
     );
     expect(await read(0, { second: second(0.4) })).toBe(
       "BrainChain does not accept the work at 0%. Jev put 17% on a passing level and the second grader (deepseek/deepseek-v4.1-flash-1017) 40%, but the result failed the checks in the brief, which counts as 0%. The record is at decision.record.",
     );
     expect(await read(0, {})).toBe("BrainChain does not accept the work at 0%. Jev put 17% on a passing level, but the result failed the checks in the brief, which counts as 0%. The record is at decision.record.");
     expect(await read(0.17, { second: second(0.3) })).toBe("BrainChain does not accept the work at 17%. The record is at decision.record.");
+    expect(await read(0.25, {})).toBe("BrainChain does not accept the work at 25%. Jev put 17% on a passing level, as levels shows. The grading panel's probability, 25%, is the one that counts. The record is at decision.record.");
   });
 
   it("refuses an id the desk does not know, without saying it was never charged", async () => {

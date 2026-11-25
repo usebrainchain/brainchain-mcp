@@ -100,7 +100,7 @@ describe("a free grade", () => {
       [403, "young", "Free checks are for GitHub accounts older than 30 days. @fresh was created on 2026-11-10, so it qualifies on 2026-12-10.", "To grade today"],
       [429, "daily", "Today's free checks are all taken. More open at 00:00 UTC.", "To grade now"],
       [403, "total", "All of BrainChain's free checks have been given out.", "To grade now"],
-      [503, "paused", "BrainChain's free checks are paused for now.", "To grade now"],
+      [503, "paused", "BrainChain's free checks are paused. Try again later.", "To grade now"],
     ] as const) {
       await expect(grade(checks(() => Response.json({ reason, error }, { status })).fetchImpl)(request)).rejects.toThrow(`${error} ${lead}, ${SET_UP}`);
     }
@@ -111,7 +111,7 @@ describe("a free grade", () => {
   it("asks for a sign-in or a wallet when there is no sign-in, and sends nothing", async () => {
     const { fetchImpl, sent } = checks();
     await expect(grade(fetchImpl, () => undefined)(request)).rejects.toThrow(
-      `This server has no wallet to pay for grades. To grade 2 times free, sign in with GitHub: run \`npx -y brainchain-mcp@0.0.0-test login\` in a terminal. To pay as you go, run \`${INIT}\` in a terminal.`,
+      `This server has no wallet to pay for grades. For 2 free checks, sign in with GitHub: run \`npx -y brainchain-mcp@0.0.0-test login\` in a terminal. To pay as you go, run \`${INIT}\` in a terminal.`,
     );
     expect(sent).toEqual([]);
   });
@@ -120,7 +120,7 @@ describe("a free grade", () => {
     const { fetchImpl, sent } = checks();
     const elsewhere: Login = { token: TOKEN, url: "http://127.0.0.1:8787/", network: "testnet" };
     await expect(grade(fetchImpl, () => elsewhere)(request)).rejects.toThrow(
-      "This server has no wallet, and the GitHub sign-in on this machine is for the free checks at http://127.0.0.1:8787 on testnet, while this server asks BrainChain's free checks on mainnet. To grade free, add the server again with the line login printed",
+      "This server has no wallet, and the GitHub sign-in on this machine is for the free checks at http://127.0.0.1:8787 on testnet, but this server uses BrainChain's free checks on mainnet. To use your free checks, add the server again with the line `login` printed",
     );
     expect(sent).toEqual([]);
   });
@@ -142,7 +142,7 @@ describe("a server with no wallet", () => {
     const client = await connect({}, { fetch: fetchImpl, login: () => SIGNED_IN });
     const tool = (await client.listTools()).tools.find((t) => t.name === GRADE_NAME)!;
     expect(tool.description).toContain(
-      "This server has no wallet, so its first 2 grades are free: BrainChain pays for them once your operator signs in with GitHub by running `npx -y brainchain-mcp@0.0.0-test login` in a terminal, with an account older than 30 days. After those, each grade costs 0.25 USDC whatever the verdict, paid from a wallet set up with `npx -y brainchain-mcp@0.0.0-test init`.",
+      "This server has no wallet. BrainChain pays for 2 free checks per GitHub account older than 30 days: your operator signs in by running `npx -y brainchain-mcp@0.0.0-test login` in a terminal. After those, each grade costs 0.25 USDC whatever the verdict, paid from a wallet set up with `npx -y brainchain-mcp@0.0.0-test init`.",
     );
     expect(tool.description).not.toContain("paid from this server's wallet");
     const result = await client.callTool({ name: GRADE_NAME, arguments: request });
@@ -222,7 +222,7 @@ describe("a server with a wallet, or on testnet", () => {
     const result = await client.callTool({ name: GRADE_NAME, arguments: request });
     expect(result.isError).toBe(true);
     expect(text(result)).toContain(
-      "This server has no wallet, and the GitHub sign-in on this machine is for the free checks at http://127.0.0.1:8787 on testnet, while this server asks none: BRAINCHAIN_FREE_URL is not set, and testnet has no free checks of its own. To grade free, add the server again with the line login printed, or run login with this server's BRAINCHAIN_NETWORK and BRAINCHAIN_FREE_URL.",
+      "This server has no wallet, and the GitHub sign-in on this machine is for the free checks at http://127.0.0.1:8787 on testnet, but this server uses none: BRAINCHAIN_FREE_URL is not set, and testnet has no free checks of its own. To use your free checks, add the server again with the line `login` printed, or run `login` with this server's BRAINCHAIN_NETWORK and BRAINCHAIN_FREE_URL.",
     );
     expect(text(result)).not.toContain("No paying key is set");
     expect(sent).toEqual([]);

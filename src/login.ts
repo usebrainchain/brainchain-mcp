@@ -5,7 +5,7 @@ import { cliCommand } from "./server.js";
 
 const GITHUB = "https://github.com";
 const GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-const UNREACHABLE = "BrainChain's free-check service could not be reached, so nothing was used. Try again in a few minutes. If it keeps failing, check your internet connection.";
+const UNREACHABLE = "BrainChain's free-check service could not be reached, and no free check was used. Try again in a few minutes. If it keeps failing, check your internet connection.";
 
 export interface LoginOptions {
   fetch?: typeof fetch;
@@ -19,7 +19,7 @@ export interface LoginOptions {
   again?: boolean;
 }
 
-/** GitHub answers the device flow's errors with 200 and an `error` field, and its successes with the fields it names. */
+/** GitHub answers device-flow errors with 200 and an `error` field, so the status is not checked. */
 async function post(fetchImpl: typeof fetch, url: string, form: Record<string, string>): Promise<Record<string, unknown>> {
   let response: Response;
   try {
@@ -39,16 +39,17 @@ function signInFailed(code: unknown, description: unknown, init: string): Error 
   if (code === "device_flow_disabled" || code === "incorrect_client_credentials" || code === "Not Found") {
     return new Error(`BrainChain's GitHub sign-in is not open right now. Try again later, or set up a wallet with \`${init}\`.`);
   }
-  return new Error(`GitHub refused the sign-in${typeof description === "string" && description ? `: ${description.replace(/[.!?]+$/, "")}` : typeof code === "string" ? ` (${code})` : ""}. Run login again.`);
+  const detail = typeof description === "string" && description ? `: ${description.replace(/[.!?]+$/, "")}` : typeof code === "string" ? ` (${code})` : "";
+  return new Error(`GitHub refused the sign-in${detail}. Run login again.`);
 }
 
 /** The account's free checks as the service tells them, and login's exit code: 1 for an account too new to have any yet. */
 function standing(status: Record<string, unknown> | undefined, lead: string, config: Config, init: string): { line: string; code: number } {
-  const who = typeof status?.login === "string" ? `@${status.login}` : "your GitHub account";
+  const who = typeof status?.login === "string" ? `as @${status.login}` : "with GitHub";
   if (typeof status?.error === "string" && needsWallet(status.reason)) return { line: `${lead} ${who}. ${status.error} ${walletNext(config, init, status.reason)}`, code: status.reason === "young" ? 1 : 0 };
   const left = typeof status?.left === "number" && typeof status.error !== "string" ? status.left : undefined;
   if (left === undefined) {
-    return { line: `${lead} ${who}, and the sign-in is saved. BrainChain could not say just now how many free checks you have left: ask your agent to grade work with brainchain_grade, and its reply will say.`, code: 0 };
+    return { line: `${lead} ${who}, and the sign-in is saved. The number of free checks left could not be read just now; your agent's first brainchain_grade reply will show it.`, code: 0 };
   }
   return { line: `${lead} ${who}. You have ${left} free ${left === 1 ? "check" : "checks"} left: ask your agent to grade work with brainchain_grade.`, code: 0 };
 }
@@ -76,7 +77,7 @@ export async function runLogin(env: Record<string, string | undefined>, version:
     throw new Error(UNREACHABLE);
   }
   if (!info || typeof info.clientId !== "string" || typeof info.perAccount !== "number" || info.open !== true) throw new Error(`BrainChain's free checks are not open right now. ${walletNext(config, init, "closed")}`);
-  if (info.network !== config.name) throw new Error(`Those free checks pay for grades on BrainChain ${String(info.network)}, and BRAINCHAIN_NETWORK is ${config.name}.`);
+  if (info.network !== config.name) throw new Error(`The free checks at ${base} pay for grades on BrainChain ${String(info.network)}, and BRAINCHAIN_NETWORK is ${config.name}. Set BRAINCHAIN_NETWORK=${String(info.network)}, or point BRAINCHAIN_FREE_URL at free checks for ${config.name}.`);
   const me = (token: string) => fetchImpl(`${base}/free/me`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000) }).then((response) => response.json().catch(() => ({})) as Promise<Record<string, unknown>>);
 
   const kept = again ? undefined : read();
@@ -86,7 +87,7 @@ export async function runLogin(env: Record<string, string | undefined>, version:
     });
     // Only a sign-in GitHub no longer takes is replaced; any other refusal is said as it is, and the sign-in kept.
     if (typeof status.login === "string") {
-      const { line, code } = standing(status, "Already signed in as", config, init);
+      const { line, code } = standing(status, "Already signed in", config, init);
       log([line, "", `To sign in with another GitHub account, run \`${cliCommand("login --again", config, version, {}, platform, settings)}\`.`, "", ...install].join("\n"));
       return code;
     }
@@ -113,7 +114,7 @@ export async function runLogin(env: Record<string, string | undefined>, version:
   }
   save({ token, url: url.href, network: config.name });
 
-  const { line, code } = standing(await me(token).catch(() => undefined), "Signed in as", config, init);
+  const { line, code } = standing(await me(token).catch(() => undefined), "Signed in", config, init);
   log(
     [
       line,

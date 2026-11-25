@@ -17,7 +17,7 @@ const GITHUB_API = "https://api.github.com";
 const DAY_MS = 86_400_000;
 /** A grade the desk has no record of this long after its check was taken was never charged: no authorization lasts that long. */
 const SETTLE_MS = REPOST_AFTER_MINUTES * 60_000;
-/** How long the checks stay paused once the wallet would not pay, being empty or over its own limits. */
+/** How long the checks stay paused after the wallet refuses a payment because it is empty or over its own limits. */
 export const PAUSE_MS = 10 * 60_000;
 
 export interface Answer {
@@ -71,12 +71,12 @@ interface Account {
 const answer = (status: number, reason: string, error: string): Answer => ({ status, body: { reason, error } });
 
 export const SIGN_IN = answer(401, "login", `Sign in with GitHub first: run \`${LOGIN_COMMAND}\` in a terminal.`);
-const PAUSED = "BrainChain's free checks are paused for now.";
+const PAUSED = "BrainChain's free checks are paused. Try again later.";
 
 /**
  * The sponsor's payment settings: USDC on Base, exactly a grade's price at a time. What caps the spending is the counts
- * file, which survives a restart, and the wallet's balance. The daily limit, kept on disk, also stops a day at its checks;
- * the budget lives in memory and starts again at every restart, so it bounds one run only.
+ * file, which survives a restart, and the wallet's balance. The daily limit, kept on disk, also caps a day's spending at
+ * its checks; the budget lives in memory and resets on restart, so it bounds one run only.
  */
 export function sponsorConfig(network: string | undefined, dir: string): Config {
   return resolveConfig({
@@ -125,7 +125,7 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
     counts.total = Math.max(0, counts.total + by);
   }
 
-  /** Counted and written with its entry before the payment is signed, and in one turn, so two requests at once cannot both take the last check. */
+  /** Counted and saved synchronously, before the payment is signed, so two requests at once cannot both take the last check. */
   function take(account: string, hash: string): Entry {
     const entry: Entry = { account, hash, at: now() };
     count(account, dayOf(entry.at), 1);
@@ -140,7 +140,7 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
     return entry;
   }
 
-  /** Gives a check back to its account, the day it was taken and the total, once, for a grade that was never charged. */
+  /** For a grade that was never charged. A second call for the same entry does nothing. */
   function give(entry: Entry): void {
     const at = counts.grades.indexOf(entry);
     if (at === -1) return;
@@ -186,7 +186,7 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
 
   /** A request the account sent before, answered from its entry without signing again. */
   async function repeat(entry: Entry, read: Map<string, unknown>): Promise<Answer> {
-    if (!entry.grade) return answer(409, "pending", "This grade is already being paid for. Send it again in a few minutes to read it; that uses no other free check.");
+    if (!entry.grade) return answer(409, "pending", "This grade is already being paid for. Send it again in a few minutes to read it; that does not use another free check.");
     const view = read.get(entry.grade) ?? (await desk.getGrade(entry.grade).catch(() => undefined));
     const known = view && typeof view === "object" ? view : { error: "The desk has no record of this grade yet.", done: false, next: "Read it with brainchain_get_grade in a minute.", retryAfterSeconds: 60 };
     return { status: 200, body: { ...known, grade: entry.grade, statusUrl: `${config.desk}/x402/grades/${entry.grade}`, duplicate: true, free: used(entry.account) } };
@@ -205,9 +205,10 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
       return answer(503, "unavailable", "GitHub could not be reached to check your sign-in, and no free check was used. Try again in a minute.");
     }
     if (response.status === 401) return answer(401, "login", `Your GitHub sign-in has expired or was revoked. Run \`${LOGIN_COMMAND}\` again.`);
-    // Checked against GitHub's documented X-OAuth-Client-Id; confirm it on one real response once BrainChain's OAuth app exists.
+    // GitHub names the app that issued a token in X-OAuth-Client-Id (seen on /user for a device-flow token from BrainChain's
+    // app on 25 Nov 2026), so a personal token or another app's token is refused.
     if (response.ok && response.headers.get("x-oauth-client-id") !== clientId) {
-      return answer(401, "login", `That GitHub sign-in was not made with BrainChain's login. Run \`${LOGIN_COMMAND}\` to sign in, then try again.`);
+      return answer(401, "login", `That GitHub sign-in was not made through brainchain-mcp login. Run \`${LOGIN_COMMAND}\` to sign in, then try again.`);
     }
     const user = response.ok ? ((await response.json().catch(() => undefined)) as Record<string, unknown> | undefined) : undefined;
     const createdAt = Date.parse(String(user?.created_at));
@@ -243,7 +244,7 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
 
     async grade(token, body, network) {
       if (network !== null && network !== config.name) {
-        return answer(409, "network", `These free checks pay for grades on BrainChain ${config.name}, and this server is set to ${network}.`);
+        return answer(409, "network", `These free checks pay for grades on BrainChain ${config.name}, and this server is set to ${network}. To use them, set BRAINCHAIN_NETWORK=${config.name} in this server's environment.`);
       }
       if (!body || typeof body !== "object" || Array.isArray(body)) return answer(400, "request", "Send the grade as a JSON object: brief, result, and optionally title, levels and pass.");
       let request;
@@ -291,7 +292,8 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
 
 /**
  * The sponsor a watcher runs, from BRAINCHAIN_SPONSOR_KEY_FILE (the paying wallet's key) and GITHUB_CLIENT_ID (the GitHub
- * OAuth app's client id; device flow needs no secret). Neither set is no sponsor. Throws what is wrong with either.
+ * OAuth app's client id; device flow needs no secret). Returns undefined when neither is set; throws when only one is set
+ * or either is unusable.
  */
 export function sponsorFrom(env: Record<string, string | undefined>, dir: string, options: Pick<SponsorOptions, "fetch" | "now" | "say"> = {}): Sponsor | undefined {
   const file = env.BRAINCHAIN_SPONSOR_KEY_FILE?.trim();

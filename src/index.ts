@@ -35,7 +35,8 @@ Usage:
   brainchain-mcp login [--again] Sign in with GitHub for free checks: BrainChain pays for the first ${FREE.perAccount} grades of an
                                  account older than ${FREE.minAccountDays} days, for a server with no paying key. Shows a code to
                                  approve on github.com and keeps the sign-in in ${LOGIN_FILE}. Run it again to see who
-                                 is signed in and how many free checks are left; --again signs in anew.
+                                 is signed in and how many free checks are left; --again replaces the sign-in, such as
+                                 with another account.
   brainchain-mcp approve [USDG]  Let Permit2 spend the paying wallet's USDG. Run it with BRAINCHAIN_PAY_ON=robinhood.
                                  Default 100 USDG; pass a number, "max", or 0 to revoke.
                                  Not needed when paying in USDC on Base.

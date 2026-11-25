@@ -150,7 +150,7 @@ describe("free checks", () => {
     now += 86_400_000;
     expect((await s.me(tokens[30]!)).body).toEqual({ login: "u30", left: 2 });
     // The wallet's own daily limit, kept on the real clock, still holds 15 USDC for today: a fault in the counts cannot spend more.
-    expect(await s.grade(tokens[30]!, nth(1000), "mainnet")).toEqual({ status: 503, body: { reason: "paused", error: "BrainChain's free checks are paused for now." } });
+    expect(await s.grade(tokens[30]!, nth(1000), "mainnet")).toEqual({ status: 503, body: { reason: "paused", error: "BrainChain's free checks are paused. Try again later." } });
     expect(payments).toHaveLength(FREE.perDay);
     expect((await s.me(tokens[30]!)).body).toMatchObject({ left: 2 });
   });
@@ -185,8 +185,8 @@ describe("free checks", () => {
   it("pause when the wallet cannot pay, give the check back, and open again after the pause", async () => {
     let now = NOW;
     const { sponsor: s, logged, payments } = sponsor({ now: () => now, paid: () => Response.json({ error: "insufficient_funds" }, { status: 402 }) });
-    expect(await s.grade(TOKEN, nth(1), "mainnet")).toEqual({ status: 503, body: { reason: "paused", error: "BrainChain's free checks are paused for now." } });
-    expect((await s.me(TOKEN)).body).toEqual({ login: "octocat", left: 2, reason: "paused", error: "BrainChain's free checks are paused for now." });
+    expect(await s.grade(TOKEN, nth(1), "mainnet")).toEqual({ status: 503, body: { reason: "paused", error: "BrainChain's free checks are paused. Try again later." } });
+    expect((await s.me(TOKEN)).body).toEqual({ login: "octocat", left: 2, reason: "paused", error: "BrainChain's free checks are paused. Try again later." });
     expect(s.info()).toMatchObject({ open: false, paused: true });
     expect((await s.grade(TOKEN, nth(2), "mainnet")).body.reason).toBe("paused");
     expect(payments).toHaveLength(1);
@@ -195,7 +195,7 @@ describe("free checks", () => {
     expect(s.info()).toMatchObject({ open: true, paused: false });
   });
 
-  it("treat a desk that turns one grade away as a moment's trouble, not a pause", async () => {
+  it("answer 503 without pausing when the desk turns one grade away", async () => {
     const { sponsor: s } = sponsor({ paid: () => Response.json({ error: "bad request" }, { status: 400 }) });
     expect((await s.grade(TOKEN, request, "mainnet")).body).toEqual({ reason: "unavailable", error: "The free check could not be paid just now, and none was used. Try again in a few minutes." });
     expect(s.info()).toMatchObject({ open: true, paused: false });
@@ -211,20 +211,20 @@ describe("free checks", () => {
     expect(payments).toHaveLength(0);
   });
 
-  it("take only sign-ins made with BrainChain's own GitHub app, and none GitHub names no app for", async () => {
+  it("take only sign-ins made with BrainChain's GitHub app, and refuse personal tokens", async () => {
     const other = "gho_otherappotherappotherappotherapp00";
     const personal = "github_pat_11AAAAAAA0personalpersonal";
     const { sponsor: s, payments } = sponsor({
       users: { [other]: { id: 7, login: "elsewhere", created_at: OLD, app: "Iv1.someoneelse00" }, [personal]: { id: 8, login: "pat", created_at: OLD, app: null } },
     });
-    const refused = { status: 401, body: { reason: "login", error: "That GitHub sign-in was not made with BrainChain's login. Run `npx -y brainchain-mcp login` to sign in, then try again." } };
+    const refused = { status: 401, body: { reason: "login", error: "That GitHub sign-in was not made through brainchain-mcp login. Run `npx -y brainchain-mcp login` to sign in, then try again." } };
     expect(await s.grade(other, request, "mainnet")).toEqual(refused);
     expect(await s.grade(personal, request, "mainnet")).toEqual(refused);
     expect(await s.me(personal)).toEqual(refused);
     expect(payments).toHaveLength(0);
   });
 
-  it("say who is signed in and what is left, using nothing", async () => {
+  it("say who is signed in and what is left, using no check", async () => {
     const { sponsor: s, payments } = sponsor();
     expect(await s.me(TOKEN)).toEqual({ status: 200, body: { login: "octocat", left: 2 } });
     expect(s.info()).toEqual({ network: "mainnet", chain: "Base", clientId: CLIENT, ...FREE, open: true, paused: false });
@@ -299,7 +299,7 @@ describe("a free check the desk has not settled", () => {
     const { sponsor: s, payments } = sponsor();
     const both = await Promise.all([s.grade(TOKEN, request, "mainnet"), s.grade(TOKEN, request, "mainnet")]);
     expect(both.map(({ status }) => status).sort()).toEqual([200, 409]);
-    expect(both.find(({ status }) => status === 409)!.body).toEqual({ reason: "pending", error: "This grade is already being paid for. Send it again in a few minutes to read it; that uses no other free check." });
+    expect(both.find(({ status }) => status === 409)!.body).toEqual({ reason: "pending", error: "This grade is already being paid for. Send it again in a few minutes to read it; that does not use another free check." });
     expect(payments).toHaveLength(1);
   });
 });
@@ -348,6 +348,7 @@ describe("the watcher's free routes", () => {
     expect(await graded.json()).toMatchObject({ state: "graded", free: { used: 1, left: 1 } });
     expect((await post(base, "/free/grade?network=testnet", nth(2), `Bearer ${TOKEN}`)).status).toBe(409);
     expect((await fetch(`${base}/free/grade`, { headers: { authorization: `Bearer ${TOKEN}` } })).status).toBe(405);
+    expect(((await (await fetch(`${base}/nothing`)).json()) as { error: string }).error).toContain("GET /health, GET /free, GET /free/me, POST /free/grade, POST /watches");
   });
 
   it("take a grade up to the desk's own limits, and nothing larger", async () => {
@@ -378,7 +379,7 @@ describe("the watcher's free routes", () => {
     expect(github).toEqual([longest]);
   });
 
-  it("hold each address to a few sign-in requests a minute of their own, apart from the shared limit", async () => {
+  it("hold each address to its own limit on free-check requests, apart from the shared limit", async () => {
     const { sponsor: s } = sponsor();
     const base = await serving(s, { ...SERVE_LIMITS, freePerMinute: 2 });
     const me = () => fetch(`${base}/free/me`, { headers: { authorization: `Bearer ${TOKEN}` } });
@@ -392,7 +393,7 @@ describe("the watcher's free routes", () => {
     expect([(await fetch(`${base}/free`)).status, (await fetch(`${base}/health/live`)).status]).toEqual([200, 200]);
   });
 
-  it("take 20 sign-in requests a minute from one address by default, enough for login and grading from a shared office", async () => {
+  it("take 20 free-check requests a minute from one address by default, enough for login and grading from a shared office", async () => {
     const { sponsor: s } = sponsor();
     const base = await serving(s);
     const me = () => fetch(`${base}/free/me`, { headers: { authorization: `Bearer ${TOKEN}` } });
@@ -423,7 +424,7 @@ describe("the watcher's free routes", () => {
     const base = await serving(broken);
     const grade = await post(base, "/free/grade", request, `Bearer ${TOKEN}`);
     expect([grade.status, await grade.json()]).toEqual([500, { error: "The free check failed on BrainChain's side. Send the same grade again in a minute: if it went through, you get it back without using another free check." }]);
-    expect(await (await fetch(`${base}/free/me`, { headers: { authorization: `Bearer ${TOKEN}` } })).json()).toEqual({ error: "The watcher failed on its side while answering. Try again in a minute." });
+    expect(await (await fetch(`${base}/free/me`, { headers: { authorization: `Bearer ${TOKEN}` } })).json()).toEqual({ error: "The watcher hit an error answering that. Try again in a minute." });
   });
 
   it("answer 404 on a watcher that gives no free checks", async () => {
@@ -431,5 +432,6 @@ describe("the watcher's free routes", () => {
     const response = await fetch(`${base}/free`);
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "This watcher gives no free checks." });
+    expect(((await (await fetch(`${base}/nothing`)).json()) as { error: string }).error).not.toContain("/free");
   });
 });
