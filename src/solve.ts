@@ -161,10 +161,17 @@ export async function runSolve(args: readonly string[], options: SolveOptions): 
   log(`Sending ${path} to be checked. This costs ${cost}${wallet ? ` from ${wallet}` : ""} on ${chain}, whatever the verdict.`);
   let reply = (await desk.grade({ ...problem.request, result })) as Record<string, unknown>;
   const id = typeof reply.grade === "string" ? reply.grade : undefined;
-  // A verdict that takes longer than the desk's first reply is read until it is in, for up to fifteen minutes.
-  for (const until = options.now() + 15 * 60_000; id && reply.done === false && reply.possiblyCharged !== true && options.now() < until; ) {
+  // A verdict that takes longer than the desk's first reply is read until it is in, for up to fifteen minutes. That
+  // includes a reply that timed out after paying: reading the grade is free, and the desk says when it was never charged.
+  if (id && reply.state !== "graded" && reply.done !== true) log("Waiting for the verdict. Checking and grading can take a few minutes.");
+  for (const until = options.now() + 15 * 60_000; id && reply.state !== "graded" && reply.done !== true && options.now() < until; ) {
     await options.wait((typeof reply.retryAfterSeconds === "number" ? reply.retryAfterSeconds : 20) * 1000);
-    reply = (await desk.getGrade(id)) as Record<string, unknown>;
+    try {
+      reply = (await desk.getGrade(id)) as Record<string, unknown>;
+    } catch (error) {
+      log(error instanceof Error ? error.message : String(error));
+      return 2;
+    }
   }
   if (reply.state !== "graded") {
     log(typeof reply.error === "string" ? reply.error : `The verdict is not in yet${typeof reply.state === "string" ? ` (state: ${reply.state})` : ""}.`);

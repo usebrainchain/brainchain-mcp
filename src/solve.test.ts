@@ -176,14 +176,31 @@ describe("runSolve", () => {
     expect(w.lines).toContain("Accepted. Decision 5123: https://usebrainchain.com/decision?id=5123");
   });
 
-  it("exits 2 and says not to send again when the payment may have gone through", async () => {
+  it("keeps reading a grade whose first reply timed out after paying, and reports its verdict", async () => {
+    const timedOut = { grade: GRADE, possiblyCharged: true, done: false, error: "The desk did not confirm the grade (timeout). The payment may have gone through. Read it with brainchain_get_grade." };
+    const w = world({ reply: timedOut, later: [{ grade: GRADE, error: "The desk has no grade with this id.", done: false, retryAfterSeconds: 60 }, graded(true, { outcome: "passed", output: "valid set of 368 words; record to beat: 367\n" })] });
+    expect(await runSolve([SLUG, "answer.json"], w.solve)).toBe(0);
+    expect(w.grade).toHaveBeenCalledOnce();
+    expect(w.getGrade).toHaveBeenCalledTimes(2);
+    expect(w.lines).toContain("Waiting for the verdict. Checking and grading can take a few minutes.");
+    expect(w.lines).toContain("Accepted. Decision 5123: https://usebrainchain.com/decision?id=5123");
+  });
+
+  it("exits 2 and says not to send again when the verdict is still not in after fifteen minutes", async () => {
     const w = world({ reply: { grade: GRADE, possiblyCharged: true, done: false, error: "The desk did not confirm the grade (timeout). The payment may have gone through. Read it with brainchain_get_grade." } });
     expect(await runSolve([SLUG, "answer.json"], w.solve)).toBe(2);
-    expect(w.getGrade).not.toHaveBeenCalled();
-    expect(w.lines.slice(2)).toEqual([
-      "The desk did not confirm the grade (timeout). The payment may have gone through. Read it with brainchain_get_grade.",
+    expect(w.grade).toHaveBeenCalledOnce();
+    expect(w.lines.slice(-2)).toEqual([
+      "The verdict is not in yet.",
       `Do not send the answer again. Read the verdict at https://brain.usebrainchain.com/x402/grades/${GRADE}`,
     ]);
+  });
+
+  it("stops when the desk says a timed-out answer was never charged", async () => {
+    const w = world({ reply: { grade: GRADE, possiblyCharged: true, done: false, error: "timeout" } });
+    w.getGrade.mockRejectedValueOnce(new Error("The desk has no grade with this id. This server sent it more than 10 minutes ago, so it was never charged, and it can be sent again."));
+    expect(await runSolve([SLUG, "answer.json"], w.solve)).toBe(2);
+    expect(w.lines.at(-1)).toContain("never charged, and it can be sent again");
   });
 
   it("refuses before paying: an unknown problem, a file that is not JSON, and an answer too long to check", async () => {
