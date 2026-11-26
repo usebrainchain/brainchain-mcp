@@ -1021,21 +1021,23 @@ const percent = (p: number) => `${Math.round(p * 100)}%`;
 const fields = (value: unknown): Record<string, unknown> => (value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {});
 
 /**
- * Why the pass probability differs from what `levels` shows. The grading panel's probability counts, whichever rule
- * combines its members, and it is zero when the result failed checks the brief carries. The reply carries no reasons,
- * so only those two are said.
+ * Why the pass probability differs from what `levels` shows. Work that failed the brief's tests counts as 0%, which is
+ * said first whatever the graders put; otherwise the grading panel's probability counts, whichever rule combines its
+ * members. The reply carries no other reasons.
  */
 function basis(view: Record<string, unknown>, pass: number): string {
   const levels = Array.isArray(view.levels) ? view.levels.map(fields) : [];
-  if (!levels.some((level) => level.passes === true)) return "";
-  const own = levels.reduce((sum, level) => sum + (level.passes === true && typeof level.probability === "number" ? level.probability : 0), 0);
-  if (Math.abs(pass - own) < 0.005) return "";
+  const own = levels.some((level) => level.passes === true)
+    ? levels.reduce((sum, level) => sum + (level.passes === true && typeof level.probability === "number" ? level.probability : 0), 0)
+    : undefined;
   const second = fields(view.second);
   const other = typeof second.passProbability === "number" ? second.passProbability : undefined;
   const named = typeof second.model === "string" ? ` (${second.model})` : "";
-  if (pass === 0 && Math.min(own, other ?? own) >= 0.005) {
-    return ` Jev put ${percent(own)} on a passing level${other === undefined ? "" : ` and the second grader${named} ${percent(other)}`}, but the result failed the checks in the brief, which counts as 0%.`;
-  }
+  const graders = own === undefined ? "" : ` Jev put ${percent(own)} on a passing level${other === undefined ? "" : ` and the second grader${named} ${percent(other)}`}`;
+  if (fields(view.checks).outcome === "failed") return ` The brief's tests failed on the delivered work, which counts as 0%.${graders && `${graders}.`}`;
+  if (own === undefined || Math.abs(pass - own) < 0.005) return "";
+  // A reply from before the desk named its test run: a pass probability of 0 against the graders' own is a failed run.
+  if (pass === 0 && Math.min(own, other ?? own) >= 0.005) return `${graders}, but the result failed the brief's tests, which counts as 0%.`;
   return ` Jev put ${percent(own)} on a passing level, as levels shows${other === undefined ? "" : `, and the second grader${named} ${percent(other)}`}. The grading panel's probability, ${percent(pass)}, is the one that counts.`;
 }
 

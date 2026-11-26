@@ -73,7 +73,8 @@ so and runs without them. BRAINCHAIN_SPONSOR_KEY_FILE names a file holding the p
 them, in USDC on Base (Base Sepolia with BRAINCHAIN_NETWORK=testnet). GITHUB_CLIENT_ID is the client id of the GitHub
 OAuth app people sign in with through brainchain-mcp login, with device flow on; it needs no secret. With both set, --serve
 also answers GET /free, GET /free/me and POST /free/grade, and pays for the first ${FREE.perAccount} grades of each GitHub
-account older than ${FREE.minAccountDays} days, at most ${FREE.perDay} a day and ${FREE.total} in all.`;
+account older than ${FREE.minAccountDays} days, at most ${FREE.perDay} a day and ${FREE.total} in all. BRAINCHAIN_FREE_DAY_CAPS sets
+other caps for listed UTC days, such as 2026-11-30=200,2026-12-01=200, and BRAINCHAIN_FREE_TOTAL replaces the ${FREE.total}.`;
 
 /** The relay Discord deliveries go through, from BRAINCHAIN_WATCH_DISCORD_RELAY and its key, or none. */
 export function discordRelay(env: Record<string, string | undefined>): Relay | undefined {
