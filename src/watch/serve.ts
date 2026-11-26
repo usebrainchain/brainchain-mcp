@@ -1,7 +1,8 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { isIP } from "node:net";
+import { isIP, type AddressInfo } from "node:net";
 
+import type { McpHandler } from "../hosted.js";
 import { SIGN_IN, type Sponsor } from "../sponsor.js";
 import { BASES } from "./chain.js";
 import type { CallIndex } from "./calls.js";
@@ -56,6 +57,9 @@ export interface ServeLimits {
   perMinute: number;
   /** Of those, the requests one address can make to `GET /free/me` and `POST /free/grade` in a minute. */
   freePerMinute: number;
+  /** Of those, the requests one address can make to `POST /mcp` in a minute, and the largest body it takes, in bytes. */
+  mcpPerMinute: number;
+  mcpBody: number;
   /** Watches one address can make in an hour. */
   watchesPerHour: number;
   /** Streams one address can hold open, and streams in all. */
@@ -67,9 +71,12 @@ export interface ServeLimits {
   replay: number;
 }
 
-export const SERVE_LIMITS: ServeLimits = { perMinute: 120, freePerMinute: 20, watchesPerHour: 10, streamsPerAddress: 5, streams: 500, body: 4096, replay: 1000 };
+export const SERVE_LIMITS: ServeLimits = { perMinute: 120, freePerMinute: 20, mcpPerMinute: 30, mcpBody: 1_000_000, watchesPerHour: 10, streamsPerAddress: 5, streams: 500, body: 4096, replay: 1000 };
 /** The largest grade `POST /free/grade` takes: a brief of 32,000 UTF-16 units and a 100,000-byte result, as JSON. */
 export const FREE_BODY = 300_000;
+/** The headers a hosted tool's read of this watcher carries: this process's secret, and the caller the read is for. */
+const HOSTED_SECRET = "x-brainchain-hosted";
+const HOSTED_FOR = "x-brainchain-hosted-for";
 export const KEEPALIVE_MS = 20_000;
 /** A stream is closed after this long; the client opens it again from Last-Event-ID, so no slot is held for good. */
 export const STREAM_MS = 30 * 60_000;
@@ -161,6 +168,8 @@ export interface ServeOptions {
   calls?: Pick<CallIndex, "of" | "get" | "page">;
   /** BrainChain's free checks, for `GET /free`, `GET /free/me` and `POST /free/grade`; a watcher without them answers 404 there. */
   sponsor?: Sponsor;
+  /** The hosted BrainChain MCP, for `POST /mcp`; a watcher without it answers 404 there. */
+  mcp?: McpHandler;
   /** Behind a proxy that appends the client's address to X-Forwarded-For, such as Render's, take the address from there. */
   trustProxy?: boolean;
   limits?: ServeLimits;
@@ -296,12 +305,22 @@ export interface Served {
  * (every call a page at a time), `GET /calls/:grade`, `GET /health` (503 while a source keeps failing) and `GET
  * /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
  * /watches/:id` with the watch's manage token. Nothing lists watches. Free checks: `GET /free`, and `GET /free/me` and
- * `POST /free/grade` with a GitHub sign-in. Every address is held to `perMinute` requests, and to `freePerMinute` of them
- * on the two routes that take a sign-in.
+ * `POST /free/grade` with a GitHub sign-in. The hosted BrainChain MCP: `POST /mcp`. Every address is held to `perMinute`
+ * requests, to `freePerMinute` of them on the two routes that take a sign-in, and to `mcpPerMinute` on `/mcp`.
  */
-export function serveEvents({ log, pools, names, health, adminToken, deliveries, calls, sponsor, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
+export function serveEvents({ log, pools, names, health, adminToken, deliveries, calls, sponsor, mcp, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
   const perMinute = new Window(limits.perMinute, 60_000);
   const freePerMinute = new Window(limits.freePerMinute, 60_000);
+  const mcpPerMinute = new Window(limits.mcpPerMinute, 60_000);
+  // The hosted tools read this watcher over loopback, so each read names the caller it is for, with a secret no one
+  // outside this process holds, and is counted against that caller rather than this process.
+  const secret = randomBytes(32).toString("hex");
+  const forwardedFor = (request: IncomingMessage): string | undefined => {
+    const given = request.headers[HOSTED_SECRET];
+    const caller = request.headers[HOSTED_FOR];
+    if (typeof given !== "string" || typeof caller !== "string" || !caller || given.length !== secret.length) return undefined;
+    return timingSafeEqual(Buffer.from(given), Buffer.from(secret)) ? caller : undefined;
+  };
   const creations = new Window(limits.watchesPerHour, 3_600_000);
   const streams = new Set<{ response: ServerResponse; address: string; wanted: Pick<Query, "kinds" | "tokens">; cursor: number }>();
 
@@ -349,12 +368,20 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
   }
 
   async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const address = keyOf(clientOf(request, trustProxy));
+    const address = forwardedFor(request) ?? keyOf(clientOf(request, trustProxy));
     if ((request.url ?? "").length > 2048) throw new HttpError(414, "The address is too long.");
     if (!perMinute.take(address, clock())) throw new HttpError(429, `Too many requests from your network address: the watcher takes ${limits.perMinute} a minute from one address. Wait a minute, then try again.`);
     const url = new URL(request.url ?? "/", "http://watcher");
     const method = request.method ?? "GET";
     const reading = method === "GET" || method === "HEAD";
+    if (url.pathname === "/mcp") {
+      if (!mcp) throw new HttpError(404, "This watcher serves no MCP endpoint.");
+      // Stateless: no session to resume or end, and no stream to open, so GET and DELETE have nothing to answer.
+      if (method !== "POST") return send(response, 405, { error: "The BrainChain MCP here takes POST only: it keeps no sessions and opens no stream." }, { Allow: "POST" });
+      if (!mcpPerMinute.take(address, clock())) throw new HttpError(429, `Too many MCP requests from your network address: the endpoint takes ${limits.mcpPerMinute} a minute from one address. Wait a minute, then try again.`);
+      const body = await json(request, limits.mcpBody);
+      return mcp(request, response, body, { url: self(), headers: { [HOSTED_SECRET]: secret, [HOSTED_FOR]: address } });
+    }
     if (url.pathname === "/health/live" && reading) return send(response, 200, { ok: true });
     if (url.pathname === "/health" && reading) {
       const state = health();
@@ -363,9 +390,9 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       const admin = adminToken !== undefined && given !== undefined && given.length === adminToken.length && timingSafeEqual(Buffer.from(given), Buffer.from(adminToken));
       const sources = (state.sources ?? {}) as Record<string, { failures?: number; baselined?: boolean }>;
       const checks = sponsor?.info();
-      const free = checks ? { free: { open: checks.open, paused: checks.paused } } : {};
-      const summary = { ok: state.ok, events: state.events, sources: Object.fromEntries(Object.entries(sources).map(([name, { failures = 0, baselined }]) => [name, { reading: failures < 3, baselined: baselined === true }])), ...free };
-      return send(response, state.ok ? 200 : 503, admin ? { ...state, ...free } : summary, admin ? {} : OPEN);
+      const routes = { ...(checks ? { free: { open: checks.open, paused: checks.paused } } : {}), ...(mcp ? { mcp: "/mcp" } : {}) };
+      const summary = { ok: state.ok, events: state.events, sources: Object.fromEntries(Object.entries(sources).map(([name, { failures = 0, baselined }]) => [name, { reading: failures < 3, baselined: baselined === true }])), ...routes };
+      return send(response, state.ok ? 200 : 503, admin ? { ...state, ...routes } : summary, admin ? {} : OPEN);
     }
     if (url.pathname === "/events" && reading) return send(response, 200, { readAt: new Date(clock()).toISOString(), ...log.query(eventsQuery(url.searchParams)) }, OPEN);
     if (url.pathname === "/events/stream" && reading) return stream(request, response, url, address);
@@ -438,9 +465,16 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
     }
     if (["/events", "/events/stream", "/pools", "/robinhood/names", "/calls", "/health", "/health/live", "/watches"].includes(url.pathname) || freeRoute || id !== undefined || grade !== undefined) throw new HttpError(405, "That method is not served here.");
     const freeRoutes = sponsor ? ", GET /free, GET /free/me, POST /free/grade" : "";
-    throw new HttpError(404, `Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls?after=, GET /calls/:grade, GET /health${freeRoutes}, POST /watches and GET or DELETE /watches/:id.`);
+    const mcpRoute = mcp ? ", POST /mcp" : "";
+    throw new HttpError(404, `Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls?after=, GET /calls/:grade, GET /health${freeRoutes}${mcpRoute}, POST /watches and GET or DELETE /watches/:id.`);
   }
 
+  /** This watcher's own address, for the hosted tools' reads of it. */
+  const self = () => {
+    const { address, port } = server.address() as AddressInfo;
+    const host = address === "0.0.0.0" || address === "::" ? "127.0.0.1" : isIP(address) === 6 ? `[${address}]` : address;
+    return new URL(`http://${host}:${port}`);
+  };
   const server = createServer((request, response) => {
     route(request, response).catch((error: unknown) => {
       if (response.headersSent) return void response.end();
