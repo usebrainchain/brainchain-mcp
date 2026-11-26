@@ -40,7 +40,7 @@ async function remove(): Promise<void> {
 }
 
 try {
-  await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.24.0"] }));
+  await client.connect(new StdioClientTransport({ command: "npx", args: ["-y", "brainchain-mcp@0.24.1"] }));
   await (process.argv.includes("--remove") ? remove() : watch());
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);

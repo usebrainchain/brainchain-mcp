@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { FREE } from "./free.js";
 import { canonicalStringify, orderIdOf } from "./payments.js";
-import { createSponsor, PAUSE_MS, sponsorConfig, sponsorFrom, type Sponsor } from "./sponsor.js";
+import { createSponsor, freeCaps, PAUSE_MS, sponsorConfig, sponsorFrom, type Caps, type Sponsor } from "./sponsor.js";
 import { EventLog } from "./watch/events.js";
 import { FREE_BODY, SERVE_LIMITS, serveEvents, type ServeLimits } from "./watch/serve.js";
 
@@ -78,12 +78,12 @@ function fakes(config: ReturnType<typeof sponsorConfig>, { users = { [TOKEN]: { 
   return { fetchImpl, payments, github, views };
 }
 
-function sponsor(options: Fakes & { where?: string; now?: () => number } = {}) {
+function sponsor(options: Fakes & { where?: string; now?: () => number; caps?: Caps } = {}) {
   const where = options.where ?? dir();
-  const config = sponsorConfig("mainnet", where);
+  const config = sponsorConfig("mainnet", where, options.caps);
   const fake = fakes(config, options);
   const logged: string[] = [];
-  const made = createSponsor({ config, signer, clientId: CLIENT, dir: where, fetch: fake.fetchImpl, now: options.now ?? (() => NOW), say: (line) => logged.push(line) });
+  const made = createSponsor({ config, signer, clientId: CLIENT, dir: where, ...(options.caps ? { caps: options.caps } : {}), fetch: fake.fetchImpl, now: options.now ?? (() => NOW), say: (line) => logged.push(line) });
   return { sponsor: made, where, logged, ...fake };
 }
 
@@ -146,7 +146,7 @@ describe("free checks", () => {
     const { sponsor: s, payments } = sponsor({ users, now: () => now });
     const tokens = Object.keys(users);
     for (const [i, token] of tokens.slice(0, 30).entries()) for (const n of [1, 2]) expect((await s.grade(token, nth(10 * i + n), "mainnet")).status).toBe(200);
-    expect(await s.grade(tokens[30]!, nth(1000), "mainnet")).toEqual({ status: 429, body: { reason: "daily", error: "Today's free checks are all taken. More open at 00:00 UTC." } });
+    expect(await s.grade(tokens[30]!, nth(1000), "mainnet")).toEqual({ status: 429, body: { reason: "daily", error: "Today's 60 free checks are all taken. More open at 00:00 UTC." } });
     now += 86_400_000;
     expect((await s.me(tokens[30]!)).body).toEqual({ login: "u30", left: 2 });
     // The wallet's own daily limit, kept on the real clock, still holds 15 USDC for today: a fault in the counts cannot spend more.
@@ -333,6 +333,66 @@ describe("a free check the desk has not settled", () => {
     expect(both.map(({ status }) => status).sort()).toEqual([200, 409]);
     expect(both.find(({ status }) => status === 409)!.body).toEqual({ reason: "pending", error: "This grade is already being paid for. Send it again in a few minutes to read it; that does not use another free check." });
     expect(payments).toHaveLength(1);
+  });
+});
+
+describe("launch-day caps", () => {
+  const users = Object.fromEntries(Array.from({ length: 3 }, (_, i) => [`gho_${String(i).padStart(36, "0")}`, { id: 2000 + i, login: `l${i}`, created_at: OLD }]));
+  const tokens = Object.keys(users);
+  const fill = async (s: Sponsor, n: number) => {
+    for (let i = 0; i < n; i += 1) expect((await s.grade(tokens[Math.floor(i / 2)]!, nth(100 + i), "mainnet")).status).toBe(200);
+  };
+
+  it("hold a listed day to its own cap, and every other day, a past listed one too, to the default", async () => {
+    const listed = sponsor({ users, caps: { days: { "2026-12-09": 3 }, total: FREE.total } });
+    expect(listed.sponsor.info()).toMatchObject({ perDay: 3, total: FREE.total });
+    await fill(listed.sponsor, 3);
+    expect((await listed.sponsor.grade(tokens[1]!, nth(1), "mainnet")).body).toEqual({ reason: "daily", error: "Today's 3 free checks are all taken. More open at 00:00 UTC." });
+    for (const day of ["2026-12-10", "2026-12-08"]) {
+      const other = sponsor({ users, caps: { days: { [day]: 3 }, total: FREE.total } });
+      expect(other.sponsor.info()).toMatchObject({ perDay: FREE.perDay });
+      await fill(other.sponsor, 4);
+    }
+  });
+
+  it("stop at the configured total in place of 250", async () => {
+    const { sponsor: s, payments } = sponsor({ users, caps: { days: {}, total: 2 } });
+    expect(s.info()).toMatchObject({ total: 2, open: true });
+    await fill(s, 2);
+    expect((await s.grade(tokens[1]!, nth(1), "mainnet")).body.reason).toBe("total");
+    expect(s.info()).toMatchObject({ open: false });
+    expect(payments).toHaveLength(2);
+  });
+
+  it("let the sponsor's own wallet limits follow: the highest day's cap a day, and the total in all", () => {
+    expect(sponsorConfig(undefined, dir(), { days: { "2026-11-30": 200, "2026-12-01": 120 }, total: 600 })).toMatchObject({ daily: 50_000_000n, budget: 150_000_000n });
+    expect(sponsorConfig(undefined, dir(), { days: { "2026-11-30": 10 }, total: 250 })).toMatchObject({ daily: 15_000_000n, budget: 62_500_000n });
+  });
+
+  it("are read from the watcher's settings, and a bad one stops the free checks with what is wrong", () => {
+    expect(freeCaps({})).toEqual({ days: {}, total: FREE.total });
+    expect(freeCaps({ BRAINCHAIN_FREE_DAY_CAPS: " 2026-11-30=200, 2026-12-01=150 ", BRAINCHAIN_FREE_TOTAL: "600" })).toEqual({ days: { "2026-11-30": 200, "2026-12-01": 150 }, total: 600 });
+    for (const [setting, value, error] of [
+      ["BRAINCHAIN_FREE_DAY_CAPS", "2026-11-30:200", 'BRAINCHAIN_FREE_DAY_CAPS takes comma-separated YYYY-MM-DD=N pairs, such as 2026-11-30=200, and "2026-11-30:200" is not one.'],
+      ["BRAINCHAIN_FREE_DAY_CAPS", "30-11-2026=200", 'BRAINCHAIN_FREE_DAY_CAPS takes comma-separated YYYY-MM-DD=N pairs, such as 2026-11-30=200, and "30-11-2026=200" is not one.'],
+      ["BRAINCHAIN_FREE_DAY_CAPS", "2026-02-30=200", "BRAINCHAIN_FREE_DAY_CAPS names 2026-02-30, which is not a calendar day."],
+      ["BRAINCHAIN_FREE_DAY_CAPS", "2026-11-30=0", "BRAINCHAIN_FREE_DAY_CAPS gives 2026-11-30 a cap of 0; a cap must be a whole number above zero."],
+      ["BRAINCHAIN_FREE_DAY_CAPS", "2026-11-30=1.5", "BRAINCHAIN_FREE_DAY_CAPS gives 2026-11-30 a cap of 1.5; a cap must be a whole number above zero."],
+      ["BRAINCHAIN_FREE_DAY_CAPS", "2026-11-30=200,2026-11-30=100", "BRAINCHAIN_FREE_DAY_CAPS lists 2026-11-30 twice."],
+      ["BRAINCHAIN_FREE_TOTAL", "-5", "BRAINCHAIN_FREE_TOTAL must be a whole number above zero."],
+      ["BRAINCHAIN_FREE_TOTAL", "lots", "BRAINCHAIN_FREE_TOTAL must be a whole number above zero."],
+    ] as const) {
+      expect(() => freeCaps({ [setting]: value })).toThrow(error);
+    }
+    const where = dir();
+    const file = join(where, "sponsor.key");
+    writeFileSync(file, `0x${KEY}\n`);
+    const env = { BRAINCHAIN_SPONSOR_KEY_FILE: file, GITHUB_CLIENT_ID: CLIENT };
+    expect(() => sponsorFrom({ ...env, BRAINCHAIN_FREE_TOTAL: "0" }, where)).toThrow("BRAINCHAIN_FREE_TOTAL must be a whole number above zero.");
+    const said: string[] = [];
+    const made = sponsorFrom({ ...env, BRAINCHAIN_FREE_DAY_CAPS: "2026-12-08=500,2026-12-10=200", BRAINCHAIN_FREE_TOTAL: "600" }, where, { now: () => NOW, say: (line) => said.push(line) });
+    expect(made?.info()).toMatchObject({ perDay: FREE.perDay, total: 600 });
+    expect(said.join("\n")).toContain("at most 60 a day (200 on 2026-12-10) and 600 in all.");
   });
 });
 

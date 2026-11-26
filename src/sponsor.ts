@@ -40,9 +40,39 @@ export interface SponsorOptions {
   clientId: string;
   /** Where the counts are kept. */
   dir: string;
+  /** The operator's caps in place of FREE's; FREE's by default. */
+  caps?: Caps;
   fetch?: typeof fetch;
   now?: () => number;
   say?: (line: string) => void;
+}
+
+/** Caps for listed UTC days, in place of FREE.perDay on those days only, and the cap in all. */
+export interface Caps {
+  days: Record<string, number>;
+  total: number;
+}
+
+const DEFAULT_CAPS: Caps = { days: {}, total: FREE.total };
+
+/** A listed day's cap stops mattering once the day is past, so a launch's caps need no removing. */
+const dayCap = (caps: Caps, day: string) => caps.days[day] ?? FREE.perDay;
+
+/** BRAINCHAIN_FREE_DAY_CAPS, such as `2026-11-30=200,2026-12-01=200`, and BRAINCHAIN_FREE_TOTAL; throws what is wrong with either. */
+export function freeCaps(env: Record<string, string | undefined>): Caps {
+  const days: Record<string, number> = {};
+  for (const pair of (env.BRAINCHAIN_FREE_DAY_CAPS ?? "").split(",").map((part) => part.trim()).filter(Boolean)) {
+    const [, day, cap] = /^(\d{4}-\d{2}-\d{2})=(\S+)$/.exec(pair) ?? [];
+    if (!day || cap === undefined) throw new Error(`BRAINCHAIN_FREE_DAY_CAPS takes comma-separated YYYY-MM-DD=N pairs, such as 2026-11-30=200, and "${pair}" is not one.`);
+    const date = new Date(`${day}T00:00:00Z`);
+    if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== day) throw new Error(`BRAINCHAIN_FREE_DAY_CAPS names ${day}, which is not a calendar day.`);
+    if (!/^[1-9]\d*$/.test(cap)) throw new Error(`BRAINCHAIN_FREE_DAY_CAPS gives ${day} a cap of ${cap}; a cap must be a whole number above zero.`);
+    if (day in days) throw new Error(`BRAINCHAIN_FREE_DAY_CAPS lists ${day} twice.`);
+    days[day] = Number(cap);
+  }
+  const total = env.BRAINCHAIN_FREE_TOTAL?.trim();
+  if (total && !/^[1-9]\d*$/.test(total)) throw new Error("BRAINCHAIN_FREE_TOTAL must be a whole number above zero.");
+  return { days, total: total ? Number(total) : FREE.total };
 }
 
 /** A counted grade: open until the desk has graded it, and kept after that so a repeat is answered from it. */
@@ -76,20 +106,21 @@ const PAUSED = "BrainChain's free checks are paused. Try again later.";
 /**
  * The sponsor's payment settings: USDC on Base, exactly a grade's price at a time. What caps the spending is the counts
  * file, which survives a restart, and the wallet's balance. The daily limit, kept on disk, also caps a day's spending at
- * its checks; the budget lives in memory and resets on restart, so it bounds one run only.
+ * the highest day's cap that can apply; the budget lives in memory and resets on restart, so it bounds one run only.
  */
-export function sponsorConfig(network: string | undefined, dir: string): Config {
+export function sponsorConfig(network: string | undefined, dir: string, caps: Caps = DEFAULT_CAPS): Config {
+  const perDay = Math.max(FREE.perDay, ...Object.values(caps.days));
   return resolveConfig({
     BRAINCHAIN_NETWORK: network,
     BRAINCHAIN_PAY_ON: "base",
     BRAINCHAIN_MAX_PRICE_UNITS: String(PRICE.grade),
-    BRAINCHAIN_BUDGET_UNITS: String(PRICE.grade * BigInt(FREE.total)),
-    BRAINCHAIN_DAILY_UNITS: String(PRICE.grade * BigInt(FREE.perDay)),
+    BRAINCHAIN_BUDGET_UNITS: String(PRICE.grade * BigInt(caps.total)),
+    BRAINCHAIN_DAILY_UNITS: String(PRICE.grade * BigInt(perDay)),
     BRAINCHAIN_STATE_DIR: dir,
   });
 }
 
-export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl = fetch, now = Date.now, say = () => {} }: SponsorOptions): Sponsor {
+export function createSponsor({ config, signer, clientId, dir, caps = DEFAULT_CAPS, fetch: fetchImpl = fetch, now = Date.now, say = () => {} }: SponsorOptions): Sponsor {
   const file = join(dir, "free-checks.json");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const counts: Counts = { accounts: {}, days: {}, total: 0, grades: [], ...(existsSync(file) ? (JSON.parse(readFileSync(file, "utf8")) as Partial<Counts>) : {}) };
@@ -227,14 +258,15 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
       return answer(403, "young", `Free checks are for GitHub accounts older than ${FREE.minAccountDays} days. @${login} was created on ${dayOf(createdAt)}, so it qualifies on ${dayOf(createdAt + FREE.minAccountDays * DAY_MS)}.`);
     }
     if (left(id) === 0) return answer(403, "used", `@${login} has used its ${FREE.perAccount} free checks.`);
-    if (counts.total >= FREE.total) return answer(403, "total", "All of BrainChain's free checks have been given out.");
+    if (counts.total >= caps.total) return answer(403, "total", "All of BrainChain's free checks have been given out.");
     if (paused()) return answer(503, "paused", PAUSED);
-    if ((counts.days[today()] ?? 0) >= FREE.perDay) return answer(429, "daily", "Today's free checks are all taken. More open at 00:00 UTC.");
+    const perDay = dayCap(caps, today());
+    if ((counts.days[today()] ?? 0) >= perDay) return answer(429, "daily", `Today's ${perDay} free checks are all taken. More open at 00:00 UTC.`);
     return undefined;
   }
 
   return {
-    info: () => ({ network: config.name, chain: config.chain, clientId, ...FREE, open: counts.total < FREE.total && !paused(), paused: paused() }),
+    info: () => ({ network: config.name, chain: config.chain, clientId, ...FREE, perDay: dayCap(caps, today()), total: caps.total, open: counts.total < caps.total && !paused(), paused: paused() }),
 
     async me(token) {
       const user = await account(token);
@@ -301,8 +333,8 @@ export function createSponsor({ config, signer, clientId, dir, fetch: fetchImpl 
 
 /**
  * The sponsor a watcher runs, from BRAINCHAIN_SPONSOR_KEY_FILE (the paying wallet's key) and GITHUB_CLIENT_ID (the GitHub
- * OAuth app's client id; device flow needs no secret). Returns undefined when neither is set; throws when only one is set
- * or either is unusable.
+ * OAuth app's client id; device flow needs no secret), with BRAINCHAIN_FREE_DAY_CAPS and BRAINCHAIN_FREE_TOTAL in place of
+ * FREE's caps. Returns undefined when neither of the first two is set; throws when only one is set or any is unusable.
  */
 export function sponsorFrom(env: Record<string, string | undefined>, dir: string, options: Pick<SponsorOptions, "fetch" | "now" | "say"> = {}): Sponsor | undefined {
   const file = env.BRAINCHAIN_SPONSOR_KEY_FILE?.trim();
@@ -318,7 +350,12 @@ export function sponsorFrom(env: Record<string, string | undefined>, dir: string
   }
   if (!/^[0-9a-f]{64}$/i.test(key)) throw new Error("BRAINCHAIN_SPONSOR_KEY_FILE must hold only a private key, 64 hex characters with or without 0x.");
   const signer = privateKeyToAccount(`0x${key}`);
-  const config = sponsorConfig(env.BRAINCHAIN_NETWORK?.trim() || undefined, dir);
-  options.say?.(`Free checks are on: grades on BrainChain ${config.name}, paid in ${config.token} on ${config.chain} from ${signer.address}, at most ${FREE.perDay} a day and ${FREE.total} in all.`);
-  return createSponsor({ config, signer, clientId, dir, ...options });
+  const caps = freeCaps(env);
+  const config = sponsorConfig(env.BRAINCHAIN_NETWORK?.trim() || undefined, dir, caps);
+  const today = new Date((options.now ?? Date.now)()).toISOString().slice(0, 10);
+  const listed = Object.entries(caps.days).filter(([day]) => day >= today).sort(([a], [b]) => a.localeCompare(b)).map(([day, cap]) => `${cap} on ${day}`);
+  options.say?.(
+    `Free checks are on: grades on BrainChain ${config.name}, paid in ${config.token} on ${config.chain} from ${signer.address}, at most ${FREE.perDay} a day${listed.length ? ` (${listed.join(", ")})` : ""} and ${caps.total} in all.`,
+  );
+  return createSponsor({ config, signer, clientId, dir, caps, ...options });
 }
