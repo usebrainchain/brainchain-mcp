@@ -2,7 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { CallToolRequestSchema, ErrorCode, ListResourcesRequestSchema, ListToolsRequestSchema, McpError, ReadResourceRequestSchema, SubscribeRequestSchema, UnsubscribeRequestSchema, type Tool } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ErrorCode, ListResourcesRequestSchema, ListToolsRequestSchema, McpError, ReadResourceRequestSchema, SubscribeRequestSchema, UnsubscribeRequestSchema, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { createPublicClient, defineChain, formatEther, http, maxUint256, WaitForTransactionReceiptTimeoutError, type PrivateKeyAccount } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
@@ -431,14 +431,25 @@ function subscribeChanges(server: Server, watcher: URL | undefined, fetchImpl?: 
   server.onclose = () => following?.abort();
 }
 
-export function createServer(env: Record<string, string | undefined>, version: string, options: ServerOptions = {}): Server {
+/** A server's tools and how it answers a call, before any transport. */
+export interface Wired {
+  tools: Tool[];
+  call: (name: string, args: unknown) => Promise<CallToolResult>;
+  watcher: URL | undefined;
+}
+
+/**
+ * The tools and their wiring. `hosted` leaves GitHub's token alone: it is one setting for the whole process, and a
+ * watcher that serves the hosted endpoint has set its own.
+ */
+export function wire(env: Record<string, string | undefined>, version: string, options: ServerOptions = {}, hosted = false): Wired {
   const { desk, free, terms, bonds, bondTools: bondToolList, gradeTool: gradeToolDef, examTools: examToolList, refused } = deskFor(env, version, options.fetch, options.login, options.walletSaved);
   const problem = typeof terms === "string" ? terms : terms.problem;
   const log = options.log ?? console.error;
   if (problem) log(`brainchain-mcp has an invalid setting: ${problem}`);
-  // Only the tools that read the wallets depend on them, so a bad list stops those and nothing else.
-  const github = useGitHubToken(env.GITHUB_TOKEN);
+  const github = hosted ? undefined : useGitHubToken(env.GITHUB_TOKEN);
   if (github) log(`brainchain-mcp has an invalid setting: ${github}`);
+  // Only the tools that read the wallets depend on them, so a bad list stops those and nothing else.
   const makers = followedMakers(env);
   if (makers.problem) {
     log(`brainchain-mcp has an invalid setting: ${makers.problem}`);
@@ -500,11 +511,17 @@ export function createServer(env: Record<string, string | undefined>, version: s
     ...bondToolList,
     ...examToolList,
   ];
-  const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {}, resources: { subscribe: true } }, instructions: INSTRUCTIONS });
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
   // Only brainchain_grade takes free checks. brainchain_call records each call under the wallet that paid, so it needs this server's own.
   const gradeDesk = free ? { ...desk, grade: free } : desk;
-  server.setRequestHandler(CallToolRequestSchema, (request) => callTool(request.params.name === GRADE_NAME ? gradeDesk : desk, request.params.name, request.params.arguments, undefined, bonds, refused, readers));
-  subscribeChanges(server, watchProblem ? undefined : watcher, options.fetch);
+  const call = (name: string, args: unknown) => callTool(name === GRADE_NAME ? gradeDesk : desk, name, args, undefined, bonds, refused, readers);
+  return { tools, call, watcher: watchProblem ? undefined : watcher };
+}
+
+export function createServer(env: Record<string, string | undefined>, version: string, options: ServerOptions = {}): Server {
+  const { tools, call, watcher } = wire(env, version, options);
+  const server = new Server({ name: "brainchain", title: "BrainChain", version }, { capabilities: { tools: {}, resources: { subscribe: true } }, instructions: INSTRUCTIONS });
+  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
+  server.setRequestHandler(CallToolRequestSchema, (request) => call(request.params.name, request.params.arguments));
+  subscribeChanges(server, watcher, options.fetch);
   return server;
 }

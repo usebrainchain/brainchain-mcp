@@ -58,7 +58,7 @@ The operator does this in a terminal, before the agent can see this skill. OpenC
 step 3 is saved, which only means the server is registered. Step 4 checks the key.
 
 1. Make a dedicated wallet that holds only what this agent may spend. Fund it with USDC on Base (no gas, no approval)
-   or USDG on Robinhood Chain (plus a little ETH there). `npx -y brainchain-mcp@0.24.1 init` makes a new one for you:
+   or USDG on Robinhood Chain (plus a little ETH there). `npx -y brainchain-mcp@0.25.0 init` makes a new one for you:
    it saves the key as in step 2 and prints the address to fund, and running it again shows the balance.
 2. Or save the private key of a wallet you already have in a file only your account can read:
 
@@ -69,13 +69,13 @@ step 3 is saved, which only means the server is registered. Step 4 checks the ke
    ```
 
    For USDG on Robinhood Chain, also approve once:
-   `BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.24.1 approve`
+   `BRAINCHAIN_PAY_ON=robinhood BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.25.0 approve`
    (with `BRAINCHAIN_NETWORK=testnet` in front on testnet). In PowerShell on Windows:
-   `$env:BRAINCHAIN_PAY_ON='robinhood'; $env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.24.1 approve`.
+   `$env:BRAINCHAIN_PAY_ON='robinhood'; $env:BRAINCHAIN_PAYER_KEY_FILE='~/.brainchain/payer.key'; npx -y brainchain-mcp@0.25.0 approve`.
 3. Register the server with the path of that file:
 
    ```sh
-   openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.24.1"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key","BRAINCHAIN_PAY_ON":"base","BRAINCHAIN_BUDGET_UNITS":"5000000","BRAINCHAIN_DAILY_UNITS":"5000000"}}'
+   openclaw mcp set brainchain '{"command":"npx","args":["-y","brainchain-mcp@0.25.0"],"env":{"BRAINCHAIN_PAYER_KEY_FILE":"~/.brainchain/payer.key","BRAINCHAIN_PAY_ON":"base","BRAINCHAIN_BUDGET_UNITS":"5000000","BRAINCHAIN_DAILY_UNITS":"5000000"}}'
    ```
 
    Keep the key in that file only. A key in `skills.entries.brainchain.apiKey` never reaches the server, and one in
@@ -86,7 +86,7 @@ step 3 is saved, which only means the server is registered. Step 4 checks the ke
    `BRAINCHAIN_MAX_PRICE_UNITS` caps one task (default 1 USDC). Set `BRAINCHAIN_PAY_ON` to `robinhood` to pay in USDG
    on Robinhood Chain. Add `"BRAINCHAIN_NETWORK":"testnet"` to practise with test tokens (Base Sepolia USDC or Robinhood Chain
    testnet USDG).
-4. Check the key: `BRAINCHAIN_PAY_ON=base BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.24.1 wallet`
+4. Check the key: `BRAINCHAIN_PAY_ON=base BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key npx -y brainchain-mcp@0.25.0 wallet`
    prints the wallet it holds and what it still needs before it can pay, or says what is wrong. Use
    `BRAINCHAIN_PAY_ON=robinhood` in its place if you pay in USDG, and put `BRAINCHAIN_NETWORK=testnet` in front on testnet.
    `openclaw mcp doctor` and `openclaw mcp probe` do not check the key.

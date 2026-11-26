@@ -1,11 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { watchUrl } from "../changes.js";
 import { expandHome } from "../config.js";
 import { countsFor } from "../dataset/counts.js";
 import { datasetReader, MANIFEST_MS, type DatasetReader } from "../dataset/published.js";
 import { FREE } from "../free.js";
 import { hasGitHubToken, useGitHubToken } from "../github.js";
+import { hostedMcp } from "../hosted.js";
 import { ChainError } from "../history.js";
 import { configuredMakers, firstApprovals, MARKET_MAKERS } from "../makers.js";
 import { marketCap, type CapKept } from "../marketcap.js";
@@ -56,7 +58,8 @@ The first run records what is already public as a baseline and reports none of i
                          crypto page, read from the US pages when the watcher runs in the US, which the dataset reads
                          too), GET /calls?caller=, GET /calls?after= (every call a page at a time, which the dataset
                          reads) and GET /calls/:grade (the calls made with brainchain_call, read from BrainChain's
-                         DecisionLog), and GET /health. Point BRAINCHAIN_WATCH_URL at it.
+                         DecisionLog), POST /mcp (the hosted BrainChain MCP: its keyless tools over Streamable HTTP),
+                         and GET /health. Point BRAINCHAIN_WATCH_URL at it.
   --print                Write each new event to stdout as one line of JSON.
   --trust-proxy          Behind Cloudflare and a proxy such as Render's, take a client's address from CF-Connecting-IP, or
                          else from the X-Forwarded-For entry before the proxy's own.
@@ -65,7 +68,8 @@ Environment: GITHUB_TOKEN, or GITHUB_TOKEN_FILE naming a file that holds it, let
 minute; without one each GitHub source is read every ten minutes, inside the 60 requests an hour GitHub allows one IP
 address. BRAINCHAIN_WATCH_RPC reads Robinhood Chain from another RPC, with the public endpoint as the fallback.
 BRAINCHAIN_MAKER_WALLETS adds wallets to follow. BRAINCHAIN_DATASET reads the dataset from a directory or another address
-in place of BrainChain's published copy. GET /health shows anyone whether each source is reading, and its full
+in place of BrainChain's published copy. BRAINCHAIN_WATCH_URL is the address the replies of POST /mcp give for this
+watcher, such as https://watch.usebrainchain.com behind a proxy. GET /health shows anyone whether each source is reading, and its full
 detail to a request with BRAINCHAIN_WATCH_ADMIN_TOKEN as a Bearer token. BRAINCHAIN_WATCH_DISCORD_RELAY sends Discord
 deliveries through a relay, signed with BRAINCHAIN_WATCH_DISCORD_RELAY_KEY, for an address Discord refuses.
 BRAINCHAIN_SPONSOR_KEY_FILE and GITHUB_CLIENT_ID turn on free checks, and both are needed: with only one, the watcher says
@@ -307,6 +311,13 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   if (adminToken && !/^[\w-]{32,100}$/.test(adminToken)) throw new Error("BRAINCHAIN_WATCH_ADMIN_TOKEN must be 32 to 100 letters, digits, - or _.");
   const names = () => (state.source("robinhood-names") as NamesState).names ?? {};
   const calls = new CallIndex({ dir, ...(env.BRAINCHAIN_WATCH_BRAIN ? { brain: env.BRAINCHAIN_WATCH_BRAIN } : {}), say });
+  // The address /mcp's replies give for this watcher; without one they give its loopback address.
+  let publicUrl: URL | undefined;
+  try {
+    publicUrl = env.BRAINCHAIN_WATCH_URL?.trim() ? watchUrl(env.BRAINCHAIN_WATCH_URL) : undefined;
+  } catch (error) {
+    say(`BRAINCHAIN_WATCH_URL is not used: ${(error as Error).message}`);
+  }
   // A free-checks setting the watcher cannot use turns the free checks off, and the watcher runs on without them.
   let sponsor: Sponsor | undefined;
   try {
@@ -314,7 +325,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   } catch (error) {
     say(`Free checks are off: ${(error as Error).message}`);
   }
-  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, calls, ...(sponsor ? { sponsor } : {}), trustProxy: args.trustProxy }) : undefined;
+  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, calls, ...(sponsor ? { sponsor } : {}), mcp: hostedMcp(version, publicUrl ? { publicUrl } : {}), trustProxy: args.trustProxy }) : undefined;
   let ticking = false;
   const deliver = () => {
     if (ticking) return;

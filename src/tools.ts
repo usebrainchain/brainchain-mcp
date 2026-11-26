@@ -700,7 +700,7 @@ export function checkWork(input: Record<string, unknown>): { sitting: string; it
   return { sitting, item: input.item as number, text: input.text };
 }
 
-function reply(value: unknown, isError = false): CallToolResult {
+export function reply(value: unknown, isError = false): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }], isError };
 }
 
