@@ -11,7 +11,7 @@ import { bondsClosed, type Bonds } from "./bonds.js";
 import { BuilderError } from "./builder.js";
 import { PREMIUMS_TOOL } from "./premiums.js";
 import { SightingsError } from "./sightings.js";
-import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_GRADE_TOOL, GET_TASK_NAME, GET_TASK_TOOL, gradeTool, POST_TASK_NAME, postTaskTool, type Desk } from "./tools.js";
+import { BOND_STATUS_NAME, BOND_TASK_NAME, bondTools, callTool, GET_GRADE_TOOL, GET_TASK_NAME, GET_TASK_TOOL, gradeTool, POST_TASK_NAME, postTaskTool, SECURITY_REVIEW_NAME, securityReviewTool, type Desk } from "./tools.js";
 
 const desk: Desk = {
   post: async (task) => ({ order: "0x01", task }),
@@ -154,6 +154,27 @@ describe("callTool", () => {
     const schema = postTaskTool(resolveConfig({}).terms).inputSchema as { properties: Record<string, unknown>; required: string[] };
     expect(Object.keys(schema.properties)).toEqual(["title", "brief", "levels", "passIndex"]);
     expect(schema.required).toEqual(["title", "brief", "levels"]);
+  });
+
+  it("orders a security review as the desk's named job for one exact release, and refuses anything else before paying", async () => {
+    const posted: unknown[] = [];
+    const recording: Desk = { ...desk, post: async (task) => (posted.push(task), { order: "0x01" }) };
+    for (const release of ["acme/wallet@1.0.0", "@modelcontextprotocol/server-postgres@0.6.2", "server-x@2.0.0-beta.1"]) {
+      expect((await callTool(recording, SECURITY_REVIEW_NAME, { release })).isError).toBe(false);
+    }
+    expect(posted).toEqual([
+      { job: "Security review", release: "acme/wallet@1.0.0" },
+      { job: "Security review", release: "@modelcontextprotocol/server-postgres@0.6.2" },
+      { job: "Security review", release: "server-x@2.0.0-beta.1" },
+    ]);
+    for (const input of [{ release: "acme/wallet" }, { release: "acme/wallet@latest" }, { release: "a b@1.0.0" }, {}, { release: "acme/wallet@1.0.0", brief: "x" }]) {
+      expect((await callTool(recording, SECURITY_REVIEW_NAME, input)).isError).toBe(true);
+    }
+    expect(posted).toHaveLength(3);
+    const tool = securityReviewTool(resolveConfig({}).terms);
+    expect(tool.description).toContain("Each review costs 1 USDC, the price of a task, paid from this server's wallet on Base");
+    expect(tool.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    expect(securityReviewTool("BRAINCHAIN_NETWORK must be mainnet or testnet.").description).toMatch(/^Invalid setting: BRAINCHAIN_NETWORK/);
   });
 
   it("rejects a post without levels", async () => {

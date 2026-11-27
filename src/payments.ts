@@ -6,7 +6,7 @@ import { keccak256, parseAbi, RpcRequestError, toBytes } from "viem";
 import { formatMoney, formatUnits, MAX_TIMEOUT_SECONDS, PRICE, REPOST_AFTER_MINUTES, type Config } from "./config.js";
 import { briefsMessage, RECORD_PAGE, resultMessage, sittingGuidance, sittingMessage } from "./exams.js";
 import { createLimits, type Hold, type Limits } from "./limits.js";
-import type { Desk, GradeRequest, SittingRequest, TaskRequest } from "./tools.js";
+import type { Desk, GradeRequest, JobRequest, SittingRequest, TaskRequest } from "./tools.js";
 
 const BUDGET_REASON = "budget";
 const DAILY_REASON = "daily limit";
@@ -316,10 +316,10 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint; trac
   }
 
   /** An agent that retries a post it gave up waiting on gets the first order back instead of paying twice. */
-  function post(task: TaskRequest): Promise<unknown> {
+  function post(task: TaskRequest | JobRequest): Promise<unknown> {
     const now = Date.now();
     for (const [key, entry] of recent) if (now - entry.at >= REPOST_AFTER_MINUTES * 60_000) recent.delete(key);
-    const key = canonicalStringify({ network: config.network, title: task.title, brief: task.brief, levels: task.levels });
+    const key = canonicalStringify("job" in task ? { network: config.network, job: task.job, release: task.release } : { network: config.network, title: task.title, brief: task.brief, levels: task.levels });
     return once(key, now, () => pay("task", task), "task");
   }
 
@@ -411,7 +411,7 @@ export function createDesk(options: DeskOptions): Desk & { spent(): bigint; trac
     return { signal: deadline.signal, clear: () => clearTimeout(timer) };
   }
 
-  async function pay(kind: Posted, body: TaskRequest | GradeRequest): Promise<unknown> {
+  async function pay(kind: Posted, body: TaskRequest | JobRequest | GradeRequest): Promise<unknown> {
     const url = route[kind];
     const payment: Payment = {};
     const price = () => `${formatUnits(payment.hold?.amount ?? 0n)} ${config.token}`;

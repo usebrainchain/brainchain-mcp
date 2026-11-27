@@ -45,6 +45,9 @@ export interface Terms {
 }
 
 export const POST_TASK_NAME = "brainchain_post_task";
+export const SECURITY_REVIEW_NAME = "brainchain_security_review";
+/** The desk's name for the job: the desk builds the review brief from the release itself. */
+export const SECURITY_REVIEW_JOB = "Security review";
 /** The desk's cap on a task as it goes on chain: title, brief, levels and pass level as JSON. */
 export const MAX_TASK_BYTES = 64_000;
 export const GET_TASK_NAME = "brainchain_get_task";
@@ -172,6 +175,42 @@ export function postTaskTool(terms: Terms | string): Tool {
           `Returns an order id for ${GET_TASK_NAME}; results usually arrive within minutes. If the reply says possiblyCharged, do not post the task again: read the order with ${GET_TASK_NAME}. ` +
           `While this server keeps running, an identical post within ${REPOST_AFTER_MINUTES} minutes returns the first post's order, marked duplicate, instead of paying again, unless ${GET_TASK_NAME} has read that order's payment as failed.`,
     inputSchema: POST_TASK_INPUT,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  };
+}
+
+const SECURITY_REVIEW_INPUT: Tool["inputSchema"] = {
+  type: "object",
+  properties: {
+    release: {
+      type: "string",
+      minLength: 3,
+      maxLength: 260,
+      description: 'One exact release: "owner/slug@1.2.3" for a ClawHub skill, or "package@1.2.3" or "@scope/package@1.2.3" for an MCP server on npm. No ranges or tags.',
+    },
+  },
+  required: ["release"],
+  additionalProperties: false,
+};
+
+/** A paid review of one exact skill or MCP server release, posted as the desk's Security review job. */
+export function securityReviewTool(terms: Terms | string): Tool {
+  const about =
+    `Pay for a security review of one exact release before an agent installs or connects it: a ClawHub skill, or an MCP server on npm. ` +
+    `BrainChain downloads that release from ClawHub or npm and reads its files as text, never running them. The reviewer reports what the release reaches (keys, wallets, hosts, shell, files, and for an MCP server each tool's reach and output a third party wrote), with every finding cited by file and line, and checks confirm each citation before the grade. ` +
+    `It is graded like any task against three fixed levels and paid only if the review reaches the second or better. The brief and the accepted review are public. A release too large for one brief is refused before anything is paid. `;
+  return {
+    name: SECURITY_REVIEW_NAME,
+    title: "Order a security review of a skill or MCP server release",
+    description:
+      typeof terms === "string"
+        ? `${invalidSetting(terms)}${about}`
+        : (terms.problem ? invalidSetting(terms.problem) : "") +
+          about +
+          `Each review costs ${terms.cost}, the price of a task, paid from this server's wallet${terms.wallet ? ` ${terms.wallet}` : ""} on ${terms.chain}, and counts against its budget and daily limit. ${terms.refuses?.task ? `${terms.refuses.task} ` : ""}If BrainChain rejects the review, the full amount is refunded to the same wallet on ${terms.chain}, ${terms.finalAfter} after grading. ` +
+          `Returns an order id for ${GET_TASK_NAME}, whose result is the accepted review. If the reply says possiblyCharged, do not order it again: read the order with ${GET_TASK_NAME}. ` +
+          `While this server keeps running, the same release ordered again within ${REPOST_AFTER_MINUTES} minutes returns the first order, marked duplicate.`,
+    inputSchema: SECURITY_REVIEW_INPUT,
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   };
 }
@@ -401,6 +440,12 @@ export interface TaskRequest {
   levels: string[];
 }
 
+/** A named job the desk turns into its own brief, such as a security review of one release. */
+export interface JobRequest {
+  job: string;
+  release: string;
+}
+
 /** A sitting of the licence exam, for an agent whose id the paying wallet holds. */
 export interface SittingRequest {
   agentId: string;
@@ -419,7 +464,7 @@ export interface GradeRequest {
 }
 
 export interface Desk {
-  post(task: TaskRequest): Promise<unknown>;
+  post(task: TaskRequest | JobRequest): Promise<unknown>;
   get(order: string): Promise<unknown>;
   grade(request: GradeRequest): Promise<unknown>;
   getGrade(id: string): Promise<unknown>;
@@ -804,6 +849,12 @@ export async function callTool(
     if (name === POST_TASK_NAME) {
       refuseUnknownFields(input, POST_TASK_INPUT);
       return reply(await desk.post(checkBrief(input)));
+    }
+    if (name === SECURITY_REVIEW_NAME) {
+      refuseUnknownFields(input, SECURITY_REVIEW_INPUT);
+      const release = text("release", input.release, 260);
+      if (!/^\S+@\d+\.\d+\.\d+\S*$/.test(release)) throw new Error('release must name one exact release, such as "owner/slug@1.2.3" for a ClawHub skill or "package@1.2.3" for an MCP server on npm.');
+      return reply(await desk.post({ job: SECURITY_REVIEW_JOB, release }));
     }
     if (name === GET_TASK_NAME) {
       refuseUnknownFields(input, GET_TASK_TOOL.inputSchema);

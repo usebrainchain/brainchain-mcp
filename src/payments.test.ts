@@ -448,6 +448,23 @@ describe("posting the same task again", () => {
     expect(d.spent()).toBe(1_000_000n);
   });
 
+  it("sends a named job as it is, and returns the first order when the same release is ordered again", async () => {
+    let sent: unknown;
+    const { fetchImpl, seen } = fakeDesk(accepted);
+    const recorded: typeof fetch = async (input, init) => {
+      const request = new Request(input, init);
+      sent = await request.clone().json();
+      return fetchImpl(request);
+    };
+    const d = desk(recorded);
+    const job = { job: "Security review", release: "acme/wallet@1.0.0" };
+    const first = (await d.post(job)) as { order: string };
+    expect(sent).toEqual(job);
+    expect(await d.post({ ...job })).toEqual({ ...first, duplicate: true });
+    expect((await d.post({ ...job, release: "acme/wallet@1.0.1" })) as object).not.toHaveProperty("duplicate");
+    expect(seen).toHaveLength(2);
+  });
+
   it("returns the first order for an identical post after it completed, and signs again once the window has passed", async () => {
     const { fetchImpl, seen } = fakeDesk(accepted);
     const d = desk(fetchImpl);

@@ -37,6 +37,7 @@ import {
   GRADE_NAME,
   LICENCES_NAME,
   POST_TASK_NAME,
+  SECURITY_REVIEW_NAME,
   SIT_EXAM_NAME,
 } from "./tools.js";
 
@@ -80,13 +81,16 @@ describe("the server", () => {
     expect(client.getServerVersion()).toMatchObject({ name: "brainchain", title: "BrainChain" });
     expect(client.getInstructions()).toBe(INSTRUCTIONS);
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, TIMELINE_NAME, MARKET_CAP_NAME, BUILDER_NAME, TRACE_OUTCOMES_NAME, CALL_NAME, CALLS_NAME, CHANGES_NAME, WATCH_NAME, UNWATCH_NAME, BOND_TASK_NAME, BOND_STATUS_NAME, ...EXAM_TOOLS]);
+    expect(tools.map((tool) => tool.name)).toEqual([POST_TASK_NAME, SECURITY_REVIEW_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, PREMIUMS_NAME, CUSTODY_NAME, MAKERS_NAME, READINESS_NAME, SIGHTINGS_NAME, TIMELINE_NAME, MARKET_CAP_NAME, BUILDER_NAME, TRACE_OUTCOMES_NAME, CALL_NAME, CALLS_NAME, CHANGES_NAME, WATCH_NAME, UNWATCH_NAME, BOND_TASK_NAME, BOND_STATUS_NAME, ...EXAM_TOOLS]);
 
     const post = await client.callTool({ name: POST_TASK_NAME, arguments: task });
     expect(post.isError).toBe(true);
     expect(text(post)).toContain("No paying key is set: point BRAINCHAIN_PAYER_KEY_FILE at a file holding the private key of the wallet that pays");
     expect(text(post)).toContain("add BRAINCHAIN_PAYER_KEY_FILE with its path to this server's env in your MCP client config (in Claude Code, `claude mcp add brainchain -e BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key -- npx -y brainchain-mcp`)");
     expect(text(post)).not.toMatch(/-e BRAINCHAIN_PAYER_KEY=/);
+    const review = await client.callTool({ name: SECURITY_REVIEW_NAME, arguments: { release: "acme/wallet@1.0.0" } });
+    expect(review.isError).toBe(true);
+    expect(text(review)).toContain("No paying key is set");
     expect(reads).toHaveLength(0);
 
     const get = await client.callTool({ name: GET_TASK_NAME, arguments: { order } });
@@ -136,7 +140,7 @@ describe("the server", () => {
       expect(logged[0]).toContain(problem);
 
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(26);
+      expect(tools).toHaveLength(27);
       const description = tools.find((tool) => tool.name === POST_TASK_NAME)!.description!;
       expect(description.startsWith(`Invalid setting: ${problem}`)).toBe(true);
       expect(description).not.toMatch(/USDG|USDC/);
@@ -147,6 +151,7 @@ describe("the server", () => {
 
       for (const call of [
         { name: POST_TASK_NAME, arguments: task },
+        { name: SECURITY_REVIEW_NAME, arguments: { release: "acme/wallet@1.0.0" } },
         { name: GET_TASK_NAME, arguments: { order } },
         { name: GRADE_NAME, arguments: grade },
         { name: GET_GRADE_NAME, arguments: { grade: order } },
@@ -349,7 +354,7 @@ describe("the server", () => {
         expect(logged).toEqual([`brainchain-mcp has an invalid setting: ${problem}`]);
 
         const { tools } = await client.listTools();
-        for (const [name, valid] of [[POST_TASK_NAME, task], [GRADE_NAME, grade], [BOND_TASK_NAME, { task: "12", amount: "5" }], [SIT_EXAM_NAME, sitting]] as const) {
+        for (const [name, valid] of [[POST_TASK_NAME, task], [SECURITY_REVIEW_NAME, { release: "acme/wallet@1.0.0" }], [GRADE_NAME, grade], [BOND_TASK_NAME, { task: "12", amount: "5" }], [SIT_EXAM_NAME, sitting]] as const) {
           expect(tools.find((tool) => tool.name === name)!.description).toMatch(new RegExp(`^Invalid setting: ${problem.replace(/[.]/g, "\\.")} Until .* this tool only returns that error\\. `));
           // A call that is wrong in itself gets the same answer: the tool returns that error and nothing else.
           for (const sent of [valid, {}, { task: "0", extra: true }]) {
@@ -382,10 +387,10 @@ describe("the server", () => {
     }
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
     expect(readme).toContain(
-      "A key it cannot use stops `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task`, `brainchain_sit_exam`, `brainchain_exam_submit`, which signs each delivery, and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working, as do the tools that read the exam, a sitting, an agent's licences and its record.",
+      "A key it cannot use stops `brainchain_post_task`, `brainchain_security_review`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task`, `brainchain_sit_exam`, `brainchain_exam_submit`, which signs each delivery, and `brainchain_bond_status`, which reads this wallet's bonds; `brainchain_get_task` and `brainchain_get_grade` need no key and keep working, as do the tools that read the exam, a sitting, an agent's licences and its record.",
     );
-    expect(readme).toContain("A setting only payments read stops just the five tools that pay, `brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_sit_exam`; the other twenty-one keep working.");
-    expect(readme).toContain("`brainchain_post_task`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_sit_exam` spend from the wallet");
+    expect(readme).toContain("A setting only payments read stops just the six tools that pay, `brainchain_post_task`, `brainchain_security_review`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_sit_exam`; the other twenty-one keep working.");
+    expect(readme).toContain("`brainchain_post_task`, `brainchain_security_review`, `brainchain_grade`, `brainchain_call`, `brainchain_bond_task` and `brainchain_sit_exam` spend from the wallet");
     expect(readme).toContain("stops every tool but `brainchain_stock_premiums`, `brainchain_custody_additions`, `brainchain_market_maker_holdings`, `brainchain_token_readiness`, `brainchain_token_sightings`, `brainchain_token_timeline`, `brainchain_token_market_cap`, `brainchain_token_builder`, `brainchain_trace_outcomes`, `brainchain_calls`, `brainchain_changes`, `brainchain_watch` and `brainchain_unwatch`.");
     expect(readme).toContain("`BRAINCHAIN_STATE_DIR` (including a folder that cannot hold the daily limit's record when `BRAINCHAIN_DAILY_UNITS` is set)");
     expect(readme).not.toContain("the task and bond tools return the error");

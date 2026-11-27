@@ -49,6 +49,8 @@ import {
   LICENCES_TOOL,
   POST_TASK_NAME,
   postTaskTool,
+  SECURITY_REVIEW_NAME,
+  securityReviewTool,
   SIT_EXAM_NAME,
   sitExamTool,
   type Desk,
@@ -285,7 +287,7 @@ function unreadable(problem: string): Wiring {
     gradeTool: gradeTool(problem),
     examTools: examTools(problem, problem),
     refused: new Map(
-      [POST_TASK_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, CALL_NAME, BOND_TASK_NAME, BOND_STATUS_NAME, EXAM_INFO_NAME, SIT_EXAM_NAME, EXAM_SUBMIT_NAME, EXAM_STATUS_NAME, LICENCES_NAME, AGENT_RECORD_NAME].map((name) => [name, problem]),
+      [POST_TASK_NAME, SECURITY_REVIEW_NAME, GET_TASK_NAME, GRADE_NAME, GET_GRADE_NAME, CALL_NAME, BOND_TASK_NAME, BOND_STATUS_NAME, EXAM_INFO_NAME, SIT_EXAM_NAME, EXAM_SUBMIT_NAME, EXAM_STATUS_NAME, LICENCES_NAME, AGENT_RECORD_NAME].map((name) => [name, problem]),
     ),
   };
 }
@@ -338,7 +340,7 @@ export function deskFor(env: Record<string, string | undefined>, version: string
   // state folder, which could still take a write or hang on one. Reading a bond and delivering an exam item
   // need the key and no record, so only a key problem stops those.
   const refused = new Map<string, string>();
-  if (problem) for (const name of [POST_TASK_NAME, GRADE_NAME, CALL_NAME, BOND_TASK_NAME, SIT_EXAM_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);
+  if (problem) for (const name of [POST_TASK_NAME, SECURITY_REVIEW_NAME, GRADE_NAME, CALL_NAME, BOND_TASK_NAME, SIT_EXAM_NAME]) refused.set(name, keyProblem ? `${problem} ${KEY_HELP}` : problem);
   if (keyProblem) for (const name of [BOND_STATUS_NAME, EXAM_SUBMIT_NAME]) refused.set(name, `${keyProblem} ${KEY_HELP}`);
   // With no wallet at all, and BrainChain's own desk, a GitHub sign-in grades through the free checks. A server with a wallet always pays from it.
   let free: Wiring["free"];
@@ -491,6 +493,7 @@ export function wire(env: Record<string, string | undefined>, version: string, o
   const leadWatch = (tool: Tool): Tool => (watchProblem ? { ...tool, description: invalidSetting(watchProblem) + tool.description } : tool);
   const tools = [
     postTaskTool(terms),
+    securityReviewTool(terms),
     GET_TASK_TOOL,
     gradeToolDef,
     GET_GRADE_TOOL,
