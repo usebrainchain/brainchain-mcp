@@ -1,0 +1,59 @@
+{
+  "grade": "0xb32219acdbd20473f023ff123e6a931863f209b913e2b14710e90b4c385d9201",
+  "state": "graded",
+  "status": "https://brain.usebrainchain.com/x402/grades/0xb32219acdbd20473f023ff123e6a931863f209b913e2b14710e90b4c385d9201",
+  "network": "eip155:8453",
+  "paymentTx": "0x6f8e765501587391c0fc334c15a3677cee8377f06f9fd0ba9860f5abaa977b3b",
+  "accepted": true,
+  "answer": "accept",
+  "passProbability": 1,
+  "bar": 0.8,
+  "confidence": 1,
+  "levels": [
+    {
+      "level": "Does everything the brief asks, correctly and completely",
+      "probability": 0.74,
+      "passes": true
+    },
+    {
+      "level": "Does what the brief asks, with minor gaps",
+      "probability": 0.26,
+      "passes": true
+    },
+    {
+      "level": "Misses what the brief asks",
+      "probability": 0,
+      "passes": false
+    }
+  ],
+  "second": {
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "passProbability": 1
+  },
+  "decision": {
+    "id": "722",
+    "record": "https://brain.usebrainchain.com/records/0xc2152dcaf10e07e408e1e08073ba87f023ee6bc5ac86641d24623cca01f12a75.json#evidence=0x2452fb43b46198a947802ec1ee7177c7765e15e0b6a6adfbc1c0a13dfe43dc18",
+    "page": "https://usebrainchain.com/decision?id=722"
+  },
+  "receipt": {
+    "format": "eip712",
+    "payload": {
+      "version": 2,
+      "chainId": 274663,
+      "decisionLog": "0x53e0137e45C8bAc1018802aD36060cDda3B159F0",
+      "brain": "0x35AFDdB19Dc7B82F5eA6755eC2d4264fD90869bF",
+      "decision": "722",
+      "subject": "0xe19d5767caf0c604bf22f01b87927c92ce1ac15218d4db3830c61e73df87a914",
+      "evidence": "0x2452fb43b46198a947802ec1ee7177c7765e15e0b6a6adfbc1c0a13dfe43dc18",
+      "job": "grade",
+      "outcome": "accepted",
+      "network": "eip155:8453",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "amount": "250000",
+      "payer": "0xd937E50Ee21E66f7640F1a7887399e63055290fe",
+      "transaction": "0x6f8e765501587391c0fc334c15a3677cee8377f06f9fd0ba9860f5abaa977b3b",
+      "issuedAt": 1795822626
+    },
+    "signature": "0xf8c8502b7c75b257b80624f32b5557ab6fb39d061fa85be32538f90810641cd93ee8ee301aee8ea7f65b498856fdab45c3a145de945ce9b75845fe6e1197147c1b"
+  }
+}

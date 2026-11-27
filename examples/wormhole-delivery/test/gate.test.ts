@@ -105,6 +105,21 @@ describe("confirm", () => {
   });
 });
 
+describe("recorded on mainnet", () => {
+  it("the accepted forecast's record holds the bytes Wormhole hashed", async () => {
+    const checked = check(await delivery("asked"), order);
+    if (!checked.ok) throw new Error(checked.why);
+    const verdict = JSON.parse(await readFile(fixture("recorded/asked.json"), "utf8")) as Verdict;
+    expect(verdict.accepted).toBe(true);
+    expect(confirm(checked.receipt, verdict.decision!.record, new Uint8Array(await readFile(fixture("recorded/asked.record.json"))))).toBeUndefined();
+  });
+
+  it("the forecast for another city was rejected", async () => {
+    const verdict = JSON.parse(await readFile(fixture("recorded/another-city.json"), "utf8")) as Verdict;
+    expect(verdict.accepted).toBe(false);
+  });
+});
+
 describe("gate", () => {
   it("uses the delivery when both pass and the record holds the same bytes", async () => {
     let sent: GradeRequest | undefined;
@@ -165,12 +180,15 @@ describe("main", () => {
     return { io: value, lines, errors };
   };
 
-  it("runs the samples free: two go to the grade, two stop at Wormhole", async () => {
+  it("runs the samples free: two stop at Wormhole, and the recorded grades tell the other two apart", async () => {
     const { io: sampleIo, lines } = io();
     expect(await main(["--sample"], sampleIo)).toBe(0);
     const text = lines.join("\n");
     expect(text.match(/goes to BrainChain's grade/g)).toHaveLength(2);
     expect(text.match(/nothing is paid to BrainChain/g)).toHaveLength(2);
+    expect(text).toContain("BrainChain accepted it");
+    expect(text).toContain("BrainChain rejected it");
+    expect(text).toContain("holds the same bytes");
   });
 
   it("asks BrainChain's price on a dry run without paying", async () => {

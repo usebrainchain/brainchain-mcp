@@ -7,8 +7,8 @@ import { parseArgs } from "node:util";
 import { privateKeyToAccount } from "viem/accounts";
 import type { PrivateKeyAccount } from "viem";
 
-import { deskUrl, payGrade, priceOf } from "./desk.ts";
-import { check, gate, type Delivery, type Order, type Outcome } from "./gate.ts";
+import { deskUrl, payGrade, priceOf, type Verdict } from "./desk.ts";
+import { check, confirm, gate, type Delivery, type Order, type Outcome } from "./gate.ts";
 
 const SAMPLES = fileURLToPath(new URL("../fixtures/", import.meta.url));
 
@@ -110,9 +110,20 @@ async function sample(io: Io): Promise<number> {
     const receipt = checked.receipt;
     const seen = receipt ? `HTTP ${receipt.http_status}${receipt.byte_len === null ? "" : `, ${receipt.byte_len} bytes`}` : "no receipt";
     io.log(`${basename(file, ".json")}: ${seen}`);
-    io.log(checked.ok ? `  Wormhole allows it (SHA-256 ${checked.receipt.resource_digest}). It goes to BrainChain's grade.` : `  Stops here, and nothing is paid to BrainChain: ${checked.why}.`);
+    if (!checked.ok) {
+      io.log(`  Stops here, and nothing is paid to BrainChain: ${checked.why}.`);
+      continue;
+    }
+    io.log(`  Wormhole allows it (SHA-256 ${checked.receipt.resource_digest}). It goes to BrainChain's grade.`);
+    const name = basename(file, ".json");
+    const recorded = await readFile(join(SAMPLES, "recorded", `${name}.json`), "utf8").catch(() => undefined);
+    if (!recorded) continue;
+    const verdict = JSON.parse(recorded) as Verdict;
+    io.log(`  Recorded on mainnet: BrainChain ${verdict.accepted ? "accepted" : "rejected"} it at a pass probability of ${pct(verdict.passProbability)} (bar ${pct(verdict.bar)}), ${verdict.decision?.page ?? `decision ${verdict.decision?.id}`}`);
+    if (!verdict.accepted || !verdict.decision?.record) continue;
+    const problem = confirm(checked.receipt, verdict.decision.record, new Uint8Array(await readFile(join(SAMPLES, "recorded", `${name}.record.json`))));
+    io.log(problem ? `  The recorded record does not hold these bytes: ${problem}.` : "  Its decision record holds the same bytes, so its result hashes to Wormhole's SHA-256.");
   }
-  io.log("\nA paid run grades a delivery Wormhole allows. Only BrainChain's grade tells the asked-for forecast from the one for another city.");
   return 0;
 }
 

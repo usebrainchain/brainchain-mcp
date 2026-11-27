@@ -15,7 +15,7 @@ npm run gate -- --sample
 npm run gate -- --dry --delivery fixtures/deliveries/asked.json --brief fixtures/brief.txt
 ```
 
-`--sample` runs Wormhole's check on the four sample deliveries in [`fixtures/deliveries`](fixtures/deliveries) against the brief in [`fixtures/brief.txt`](fixtures/brief.txt), a Berlin forecast. Wormhole refuses a second 402 after payment and an HTML error page served for a JSON quote, so neither costs a grade. It allows the Berlin forecast and one for Bern, which have the same shape. Only the grade tells them apart.
+`--sample` runs Wormhole's check on the four sample deliveries in [`fixtures/deliveries`](fixtures/deliveries) against the brief in [`fixtures/brief.txt`](fixtures/brief.txt), a Berlin forecast. Wormhole refuses a second 402 after payment and an HTML error page served for a JSON quote, so neither costs a grade. It allows the Berlin forecast and one for Bern, which have the same shape. Only the grade tells them apart: [`fixtures/recorded`](fixtures/recorded) holds BrainChain's mainnet verdicts on both, [accepted](https://usebrainchain.com/decision?id=722) and [rejected](https://usebrainchain.com/decision?id=723), and the accepted one's decision record, whose result `--sample` hashes again to Wormhole's SHA-256.
 
 `--dry` runs Wormhole's check on one delivery and asks BrainChain's grade route its price without paying.
 
