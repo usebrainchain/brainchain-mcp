@@ -211,7 +211,7 @@ The earlier delivery, a Python dict, with twelve rules:
 | Size | Sell 30 USDG for WETH, over the mandate's 25 | Refused on size | Refused on size | 0% | 1% | 9.0 s | [1001](https://usebrainchain.com/decision?id=1001) |
 | Tampered | The inside quote with one byte of its route changed and its body digest recomputed | Refused on signature | Refused on signature | 0% | 1% | 25.4 s | [999](https://usebrainchain.com/decision?id=999) |
 
-*Jev* and *Second model* are each one's probability that the trade passes. *Verdict in* runs from the paid request to the verdict.
+*Jev* and *Second model* are each one's probability that the trade passes. *Verdict in* runs from the paid request to the verdict. These runs were measured when the lower of Jev's and the second model's probability decided a grade; the grading panel's probability decides today.
 
 Every trade inside the mandate was accepted, from 89% to 98% from Jev and 100% from the second model, except 1003 above. Every trade that broke it was refused at full confidence by the checks, on the one rule it broke. The tampered quotes kept every rule of the mandate, so only 0x's signature caught the change. Today the client refuses the outside, minimum and size trades itself, before paying 0x, and the tampered ones after buying the quote, before paying BrainChain.
 
