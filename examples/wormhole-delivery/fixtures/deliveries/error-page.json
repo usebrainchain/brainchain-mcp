@@ -1,0 +1,18 @@
+{
+  "quote": {
+    "scheme": "exact",
+    "network": "eip155:8453",
+    "amount": "10000",
+    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "payTo": "0x00000000000000000000000000000000000000aa",
+    "resource": "https://forecast.example/v1/hourly?city=Berlin&date=2026-11-29",
+    "description": "Hourly forecast for one city and day",
+    "mimeType": "application/json",
+    "maxTimeoutSeconds": 60
+  },
+  "response": {
+    "status": 200,
+    "contentType": "text/html",
+    "bodyText": "<!doctype html><title>502 Bad Gateway</title><h1>502 Bad Gateway</h1>"
+  }
+}

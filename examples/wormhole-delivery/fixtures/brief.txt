@@ -1,0 +1,1 @@
+An hourly weather forecast for Berlin, Germany, on 29 November 2026, as JSON: the city, the date, and for each of the 24 hours the temperature in degrees Celsius and the precipitation in millimetres.
