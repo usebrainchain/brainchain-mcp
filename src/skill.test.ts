@@ -58,9 +58,14 @@ describe("the OpenClaw skill", () => {
     expect(body).toContain("Never open the key file");
   });
 
-  it("says the paying wallet cannot dispute", () => {
-    for (const text of [body, readme]) expect(text).toContain("The wallet that paid cannot dispute a grade.");
-    expect(body).not.toMatch(/poster can dispute|grade can be disputed/i);
+  it("says the desk disputes and appeals for the paying wallet on its signature, with no tool for it", () => {
+    for (const text of [body, readme].map((each) => each.replace(/\s+/g, " "))) {
+      expect(text).toMatch(/dispute(s)? an accepted grade inside the dispute window/);
+      expect(text).toMatch(/appeal(s)? a ruling that pays the model inside the appeal window/);
+      expect(text).toMatch(/no tool (here )?sends/i);
+      expect(text).not.toMatch(/brainchain_(dispute|appeal)/);
+    }
+    expect(readme).toContain("`BrainChain dispute v1`, `chain <BrainChain chain id>`, `order <order id in lowercase>` and `route POST /x402/tasks/<order id in lowercase>/dispute`");
   });
 
   it("installs the release this package is", () => {
