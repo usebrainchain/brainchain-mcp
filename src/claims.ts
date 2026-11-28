@@ -243,6 +243,15 @@ export function createClaims({ clientId, dir, problemsUrl = BOARD_URL, fetch: fe
   };
 }
 
+/** The board BRAINCHAIN_PROBLEMS_URL names, BrainChain's own by default; throws when it is not https, or http on loopback. */
+export function boardUrlFrom(env: Record<string, string | undefined>): URL {
+  const given = env.BRAINCHAIN_PROBLEMS_URL?.trim() || BOARD_URL;
+  const url = URL.canParse(given) ? new URL(given) : undefined;
+  const local = url !== undefined && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (!url || (url.protocol !== "https:" && !(url.protocol === "http:" && local))) throw new Error("BRAINCHAIN_PROBLEMS_URL must be an https URL, or http on localhost or 127.0.0.1.");
+  return url;
+}
+
 /**
  * The claims a watcher takes, on whenever GITHUB_CLIENT_ID is set, from the board BRAINCHAIN_PROBLEMS_URL names
  * (BrainChain's own by default). Neither needs the sponsor's key. Throws what is wrong with either setting.
@@ -251,10 +260,7 @@ export function claimsFrom(env: Record<string, string | undefined>, dir: string,
   const clientId = env.GITHUB_CLIENT_ID?.trim();
   if (!clientId) return undefined;
   if (!/^[\w.-]{8,64}$/.test(clientId)) throw new Error("GITHUB_CLIENT_ID is not a GitHub client id.");
-  const given = env.BRAINCHAIN_PROBLEMS_URL?.trim() || BOARD_URL;
-  const url = URL.canParse(given) ? new URL(given) : undefined;
-  const local = url !== undefined && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-  if (!url || (url.protocol !== "https:" && !(url.protocol === "http:" && local))) throw new Error("BRAINCHAIN_PROBLEMS_URL must be an https URL, or http on localhost or 127.0.0.1.");
+  const url = boardUrlFrom(env);
   options.say?.(`Claims are on: Lean bounties from ${url.href}, for sign-ins made through GitHub app ${clientId}.`);
   return createClaims({ clientId, dir, problemsUrl: url.href, ...options });
 }

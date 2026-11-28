@@ -5,6 +5,7 @@ import { createPublicClient, getAddress, http, parseAbiItem, toHex, type PublicC
 
 import { parseCall, type IndexedCall } from "../calls.js";
 import { parseJsonl } from "../dataset/format.js";
+import type { ProblemsLive } from "./problems.js";
 
 export const BRAIN_URL = "https://brain.usebrainchain.com";
 export const BRAINCHAIN_RPC = "https://rpc.usebrainchain.com";
@@ -24,6 +25,8 @@ export interface CallIndexOptions {
   client?: Reader;
   fetch?: typeof fetch;
   say?: (line: string) => void;
+  /** The problem board's live feed: a grade whose brief answers one of its record problems is shown there, not kept as a call. */
+  answers?: Pick<ProblemsLive, "answerTo" | "answered">;
 }
 
 interface Checkpoint {
@@ -142,18 +145,22 @@ export class CallIndex {
     if (text.length > MAX_RECORD_BYTES) return undefined;
     const payload = JSON.parse(text) as { subject?: string; request?: { state?: string }; payments?: { payer?: string; network?: string; amount?: string }[] };
     const brief = String((JSON.parse(payload.request?.state ?? "{}") as { task?: { brief?: unknown } }).task?.brief ?? "");
-    const call = parseCall(brief);
+    const problem = this.options.answers?.answerTo(brief);
+    const call = problem ? undefined : parseCall(brief);
     const payment = payload.payments?.[0];
-    if (!call || !payment?.payer || !payload.subject) return undefined;
+    if (!(call || problem) || !payment?.payer || !payload.subject) return undefined;
     const grade = toHex(BigInt(payload.subject), { size: 32 });
     const view = await this.fetchImpl(`${this.brain}/x402/grades/${grade}`, { signal: AbortSignal.timeout(20_000) });
     if (!view.ok) throw new Error(`the grade of decision ${decision} answered ${view.status}`);
     const { accepted } = (await view.json()) as { accepted?: unknown };
     const { timestamp } = await this.client.getBlock({ blockNumber: block });
+    const at = new Date(Number(timestamp) * 1000).toISOString();
+    if (problem) return void this.options.answers!.answered({ problem, grade, at, accepted: accepted === true });
+    if (!call) return undefined;
     return {
       grade,
       decision,
-      at: new Date(Number(timestamp) * 1000).toISOString(),
+      at,
       payer: getAddress(payment.payer),
       network: payment.network ?? "",
       amount: payment.amount ?? "",

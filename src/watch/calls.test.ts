@@ -130,4 +130,21 @@ describe("the call index", () => {
     const again = new CallIndex({ dir, brain: BRAIN, client, fetch });
     expect(again.page(0, 10)).toEqual(index.page(0, 10));
   });
+
+  it("gives a grade on a record problem's brief to the problem board's feed, with whether it was accepted, and keeps no call for it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "brainchain-calls-"));
+    const head = { block: 4_000 };
+    const board = "Cap set, dimension 8. An open problem on BrainChain's problem board";
+    const entries: Entry[] = [{ id: 5, block: 4_010, record: `${BRAIN}/records/0x05.json` }];
+    const records = { [`${BRAIN}/records/0x05.json`]: record(5n, `Work delivered outside BrainChain, sent in for a grade.\n\nTitle: t\n\n${board}, https://usebrainchain.com/problems (version 1).`) };
+    const { client, fetch } = chain(entries, head, records);
+    const found: unknown[] = [];
+    const answers = { answerTo: (brief: string) => (brief.includes(board) ? "cap-set-8" : undefined), answered: (answer: unknown) => void found.push(answer) };
+    const index = new CallIndex({ dir, brain: BRAIN, client, fetch, answers });
+    await index.read();
+    head.block = 4_020;
+    await index.read();
+    expect(found).toEqual([{ problem: "cap-set-8", grade: toHex(5n, { size: 32 }), at: new Date((1_795_000_000 + 4_010) * 1000).toISOString(), accepted: true }]);
+    expect(index.page(0, 10).total).toBe(0);
+  });
 });

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { watchUrl } from "../changes.js";
-import { claimsFrom, type Claims } from "../claims.js";
+import { boardUrlFrom, claimsFrom, type Claims } from "../claims.js";
 import { expandHome } from "../config.js";
 import { countsFor } from "../dataset/counts.js";
 import { datasetReader, MANIFEST_MS, type DatasetReader } from "../dataset/published.js";
@@ -28,6 +28,7 @@ import { Requests } from "./http.js";
 import { listMerges, listPullRequests, METAMASK, TRUST_WALLET } from "./lists.js";
 import { pinnedPost, publicTarget, relayed, webhookUrl, type Relay } from "./net.js";
 import { PoolIndex } from "./pools.js";
+import { beatKeyFrom, createProblemsLive, type ProblemsLive } from "./problems.js";
 import { chainReader, privateReader, redactor, RPC_SETTING, rpcSetting } from "./rpc.js";
 import { serveEvents } from "./serve.js";
 import { NOTICE_SOURCES, noticePoller } from "./notices.js";
@@ -81,7 +82,11 @@ also answers GET /free, GET /free/me and POST /free/grade, and pays for the firs
 account older than ${FREE.minAccountDays} days, at most ${FREE.perDay} a day and ${FREE.total} in all. BRAINCHAIN_FREE_DAY_CAPS sets
 other caps for listed UTC days, such as 2026-11-30=200,2026-12-01=200, and BRAINCHAIN_FREE_TOTAL replaces the ${FREE.total}.
 GITHUB_CLIENT_ID alone also turns on GET /claims and POST /claims: bounty claims for Lean proofs on the board
-BRAINCHAIN_PROBLEMS_URL names (default BrainChain's), checked against GitHub and kept in claims/claims.json in the state.`;
+BRAINCHAIN_PROBLEMS_URL names (default BrainChain's), checked against GitHub and kept in claims/claims.json in the state.
+With claims on, --serve also answers GET /problems/live: the board's live figures, from that board and from Left to Solve,
+which it reads once a minute for the agents at work and every 20 seconds for one Lean problem's steps. BRAINCHAIN_BEAT_KEY,
+32 characters or more, turns on POST /problems/beat, where BrainChain's own solvers, sending it as a Bearer token, say
+they are at work on a problem; each counts for 15 minutes after its last beat.`;
 
 /** The relay Discord deliveries go through, from BRAINCHAIN_WATCH_DISCORD_RELAY and its key, or none. */
 export function discordRelay(env: Record<string, string | undefined>): Relay | undefined {
@@ -313,7 +318,6 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   const adminToken = env.BRAINCHAIN_WATCH_ADMIN_TOKEN?.trim() || undefined;
   if (adminToken && !/^[\w-]{32,100}$/.test(adminToken)) throw new Error("BRAINCHAIN_WATCH_ADMIN_TOKEN must be 32 to 100 letters, digits, - or _.");
   const names = () => (state.source("robinhood-names") as NamesState).names ?? {};
-  const calls = new CallIndex({ dir, ...(env.BRAINCHAIN_WATCH_BRAIN ? { brain: env.BRAINCHAIN_WATCH_BRAIN } : {}), say });
   // The address /mcp's replies give for this watcher; without one they give its loopback address.
   let publicUrl: URL | undefined;
   try {
@@ -334,7 +338,19 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   } catch (error) {
     say(`Claims are off: ${(error as Error).message}`);
   }
-  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, calls, ...(sponsor ? { sponsor } : {}), ...(claims ? { claims } : {}), mcp: hostedMcp(version, publicUrl ? { publicUrl } : {}), trustProxy: args.trustProxy }) : undefined;
+  // The board's live figures come with the claims, from the same board.
+  let problems: ProblemsLive | undefined;
+  if (claims) {
+    try {
+      const beatKey = beatKeyFrom(env);
+      problems = createProblemsLive({ dir: join(dir, "problems"), problemsUrl: boardUrlFrom(env).href, ...(beatKey ? { beatKey } : {}), say });
+      say(`The problem board's live figures are on${beatKey ? ", with beats from BrainChain's own solvers" : "; beats are off without BRAINCHAIN_BEAT_KEY"}.`);
+    } catch (error) {
+      say(`The problem board's live figures are off: ${(error as Error).message}`);
+    }
+  }
+  const calls = new CallIndex({ dir, ...(env.BRAINCHAIN_WATCH_BRAIN ? { brain: env.BRAINCHAIN_WATCH_BRAIN } : {}), say, ...(problems ? { answers: problems } : {}) });
+  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, calls, ...(sponsor ? { sponsor } : {}), ...(claims ? { claims } : {}), ...(problems ? { problems } : {}), mcp: hostedMcp(version, publicUrl ? { publicUrl } : {}), trustProxy: args.trustProxy }) : undefined;
   let ticking = false;
   const deliver = () => {
     if (ticking) return;
@@ -396,6 +412,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
       watches: deliveries.active,
       deliveries: deliveries.report(),
       calls: calls.status(),
+      ...(problems ? { problems: problems.status() } : {}),
       waiting,
       sources,
       requests: stats,
@@ -412,6 +429,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   watcher.start();
   deliveries.start();
   calls.start();
+  problems?.start();
   if (rpc) void poolIndex.fill(privateReader(fillRequests.fetchFor("pools"), rpc));
   else say("No private RPC is set, so the pool index is not filled and each token's pools are searched for as they are needed.");
 
@@ -423,6 +441,7 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
     served?.close();
     deliveries.stop();
     calls.stop();
+    problems?.stop();
     await watcher.stop();
     clearTimeout(saving);
     poolIndex.close();
