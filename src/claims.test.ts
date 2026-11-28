@@ -21,6 +21,8 @@ const REPO = "GuillaumeBAUD-coder/open-math-agents";
 const PR = `https://github.com/${REPO}/pull/57`;
 const API = "https://lefttosolve.com/api/problems/Erdos142.erdos_142";
 const BOARD = "https://usebrainchain.com/problems.json";
+const NEW = "lefttosolve2/open-math-agents";
+const REPO_ID = 1471973920;
 
 const lean = {
   problem: "erdos-142",
@@ -49,6 +51,10 @@ interface World {
   pull?: Record<string, unknown>;
   files?: unknown;
   down?: "board" | "theirs" | "github";
+  /** GitHub answers the old name with a 301 to the repository's id, as for a renamed repository. */
+  renamed?: boolean;
+  /** Where GitHub's redirect for the old name goes. */
+  redirectTo?: string;
 }
 
 /** problems.json, their API and GitHub's, as fetch sees them, recording each request's address and authorization. */
@@ -70,10 +76,15 @@ function upstream(world: World) {
       if (world.down === "theirs") return new Response("upstream", { status: 500 });
       return Response.json({ id: "Erdos142.erdos_142", solution: "solution" in world ? world.solution : { handle: "prover", polarity: "proof", pr_url: PR, created_at: "2026-12-20T12:00:00Z" } });
     }
-    if (req.url.startsWith(`https://api.github.com/repos/${REPO}/pulls/57`)) {
+    const pulls = /^https:\/\/api\.github\.com\/(repos\/[^/]+\/[^/]+|repositories\/\d+)\/pulls\/57(\/files\?per_page=100)?$/.exec(req.url);
+    if (pulls) {
       if (world.down === "github") throw new TypeError("fetch failed");
-      if (req.url.includes("/files")) return Response.json(world.files ?? [{ filename: "README.md" }, { filename: "proofs/Erdos142.erdos_142.lean" }]);
-      return Response.json({ number: 57, merged: true, merged_at: "2026-12-20T11:00:00Z", user: { id: 7001, login: "prover" }, ...world.pull });
+      const [, at, files] = pulls;
+      if (world.renamed && at === `repos/${REPO}`) return new Response(null, { status: 301, headers: { location: world.redirectTo ?? req.url.replace(`/repos/${REPO}/`, `/repositories/${REPO_ID}/`) } });
+      const repo = { [`repos/${REPO}`]: { id: REPO_ID, full_name: REPO }, [`repos/${NEW}`]: { id: REPO_ID, full_name: NEW }, [`repositories/${REPO_ID}`]: { id: REPO_ID, full_name: NEW }, "repos/someone/open-math-agents": { id: 999, full_name: "someone/open-math-agents" } }[at!];
+      if (!repo) return Response.json({ message: "Not Found" }, { status: 404 });
+      if (files) return Response.json(world.files ?? [{ filename: "README.md" }, { filename: "proofs/Erdos142.erdos_142.lean" }]);
+      return Response.json({ number: 57, html_url: `https://github.com/${repo.full_name}/pull/57`, merged: true, merged_at: "2026-12-20T11:00:00Z", user: { id: 7001, login: "prover" }, base: { repo }, ...world.pull });
     }
     return Response.json({ message: "Not Found" }, { status: 404 });
   }) as typeof fetch;
@@ -199,6 +210,53 @@ describe("POST /claims", () => {
     expect(await (await fetch(`${base}/health`)).json()).toMatchObject({ claims: "/claims" });
     expect(((await (await fetch(`${base}/nothing`)).json()) as { error: string }).error).toContain("GET /health, GET /claims, POST /claims, POST /watches");
     expect((await fetch(`${base}/claims`, { method: "DELETE" })).status).toBe(405);
+  });
+});
+
+describe("a bounty whose entry names the repository's id", () => {
+  const board = { board: "BrainChain", open: true, windowDays: 7, problems: [checker], lean: [{ ...lean, source: { ...lean.source, repoId: REPO_ID } }] };
+  const solved = (pr_url: string) => ({ handle: "prover", polarity: "proof", pr_url, created_at: "2026-12-20T12:00:00Z" });
+
+  it("follows GitHub from the old name of a renamed repository, sending the watcher's token to api.github.com alone", async () => {
+    const { post, asked } = await serving({ board, renamed: true });
+    const reply = await post(claim);
+    expect(reply.status).toBe(200);
+    expect(reply.body.claim).toMatchObject({ pr: `https://github.com/${NEW}/pull/57` });
+    const read = asked.filter(({ url }) => url.includes("/pulls/57"));
+    expect(read.map(({ url }) => url)).toEqual([
+      `https://api.github.com/repos/${REPO}/pulls/57`,
+      `https://api.github.com/repositories/${REPO_ID}/pulls/57`,
+      `https://api.github.com/repositories/${REPO_ID}/pulls/57/files?per_page=100`,
+    ]);
+    for (const { authorization } of read) expect(authorization).toBe(`Bearer ${WATCHER_TOKEN}`);
+  });
+
+  it("takes the new name too", async () => {
+    const { post } = await serving({ board, solution: solved(`https://github.com/${NEW}/pull/57`) });
+    expect((await post(claim)).body.claim).toMatchObject({ pr: `https://github.com/${NEW}/pull/57` });
+  });
+
+  it("refuses a pull request of another repository, and records nothing", async () => {
+    const { post, file } = await serving({ board, solution: solved("https://github.com/someone/open-math-agents/pull/57") });
+    expect(await post(claim)).toEqual({
+      status: 502,
+      body: { reason: "unreadable", error: "BrainChain could not read the proof Left to Solve lists for Erdős Problem 142: pull request 57 is in someone/open-math-agents, not in the repository the bounty is for. Nothing was recorded. Write to hello@usebrainchain.com with the problem's name." },
+    });
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("follows no redirect away from api.github.com", async () => {
+    const { post, asked } = await serving({ board, renamed: true, redirectTo: "https://elsewhere.example/pulls/57" });
+    expect((await post(claim)).body).toEqual({ reason: "unavailable", error: "GitHub could not be read just now. Nothing was recorded. Try again in a minute." });
+    expect(asked.some(({ url }) => new URL(url).host === "elsewhere.example")).toBe(false);
+  });
+
+  it("without the id, matches the repository by name as before", async () => {
+    const { post } = await serving({ solution: solved(`https://github.com/${NEW}/pull/57`) });
+    expect((await post(claim)).body).toMatchObject({ reason: "unreadable", error: expect.stringContaining(`it does not name a pull request of ${REPO}`) });
+    close?.();
+    const renamed = await serving({ renamed: true });
+    expect((await renamed.post(claim)).body.claim).toMatchObject({ pr: `https://github.com/${NEW}/pull/57` });
   });
 });
 

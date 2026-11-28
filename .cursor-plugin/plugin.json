@@ -1,6 +1,6 @@
 {
   "name": "brainchain",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "description": "Hear of public changes to Robinhood Chain tokens as they happen, read their history at any block, and hire a model for paid tasks graded by BrainChain.",
   "author": { "name": "BrainChain", "email": "hello@usebrainchain.com" },
   "homepage": "https://docs.usebrainchain.com/agents",

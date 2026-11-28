@@ -26,7 +26,8 @@ export interface LeanProblem {
   name: string;
   bounty: number;
   opened: string;
-  source: { name: string; id: string; page: string; brief: string; api: string; repo: string; proofFile: string };
+  /** `repoId` is GitHub's id for `repo`, which stays the same when the repository is renamed. */
+  source: { name: string; id: string; page: string; brief: string; api: string; repo: string; repoId?: number; proofFile: string };
 }
 
 /** A recorded claim. `githubId` is kept to tell the claimant again and is never shown. */
@@ -79,8 +80,35 @@ export function leanProblems(body: unknown): LeanProblem[] {
     if (!isText(p.opened) || Number.isNaN(Date.parse(p.opened)) || !isRecord(s)) return [];
     if (![s.name, s.id, s.page, s.brief, s.api, s.repo, s.proofFile].every(isText)) return [];
     const source = s as LeanProblem["source"];
-    return [{ problem: p.problem, version: p.version, name: p.name, bounty: p.bounty, opened: p.opened, source: { name: source.name, id: source.id, page: source.page, brief: source.brief, api: source.api, repo: source.repo, proofFile: source.proofFile } }];
+    const repoId = typeof s.repoId === "number" && Number.isSafeInteger(s.repoId) ? { repoId: s.repoId } : {};
+    return [{ problem: p.problem, version: p.version, name: p.name, bounty: p.bounty, opened: p.opened, source: { name: source.name, id: source.id, page: source.page, brief: source.brief, api: source.api, repo: source.repo, ...repoId, proofFile: source.proofFile } }];
   });
+}
+
+/**
+ * A read of GitHub's API. It follows GitHub's redirects itself, such as the one for a renamed repository, and only to
+ * api.github.com, so the watcher's token goes nowhere else. `url` is where the answer came from.
+ */
+async function readGitHub(fetchImpl: typeof fetch, url: string, gitHub: (url: string) => Record<string, string>): Promise<{ status: number; body: unknown; url: string } | { failed: string }> {
+  let at = url;
+  for (let hop = 0; hop <= 3; hop += 1) {
+    let response: Response;
+    try {
+      response = await fetchImpl(at, {
+        headers: { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", "user-agent": "brainchain-watch", ...gitHub(at) },
+        redirect: "manual",
+        signal: AbortSignal.timeout(UPSTREAM_MS),
+      });
+    } catch (error) {
+      return { failed: firstLine(error) };
+    }
+    const location = response.status >= 300 && response.status < 400 ? response.headers.get("location") : null;
+    if (!location) return { status: response.status, body: (await response.json().catch(() => undefined)) as unknown, url: at };
+    const next = new URL(location, at);
+    if (next.origin !== GITHUB_API) return { failed: `GitHub redirected to ${next.host}` };
+    at = next.href;
+  }
+  return { failed: "GitHub redirected more than three times" };
 }
 
 /** A JSON answer read within the time limit, or why it could not be read. */
@@ -153,37 +181,43 @@ export function createClaims({ clientId, dir, problemsUrl = BOARD_URL, fetch: fe
       }
       const solution = theirs.body.solution;
       if (solution === null || solution === undefined) return answer(409, "unproved", `${source.name} lists no accepted proof of ${name} yet. Once it lists your merged proof, send the claim again.`);
-      const pull = isRecord(solution) && isText(solution.pr_url) ? new RegExp(`^https://github\\.com/${source.repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/pull/(\\d+)$`, "i").exec(solution.pr_url) : null;
+      // Any owner and name: a renamed repository keeps its id, and GitHub redirects its old name to it.
+      const pull = isRecord(solution) && isText(solution.pr_url) ? /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)\/?$/i.exec(solution.pr_url) : null;
       const polarity = isRecord(solution) && (solution.polarity === "proof" || solution.polarity === "refutation") ? solution.polarity : undefined;
-      if (!pull || !polarity) {
+      const named = pull ? `${pull[1]}/${pull[2]}` : undefined;
+      if (!pull || !named || !polarity || (source.repoId === undefined && named.toLowerCase() !== source.repo.toLowerCase())) {
         say(`claims: ${source.name} lists a solution of ${slug} that does not name a pull request of ${source.repo}`);
         return answer(502, "unreadable", `BrainChain could not read the proof ${source.name} lists for ${name}: it does not name a pull request of ${source.repo}. Nothing was recorded. Write to hello@usebrainchain.com with the problem's name.`);
       }
-      const number = pull[1]!;
+      const number = pull[3]!;
 
-      const prUrl = `${GITHUB_API}/repos/${source.repo}/pulls/${number}`;
-      const pr = await read(fetchImpl, prUrl, { "x-github-api-version": "2022-11-28", "user-agent": "brainchain-watch", ...gitHub(prUrl) });
+      const pr = await readGitHub(fetchImpl, `${GITHUB_API}/repos/${named}/pulls/${number}`, gitHub);
       if ("failed" in pr || pr.status >= 500 || pr.status === 403 || pr.status === 429) {
         say(`claims: GitHub could not be read for pull request ${number} (${"failed" in pr ? pr.failed : `answered ${pr.status}`})`);
         return answer(503, "unavailable", `GitHub could not be read just now. ${AGAIN}`);
       }
       const p = pr.body;
       if (pr.status !== 200 || !isRecord(p) || !isRecord(p.user) || typeof p.user.id !== "number" || !isText(p.user.login)) {
-        return answer(502, "unreadable", `BrainChain could not read pull request ${number} of ${source.repo} on GitHub. Nothing was recorded. Write to hello@usebrainchain.com with the problem's name.`);
+        return answer(502, "unreadable", `BrainChain could not read pull request ${number} of ${named} on GitHub. Nothing was recorded. Write to hello@usebrainchain.com with the problem's name.`);
       }
-      if (p.merged !== true || !isText(p.merged_at)) return answer(409, "unmerged", `Pull request ${number} of ${source.repo} is not merged yet. Send the claim again once it is.`);
+      const base = isRecord(p.base) && isRecord(p.base.repo) ? p.base.repo : {};
+      const repo = isText(base.full_name) ? base.full_name : named;
+      if (source.repoId !== undefined && base.id !== source.repoId) {
+        say(`claims: ${source.name} lists pull request ${number} of ${repo} for ${slug}, not one of repository ${source.repoId}`);
+        return answer(502, "unreadable", `BrainChain could not read the proof ${source.name} lists for ${name}: pull request ${number} is in ${repo}, not in the repository the bounty is for. Nothing was recorded. Write to hello@usebrainchain.com with the problem's name.`);
+      }
+      if (p.merged !== true || !isText(p.merged_at)) return answer(409, "unmerged", `Pull request ${number} of ${repo} is not merged yet. Send the claim again once it is.`);
       if (String(p.user.id) !== user.id) return answer(403, "author", `The merged proof of ${name} was sent by @${p.user.login}. Sign in as that account with brainchain-mcp login --again, then send the claim again.`);
       if (Date.parse(p.merged_at) < Date.parse(entry.opened)) {
         return answer(409, "early", `The proof of ${name} was merged on ${day(p.merged_at)}, before the bounty opened on ${day(entry.opened)}, so it does not win the bounty.`);
       }
-      const filesUrl = `${prUrl}/files?per_page=100`;
-      const files = await read(fetchImpl, filesUrl, { "x-github-api-version": "2022-11-28", "user-agent": "brainchain-watch", ...gitHub(filesUrl) });
+      const files = await readGitHub(fetchImpl, `${pr.url}/files?per_page=100`, gitHub);
       if ("failed" in files || files.status !== 200 || !Array.isArray(files.body)) {
         say(`claims: GitHub could not be read for the files of pull request ${number} (${"failed" in files ? files.failed : `answered ${files.status}`})`);
         return answer(503, "unavailable", `GitHub could not be read just now. ${AGAIN}`);
       }
       if (!files.body.some((f) => isRecord(f) && f.filename === source.proofFile)) {
-        return answer(409, "file", `Pull request ${number} of ${source.repo} does not add ${source.proofFile}, the proof file for ${name}, so it is not the proof the bounty is for.`);
+        return answer(409, "file", `Pull request ${number} of ${repo} does not add ${source.proofFile}, the proof file for ${name}, so it is not the proof the bounty is for.`);
       }
 
       // Checked and written in one turn, so two claims sent at once cannot both be recorded.
@@ -192,7 +226,7 @@ export function createClaims({ clientId, dir, problemsUrl = BOARD_URL, fetch: fe
       if (earlier && earlier.state !== "recorded") return answer(409, "settled", `Your claim on ${name} is already ${earlier.state}, so its wallet can no longer change.`);
       const claim: Claim = earlier
         ? { ...earlier, wallet }
-        : { problem: slug, version: entry.version, githubId: user.id, login: user.login, wallet, pr: `https://github.com/${source.repo}/pull/${number}`, mergedAt: p.merged_at, polarity, at: new Date(now()).toISOString(), state: "recorded" };
+        : { problem: slug, version: entry.version, githubId: user.id, login: user.login, wallet, pr: isText(p.html_url) && p.html_url.startsWith("https://github.com/") ? p.html_url : `https://github.com/${repo}/pull/${number}`, mergedAt: p.merged_at, polarity, at: new Date(now()).toISOString(), state: "recorded" };
       const before = kept.claims;
       kept.claims = [...kept.claims.filter((c) => c !== earlier), claim];
       try {
