@@ -18,7 +18,7 @@ export const GRADE_PAYMENT = {
   maxUnits: 250_000n,
 } as const;
 
-/** The verdict as the grade route returns it. checks.output is only in the reply to the request that carried the result. */
+/** The verdict as the grade route returns it. */
 export interface Verdict {
   grade: string;
   state: string;
@@ -27,7 +27,6 @@ export interface Verdict {
   passProbability?: number;
   bar?: number;
   confidence?: number;
-  checks?: { language: string; outcome: "passed" | "failed" | "timed out"; error?: string; output?: string };
   levels?: { level: string; probability: number; passes: boolean }[];
   second?: { model: string; passProbability: number };
   decision?: { id: string; record: string; page?: string };

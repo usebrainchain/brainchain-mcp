@@ -8,9 +8,7 @@ import { deliveryMatches, inspectDelivery, type DeliveryQuote, type DeliveryRece
 import type { Verdict } from "./desk.ts";
 
 /** BrainChain's cap on a delivered result sent for a grade. */
-export const MAX_RESULT_BYTES = 100_000;
-/** BrainChain's stand-in for the result of work it has not accepted. */
-const WITHHELD = "[withheld until the work is accepted]";
+const MAX_RESULT_BYTES = 100_000;
 
 /** A paid response, in the shape Wormhole's verify_delivery tool takes. */
 export interface Delivery {
@@ -24,21 +22,20 @@ export interface Delivery {
 export interface Order {
   title?: string;
   brief: string;
-  levels?: string[];
-  pass?: number;
 }
 
 export interface GradeRequest extends Order {
   result: string;
 }
 
-export type Checked = { ok: false; why: string; receipt?: DeliveryReceipt } | { ok: true; receipt: DeliveryReceipt; request: GradeRequest };
+/** `unchecked` marks a delivery this script could not judge, as opposed to one found wrong. */
+export type Checked = { ok: false; why: string; unchecked?: true; receipt?: DeliveryReceipt } | { ok: true; receipt: DeliveryReceipt; request: GradeRequest };
 
-export type Outcome = { use: true; receipt: DeliveryReceipt; verdict: Verdict } | { use: false; why: string; receipt?: DeliveryReceipt; verdict?: Verdict };
+export type Outcome = { use: true; receipt: DeliveryReceipt; verdict: Verdict } | { use: false; why: string; unchecked?: true; receipt?: DeliveryReceipt; verdict?: Verdict };
 
 export const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
-const pct = (p: number | undefined) => (p === undefined ? "?" : `${Math.round(p * 1000) / 10}%`);
+export const pct = (p: number | undefined) => (p === undefined ? "?" : `${Math.round(p * 1000) / 10}%`);
 
 /** The body as bytes, base64 first, as Wormhole reads it. */
 export function bodyOf(response: Delivery["response"]): Uint8Array | undefined {
@@ -70,37 +67,42 @@ export function check(delivery: Delivery, order: Order, issuedAt?: string): Chec
     { ...(delivery.request_digest ? { requestDigest: delivery.request_digest } : {}), ...(issuedAt ? { issuedAt } : {}) },
   );
   const { receipt } = inspected;
-  if (inspected.decision === "abstain") return { ok: false, why: `Wormhole did not judge the delivery: ${inspected.reason ?? "no reason given"}`, ...(receipt ? { receipt } : {}) };
-  if (inspected.decision !== "allow" || !receipt) {
-    const codes = receipt?.codes.length ? ` (${receipt.codes.join(", ")})` : "";
-    return { ok: false, why: `Wormhole refused the delivery${codes}`, ...(receipt ? { receipt } : {}) };
-  }
-  if (!bytes || !deliveryMatches(receipt, bytes)) return { ok: false, why: "Wormhole's receipt does not describe these bytes", receipt };
+  const held = receipt ? { receipt } : {};
+  if (inspected.decision === "abstain") return { ok: false, unchecked: true, why: `Wormhole did not judge the delivery: ${inspected.reason ?? "no reason given"}`, ...held };
+  if (inspected.decision !== "allow" || !receipt) return { ok: false, why: `Wormhole refused the delivery${receipt?.codes.length ? ` (${receipt.codes.join(", ")})` : ""}`, ...held };
+  if (!bytes) return { ok: false, unchecked: true, why: "the delivery has no body to grade", receipt };
   const text = exactText(bytes);
-  if (text === undefined) return { ok: false, why: "the delivery is not UTF-8 text, and BrainChain grades text", receipt };
-  if (bytes.length > MAX_RESULT_BYTES) return { ok: false, why: `the delivery is ${bytes.length.toLocaleString("en-US")} bytes; BrainChain grades at most ${MAX_RESULT_BYTES.toLocaleString("en-US")}`, receipt };
-  if (text.trim() === "") return { ok: false, why: "the delivery is blank", receipt };
+  if (text === undefined) return { ok: false, unchecked: true, why: "the delivery is not UTF-8 text, and BrainChain grades text", receipt };
+  if (bytes.length > MAX_RESULT_BYTES) return { ok: false, unchecked: true, why: `the delivery is ${bytes.length.toLocaleString("en-US")} bytes; BrainChain grades at most ${MAX_RESULT_BYTES.toLocaleString("en-US")}`, receipt };
+  if (text.trim() === "") return { ok: false, unchecked: true, why: "the delivery is blank", receipt };
   return { ok: true, receipt, request: { ...order, result: text } };
 }
 
+/** The hash a record on the desk is published under, or undefined for a URL that is not one of the desk's records. */
+export function recordName(url: string, desk: string): string | undefined {
+  const at = URL.canParse(url) ? new URL(url) : undefined;
+  if (!at || at.origin !== new URL(desk).origin || at.search || !/^(#evidence=0x[0-9a-f]{64})?$/.test(at.hash)) return undefined;
+  return /^\/records\/(0x[0-9a-f]{64})\.json$/.exec(at.pathname)?.[1];
+}
+
 /**
- * Why the decision record does not hold the bytes Wormhole hashed, or undefined when it does. The record is published
- * under the keccak256 of its own bytes, which is also the hash BrainChain records on chain.
+ * Why the record does not show BrainChain graded the bytes Wormhole hashed, or undefined when it does. The record must
+ * be the file its name hashes, and name the grade the verdict is for: a paid grade's record carries the grade id as a
+ * decimal subject.
  */
-export function confirm(receipt: DeliveryReceipt, url: string, file: Uint8Array): string | undefined {
-  const name = URL.canParse(url) ? /^\/records\/(0x[0-9a-f]{64})\.json$/.exec(new URL(url).pathname)?.[1] : undefined;
-  if (!name) return `${url} is not a decision record`;
+export function confirm(receipt: DeliveryReceipt, verdict: Verdict, name: string, file: Uint8Array): string | undefined {
   if (keccak256(file) !== name) return `the record's keccak256 is ${keccak256(file)}, not ${name}, the hash it is published under`;
+  let record: { kind?: unknown; subject?: unknown; request?: { state?: unknown } };
   let result: unknown;
   try {
-    const record = JSON.parse(Buffer.from(file).toString("utf8")) as { kind?: unknown; request?: { state?: unknown } };
-    if (record.kind !== "grade" || typeof record.request?.state !== "string") return "the record is not a grade's";
-    result = (JSON.parse(record.request.state) as { result?: unknown }).result;
+    record = JSON.parse(Buffer.from(file).toString("utf8")) as typeof record;
+    result = typeof record.request?.state === "string" ? (JSON.parse(record.request.state) as { result?: unknown } | null)?.result : undefined;
   } catch {
-    return "the record is not a grade's";
+    return "the record is not JSON";
   }
+  if (record.kind !== "grade") return "the record is not a grade's";
+  if (!/^0x[0-9a-fA-F]{64}$/.test(verdict.grade) || record.subject !== BigInt(verdict.grade).toString()) return `the record is not grade ${verdict.grade}'s`;
   if (typeof result !== "string") return "the record holds no result";
-  if (result === WITHHELD) return "the record withholds the result";
   const bytes = Buffer.from(result, "utf8");
   if (!deliveryMatches(receipt, bytes)) return `the record's result has SHA-256 ${sha256(bytes)} over ${bytes.length} bytes, not ${receipt.resource_digest} over ${receipt.byte_len}`;
   return undefined;
@@ -110,16 +112,17 @@ export function confirm(receipt: DeliveryReceipt, url: string, file: Uint8Array)
 export async function gate(
   delivery: Delivery,
   order: Order,
-  io: { grade: (request: GradeRequest) => Promise<Verdict>; record: (url: string) => Promise<Uint8Array>; issuedAt?: string },
+  io: { desk: string; grade: (request: GradeRequest) => Promise<Verdict>; record: (url: string) => Promise<Uint8Array>; issuedAt?: string },
 ): Promise<Outcome> {
   const checked = check(delivery, order, io.issuedAt);
-  if (!checked.ok) return { use: false, why: checked.why, ...(checked.receipt ? { receipt: checked.receipt } : {}) };
+  if (!checked.ok) return { use: false, why: checked.why, ...(checked.unchecked ? { unchecked: true } : {}), ...(checked.receipt ? { receipt: checked.receipt } : {}) };
   const { receipt } = checked;
   const verdict = await io.grade(checked.request);
   if (!verdict.accepted) return { use: false, why: `BrainChain rejected the work at a pass probability of ${pct(verdict.passProbability)}, under its bar of ${pct(verdict.bar)}`, receipt, verdict };
-  const url = verdict.decision?.record;
-  if (!url) return { use: false, why: "BrainChain's verdict names no decision record", receipt, verdict };
-  const problem = confirm(receipt, url, await io.record(url));
+  const url = verdict.decision?.record ?? "";
+  const name = recordName(url, io.desk);
+  if (!name) return { use: false, why: `BrainChain's verdict names ${url ? `${url}, which is not a decision record on ${io.desk}` : "no decision record"}`, receipt, verdict };
+  const problem = confirm(receipt, verdict, name, await io.record(url));
   if (problem) return { use: false, why: problem, receipt, verdict };
   return { use: true, receipt, verdict };
 }

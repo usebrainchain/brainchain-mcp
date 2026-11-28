@@ -7,10 +7,13 @@ import { parseArgs } from "node:util";
 import { privateKeyToAccount } from "viem/accounts";
 import type { PrivateKeyAccount } from "viem";
 
-import { deskUrl, payGrade, priceOf, type Verdict } from "./desk.ts";
-import { check, confirm, gate, type Delivery, type Order, type Outcome } from "./gate.ts";
+import { DEFAULT_DESK, deskUrl, payGrade, priceOf, type Verdict } from "./desk.ts";
+import { check, confirm, gate, pct, recordName, type Delivery, type Order, type Outcome } from "./gate.ts";
+import { messageOf } from "./shared.ts";
 
 const SAMPLES = fileURLToPath(new URL("../fixtures/", import.meta.url));
+/** Far more than a grade record of a 100,000-byte result and a 32,000-character brief. */
+const MAX_RECORD_BYTES = 2_000_000;
 
 const USAGE = `Usage:
   npm run gate -- --sample
@@ -28,8 +31,9 @@ const USAGE = `Usage:
 A paid run reads the paying wallet's key from the file BRAINCHAIN_PAYER_KEY_FILE names and pays BrainChain
 0.25 USDC on Base for the grade. BRAINCHAIN_DESK_URL replaces BrainChain's desk.
 
-Exit codes: 0 use the delivery; 2 do not use it: Wormhole refused it, BrainChain rejected it, or the record holds
-other bytes; 1 anything else, such as malformed input or a grade that did not finish.`;
+Exit codes: 0 use the delivery (--dry: BrainChain would grade it); 2 do not use it: Wormhole refused it,
+BrainChain rejected it, or the record does not hold the same bytes; 1 anything else, such as malformed input, a
+delivery this script cannot grade, or a grade that did not finish.`;
 
 export interface Io {
   log: (line: string) => void;
@@ -60,10 +64,23 @@ export async function loadAccount(file: string | undefined): Promise<PrivateKeyA
   return privateKeyToAccount(`0x${key}`);
 }
 
+/** A UTF-8 text file, without a byte order mark. Text that is not UTF-8 is refused rather than read with replacements. */
+async function readText(file: string): Promise<string> {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(await readFile(file));
+  } catch (error) {
+    throw new Error(error instanceof TypeError ? `${file} is not UTF-8 text.` : `${file} cannot be read: ${messageOf(error)}`, { cause: error });
+  }
+  if (text.includes("\0")) throw new Error(`${file} is not UTF-8 text.`);
+  return text;
+}
+
 export async function readDelivery(file: string): Promise<Delivery> {
+  const text = await readText(file);
   let value: unknown;
   try {
-    value = JSON.parse(await readFile(file, "utf8"));
+    value = JSON.parse(text);
   } catch (error) {
     throw new Error(`${file} is not JSON: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
@@ -80,13 +97,11 @@ export async function readDelivery(file: string): Promise<Delivery> {
 
 async function readOrder(file: string | undefined, title: string | undefined): Promise<Order> {
   if (!file) throw new Error("--brief names the file that says what the delivery had to be.");
-  const brief = (await readFile(file, "utf8")).trim();
+  const brief = (await readText(file)).trim();
   if (!brief) throw new Error(`${file} is empty.`);
   if (title !== undefined && (!title.trim() || title.length > 120 || /[\n\r]/.test(title))) throw new Error("--title is one line of at most 120 characters.");
   return { ...(title ? { title: title.trim() } : {}), brief };
 }
-
-const pct = (p: number | undefined) => (p === undefined ? "?" : `${Math.round(p * 1000) / 10}%`);
 
 function report(outcome: Outcome, io: Io): number {
   const { receipt, verdict } = outcome;
@@ -96,6 +111,10 @@ function report(outcome: Outcome, io: Io): number {
     io.log("Record: holds the same bytes, published under its own keccak256.");
     io.log("Use the delivery.");
     return 0;
+  }
+  if (outcome.unchecked) {
+    io.log(`Not graded: ${outcome.why}.`);
+    return 1;
   }
   io.log(`Do not use the delivery: ${outcome.why}.`);
   return 2;
@@ -107,21 +126,24 @@ async function sample(io: Io): Promise<number> {
   const dir = join(SAMPLES, "deliveries");
   for (const file of (await readdir(dir)).filter((name) => name.endsWith(".json")).sort()) {
     const checked = check(await readDelivery(join(dir, file)), order, io.now().toISOString());
+    const name = basename(file, ".json");
     const receipt = checked.receipt;
-    const seen = receipt ? `HTTP ${receipt.http_status}${receipt.byte_len === null ? "" : `, ${receipt.byte_len} bytes`}` : "no receipt";
-    io.log(`${basename(file, ".json")}: ${seen}`);
+    io.log(`${name}: ${receipt ? `HTTP ${receipt.http_status}${receipt.byte_len === null ? "" : `, ${receipt.byte_len} bytes`}` : "no receipt"}`);
     if (!checked.ok) {
       io.log(`  Stops here, and nothing is paid to BrainChain: ${checked.why}.`);
       continue;
     }
     io.log(`  Wormhole allows it (SHA-256 ${checked.receipt.resource_digest}). It goes to BrainChain's grade.`);
-    const name = basename(file, ".json");
-    const recorded = await readFile(join(SAMPLES, "recorded", `${name}.json`), "utf8").catch(() => undefined);
+    const recorded = await readFile(join(SAMPLES, "recorded", `${name}.json`), "utf8").catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
     if (!recorded) continue;
     const verdict = JSON.parse(recorded) as Verdict;
     io.log(`  Recorded on mainnet: BrainChain ${verdict.accepted ? "accepted" : "rejected"} it at a pass probability of ${pct(verdict.passProbability)} (bar ${pct(verdict.bar)}), ${verdict.decision?.page ?? `decision ${verdict.decision?.id}`}`);
     if (!verdict.accepted || !verdict.decision?.record) continue;
-    const problem = confirm(checked.receipt, verdict.decision.record, new Uint8Array(await readFile(join(SAMPLES, "recorded", `${name}.record.json`))));
+    const record = recordName(verdict.decision.record, DEFAULT_DESK);
+    const problem = record ? confirm(checked.receipt, verdict, record, new Uint8Array(await readFile(join(SAMPLES, "records", `${verdict.decision.id}.json`)))) : "its URL is not one of the desk's records";
     io.log(problem ? `  The recorded record does not hold these bytes: ${problem}.` : "  Its decision record holds the same bytes, so its result hashes to Wormhole's SHA-256.");
   }
   return 0;
@@ -151,13 +173,14 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
     const desk = deskUrl(io.env.BRAINCHAIN_DESK_URL);
     if (values.dry) {
       const checked = check(delivery, order, io.now().toISOString());
-      if (!checked.ok) return report({ use: false, why: checked.why, ...(checked.receipt ? { receipt: checked.receipt } : {}) }, io);
+      if (!checked.ok) return report({ use: false, why: checked.why, ...(checked.unchecked ? { unchecked: true } : {}), ...(checked.receipt ? { receipt: checked.receipt } : {}) }, io);
       io.log(`Wormhole: allow, ${checked.receipt.byte_len} bytes, SHA-256 ${checked.receipt.resource_digest}`);
-      const price = await priceOf({ ...checked.request }, { desk, fetch: io.fetch });
+      const price = await priceOf(checked.request, { desk, fetch: io.fetch });
       io.log(price.text);
       return price.takes ? 0 : 1;
     }
     const outcome = await gate(delivery, order, {
+      desk,
       issuedAt: io.now().toISOString(),
       // The key is read only once Wormhole has allowed the delivery.
       grade: async (request) => {
@@ -165,9 +188,19 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
         return (await payGrade(request, account, { desk, fetch: io.fetch, log: io.log, ...(io.pollMs ? { pollMs: io.pollMs } : {}) })).verdict;
       },
       record: async (url) => {
-        const response = await io.fetch(url.split("#")[0]!, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) });
-        if (!response.ok) throw new Error(`BrainChain accepted the work, but its record ${url} answered ${response.status}. Reading it again is free; do not run the grade again.`);
-        return new Uint8Array(await response.arrayBuffer());
+        const link = url.split("#")[0]!;
+        const unread = (why: string, cause?: unknown) =>
+          new Error(`BrainChain accepted the work, but its record ${link} ${why}. Reading it again is free; running this again pays for another grade.`, cause === undefined ? undefined : { cause });
+        const failed = (error: unknown) => {
+          throw unread(`could not be read (${messageOf(error)})`, error);
+        };
+        const response = await io.fetch(link, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30_000) }).catch(failed);
+        if (!response.ok) throw unread(`answered ${response.status}`);
+        const tooBig = `is over ${MAX_RECORD_BYTES.toLocaleString("en-US")} bytes`;
+        if (Number(response.headers.get("content-length") ?? 0) > MAX_RECORD_BYTES) throw unread(tooBig);
+        const file = new Uint8Array(await response.arrayBuffer().catch(failed));
+        if (file.length > MAX_RECORD_BYTES) throw unread(tooBig);
+        return file;
       },
     });
     return report(outcome, io);
