@@ -9,21 +9,16 @@ import { join } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 
 import { expandHome, PRICE, REPOST_AFTER_MINUTES, resolveConfig, type Config } from "./config.js";
-import { FREE, LOGIN_COMMAND } from "./free.js";
+import { FREE } from "./free.js";
 import { canonicalStringify, createDesk, firstLine, NoGrade, PaymentRefused, type Signer } from "./payments.js";
+import { answer, signedIn, type Answer, type GitHubAccount } from "./signin.js";
 import { gradeInput } from "./tools.js";
 
-const GITHUB_API = "https://api.github.com";
 const DAY_MS = 86_400_000;
 /** A grade the desk has no record of this long after its check was taken was never charged: no authorization lasts that long. */
 const SETTLE_MS = REPOST_AFTER_MINUTES * 60_000;
 /** How long the checks stay paused after the wallet refuses a payment because it is empty or over its own limits. */
 export const PAUSE_MS = 10 * 60_000;
-
-export interface Answer {
-  status: number;
-  body: Record<string, unknown>;
-}
 
 export interface Sponsor {
   /** What a client needs before it signs in: the network the checks pay on, the GitHub app to sign in with, the limits and whether they are open. */
@@ -92,15 +87,6 @@ interface Counts {
   grades: Entry[];
 }
 
-interface Account {
-  id: string;
-  login: string;
-  createdAt: number;
-}
-
-const answer = (status: number, reason: string, error: string): Answer => ({ status, body: { reason, error } });
-
-export const SIGN_IN = answer(401, "login", `Sign in with GitHub first: run \`${LOGIN_COMMAND}\` in a terminal.`);
 const PAUSED = "BrainChain's free checks are paused. Try again later.";
 
 /**
@@ -225,35 +211,11 @@ export function createSponsor({ config, signer, clientId, dir, caps = DEFAULT_CA
     return { status: 200, body: { ...known, grade: entry.grade, statusUrl: `${config.desk}/x402/grades/${entry.grade}`, duplicate: true, free: tally(account, entry.account !== account) } };
   }
 
-  async function account(token: string | undefined): Promise<Account | Answer> {
-    if (!token) return SIGN_IN;
-    let response: Response;
-    try {
-      response = await fetchImpl(`${GITHUB_API}/user`, {
-        headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", "user-agent": "brainchain-free-checks" },
-        signal: AbortSignal.timeout(10_000),
-      });
-    } catch (error) {
-      say(`free checks: GitHub did not answer (${firstLine(error)})`);
-      return answer(503, "unavailable", "GitHub could not be reached to check your sign-in, and no free check was used. Try again in a minute.");
-    }
-    if (response.status === 401) return answer(401, "login", `Your GitHub sign-in has expired or was revoked. Run \`${LOGIN_COMMAND}\` again.`);
-    // GitHub names the app that issued a token in X-OAuth-Client-Id (seen on /user for a device-flow token from BrainChain's
-    // app on 25 Nov 2026), so a personal token or another app's token is refused.
-    if (response.ok && response.headers.get("x-oauth-client-id") !== clientId) {
-      return answer(401, "login", `That GitHub sign-in was not made through brainchain-mcp login. Run \`${LOGIN_COMMAND}\` to sign in, then try again.`);
-    }
-    const user = response.ok ? ((await response.json().catch(() => undefined)) as Record<string, unknown> | undefined) : undefined;
-    const createdAt = Date.parse(String(user?.created_at));
-    if (!user || typeof user.id !== "number" || typeof user.login !== "string" || Number.isNaN(createdAt)) {
-      say(`free checks: GitHub answered ${response.status}`);
-      return answer(503, "unavailable", "GitHub did not confirm your sign-in just now, and no free check was used. Try again in a minute.");
-    }
-    return { id: String(user.id), login: user.login, createdAt };
-  }
+  const account = (token: string | undefined) => signedIn(token, { clientId, fetch: fetchImpl, untouched: "no free check was used", label: "free checks", say });
+
 
   /** Why this account can take no free check now, or nothing when it can. */
-  function refusal({ id, login, createdAt }: Account): Answer | undefined {
+  function refusal({ id, login, createdAt }: GitHubAccount): Answer | undefined {
     if (now() - createdAt < FREE.minAccountDays * DAY_MS) {
       return answer(403, "young", `Free checks are for GitHub accounts older than ${FREE.minAccountDays} days. @${login} was created on ${dayOf(createdAt)}, so it qualifies on ${dayOf(createdAt + FREE.minAccountDays * DAY_MS)}.`);
     }
