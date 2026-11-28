@@ -1,0 +1,59 @@
+{
+  "grade": "0xcd74407c4760a025e59397c58a753ab80cec699bbc1eb7280509b63efdf3a8a8",
+  "state": "graded",
+  "status": "https://brain.usebrainchain.com/x402/grades/0xcd74407c4760a025e59397c58a753ab80cec699bbc1eb7280509b63efdf3a8a8",
+  "network": "eip155:8453",
+  "paymentTx": "0xf792ed1fd34781d478eaef8a38164e1de03f3a3ddbf9798351bd6e412db6aeb3",
+  "accepted": false,
+  "answer": "reject",
+  "passProbability": 0.115,
+  "bar": 0.8,
+  "confidence": 0.885,
+  "levels": [
+    {
+      "level": "Does everything the brief asks, correctly and completely",
+      "probability": 0.01,
+      "passes": true
+    },
+    {
+      "level": "Does what the brief asks, with minor gaps",
+      "probability": 0.24,
+      "passes": true
+    },
+    {
+      "level": "Misses what the brief asks",
+      "probability": 0.75,
+      "passes": false
+    }
+  ],
+  "second": {
+    "model": "deepseek/deepseek-v4.1-flash-1017",
+    "passProbability": 0.07
+  },
+  "decision": {
+    "id": "723",
+    "record": "https://brain.usebrainchain.com/records/0x3fc5b25619be54bd1a79b83813b74f734c7bdad33658eed2a92789faa6a1fe79.json#evidence=0xd4ebce865fb8b1feb7bb1915a8e9030ba70aff366c3355de246a86e8335c1a3d",
+    "page": "https://usebrainchain.com/decision?id=723"
+  },
+  "receipt": {
+    "format": "eip712",
+    "payload": {
+      "version": 2,
+      "chainId": 274663,
+      "decisionLog": "0x53e0137e45C8bAc1018802aD36060cDda3B159F0",
+      "brain": "0x35AFDdB19Dc7B82F5eA6755eC2d4264fD90869bF",
+      "decision": "723",
+      "subject": "0xce7a6c515633f8bba7bdb77a250cbacc8a007285fd62f82b39fe842926822efc",
+      "evidence": "0xd4ebce865fb8b1feb7bb1915a8e9030ba70aff366c3355de246a86e8335c1a3d",
+      "job": "grade",
+      "outcome": "rejected",
+      "network": "eip155:8453",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "amount": "250000",
+      "payer": "0xd937E50Ee21E66f7640F1a7887399e63055290fe",
+      "transaction": "0xf792ed1fd34781d478eaef8a38164e1de03f3a3ddbf9798351bd6e412db6aeb3",
+      "issuedAt": 1795822631
+    },
+    "signature": "0x54d77a68bfbb0f0dbb011a91a93b2d86400104aeab31907123642a2cf8269a3928afa0a7754873950ea4f6d231e1cab06d5bfb09e7bde8d7e4ba1fc0d36e5c9a1b"
+  }
+}
