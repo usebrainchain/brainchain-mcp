@@ -12,6 +12,7 @@ import type { Deliveries } from "./deliver.js";
 import { DEFAULT_LIMIT, knownKind, matches, MAX_FILTERS, MAX_LIMIT, type EventLog, type Query, type WatchEvent } from "./events.js";
 import { DeliveryError } from "./net.js";
 import type { IndexedPool } from "./pools.js";
+import type { ProblemsLive } from "./problems.js";
 
 const ISO = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/;
 
@@ -174,6 +175,11 @@ export interface ServeOptions {
   mcp?: McpHandler;
   /** Bounty claims for Lean proofs, for `GET /claims` and `POST /claims`; a watcher without them answers 404 there. */
   claims?: Claims;
+  /**
+   * The live figures of BrainChain's problem board, for `GET /problems/live`, and the beats of BrainChain's own solvers,
+   * for `POST /problems/beat` when the feed takes them; a watcher without it answers 404 there.
+   */
+  problems?: Pick<ProblemsLive, "live" | "beats" | "authorized" | "beat">;
   /** Behind a proxy that appends the client's address to X-Forwarded-For, such as Render's, take the address from there. */
   trustProxy?: boolean;
   limits?: ServeLimits;
@@ -309,14 +315,16 @@ export interface Served {
  * (every call a page at a time), `GET /calls/:grade`, `GET /health` (503 while a source keeps failing) and `GET
  * /health/live`. Watches: `POST /watches`, and `GET` or `DELETE
  * /watches/:id` with the watch's manage token. Nothing lists watches. Free checks: `GET /free`, and `GET /free/me` and
- * `POST /free/grade` with a GitHub sign-in. The hosted BrainChain MCP: `POST /mcp`. Every address is held to `perMinute`
+ * `POST /free/grade` with a GitHub sign-in. The problem board's live figures: `GET /problems/live`, and `POST /problems/beat`
+ * with the beat key. The hosted BrainChain MCP: `POST /mcp`. Every address is held to `perMinute`
  * requests, to `freePerMinute` of them on the two routes that take a sign-in, and to `mcpPerMinute` on `/mcp`.
  */
-export function serveEvents({ log, pools, names, health, adminToken, deliveries, calls, sponsor, mcp, claims, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
+export function serveEvents({ log, pools, names, health, adminToken, deliveries, calls, sponsor, mcp, claims, problems, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
   const perMinute = new Window(limits.perMinute, 60_000);
   const freePerMinute = new Window(limits.freePerMinute, 60_000);
   const mcpPerMinute = new Window(limits.mcpPerMinute, 60_000);
   const claimsPerMinute = new Window(limits.freePerMinute, 60_000);
+  const beatsPerMinute = new Window(limits.freePerMinute, 60_000);
   // The hosted tools read this watcher over loopback, so each read names the caller it is for, with a secret no one
   // outside this process holds, and is counted against that caller rather than this process.
   const secret = randomBytes(32).toString("hex");
@@ -395,7 +403,7 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       const admin = adminToken !== undefined && given !== undefined && given.length === adminToken.length && timingSafeEqual(Buffer.from(given), Buffer.from(adminToken));
       const sources = (state.sources ?? {}) as Record<string, { failures?: number; baselined?: boolean }>;
       const checks = sponsor?.info();
-      const routes = { ...(checks ? { free: { open: checks.open, paused: checks.paused } } : {}), ...(mcp ? { mcp: "/mcp" } : {}), ...(claims ? { claims: "/claims" } : {}) };
+      const routes = { ...(checks ? { free: { open: checks.open, paused: checks.paused } } : {}), ...(mcp ? { mcp: "/mcp" } : {}), ...(claims ? { claims: "/claims" } : {}), ...(problems ? { problems: "/problems/live" } : {}) };
       const summary = { ok: state.ok, events: state.events, sources: Object.fromEntries(Object.entries(sources).map(([name, { failures = 0, baselined }]) => [name, { reading: failures < 3, baselined: baselined === true }])), ...routes };
       return send(response, state.ok ? 200 : 503, admin ? { ...state, ...routes } : summary, admin ? {} : OPEN);
     }
@@ -482,10 +490,26 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       const { status, body } = await claims.claim(token, await json(request, limits.body));
       return send(response, status, body);
     }
+    if (url.pathname === "/problems/live") {
+      if (!problems) throw new HttpError(404, "This watcher serves no live figures for the problem board.");
+      if (!reading) throw new HttpError(405, "That method is not served here.");
+      const { status, body } = problems.live();
+      return send(response, status, body, { ...OPEN, ...(status === 200 ? { "Cache-Control": "public, max-age=30" } : {}) });
+    }
+    if (url.pathname === "/problems/beat") {
+      if (!problems?.beats) throw new HttpError(404, "This watcher takes no beats.");
+      if (method !== "POST") throw new HttpError(405, "That method is not served here.");
+      if (!beatsPerMinute.take(address, clock())) throw new HttpError(429, `Too many beats from your network address. The watcher takes ${limits.freePerMinute} a minute from one address. Wait a minute, then try again.`);
+      // A beat without the key is turned away before its body is read.
+      if (!problems.authorized(bearer(request))) return send(response, 401, { reason: "key", error: "Send the beat key as a Bearer token." });
+      const { status, body } = problems.beat(await json(request, limits.body));
+      return send(response, status, body);
+    }
     const freeRoutes = sponsor ? ", GET /free, GET /free/me, POST /free/grade" : "";
     const claimRoutes = claims ? ", GET /claims, POST /claims" : "";
     const mcpRoute = mcp ? ", POST /mcp" : "";
-    throw new HttpError(404, `Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls?after=, GET /calls/:grade, GET /health${freeRoutes}${claimRoutes}${mcpRoute}, POST /watches and GET or DELETE /watches/:id.`);
+    const problemRoutes = problems ? `, GET /problems/live${problems.beats ? ", POST /problems/beat" : ""}` : "";
+    throw new HttpError(404, `Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls?after=, GET /calls/:grade, GET /health${freeRoutes}${claimRoutes}${problemRoutes}${mcpRoute}, POST /watches and GET or DELETE /watches/:id.`);
   }
 
   /** This watcher's own address, for the hosted tools' reads of it. */
