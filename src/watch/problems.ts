@@ -195,11 +195,11 @@ class ReadError extends Error {
   }
 }
 
-/** A JSON answer, read within the time limit and the size cap. */
-async function readJson(fetchImpl: typeof fetch, url: string, headers: Record<string, string>): Promise<unknown> {
+/** A JSON answer, read within the time limit and the size cap. Left to Solve is read without following a redirect. */
+async function readJson(fetchImpl: typeof fetch, url: string, headers: Record<string, string>, redirect: RequestRedirect = "follow"): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetchImpl(url, { headers: { accept: "application/json", ...headers }, redirect: "error", signal: AbortSignal.timeout(REQUEST_MS) });
+    response = await fetchImpl(url, { headers: { accept: "application/json", ...headers }, redirect, signal: AbortSignal.timeout(REQUEST_MS) });
   } catch (error) {
     throw new ReadError(firstLine(error));
   }
@@ -355,7 +355,7 @@ export function createProblemsLive({ dir, problemsUrl, beatKey, fetch: fetchImpl
     const found = new Map<string, number>();
     for (let page = 0; page < MAX_PAGES; page++) {
       const url = `${LEFT_TO_SOLVE}/api/problems?sort=active&limit=${PAGE}${page ? `&offset=${page * PAGE}` : ""}`;
-      const read = activePage(await readJson(fetchImpl, url, ltsHeaders));
+      const read = activePage(await readJson(fetchImpl, url, ltsHeaders, "error"));
       for (const [id, n] of read.counts) found.set(id, n);
       if (!read.more) break;
     }
@@ -367,7 +367,7 @@ export function createProblemsLive({ dir, problemsUrl, beatKey, fetch: fetchImpl
     askedAt = now();
     let body: unknown;
     try {
-      body = await readJson(fetchImpl, `${LEFT_TO_SOLVE}/api/problems/${encodeURIComponent(problem.id!)}`, ltsHeaders);
+      body = await readJson(fetchImpl, `${LEFT_TO_SOLVE}/api/problems/${encodeURIComponent(problem.id!)}`, ltsHeaders, "error");
     } catch (error) {
       // A problem Left to Solve does not have is passed over, and does not hold back the others.
       if (error instanceof ReadError && error.status === 404) return void say(`problems: Left to Solve has no problem ${problem.id}, listed as ${problem.slug}`);
