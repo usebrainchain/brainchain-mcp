@@ -32,7 +32,7 @@ npm run typecheck
 npm test
 ```
 
-So does the delivery gate with Agent Wormhole:
+The delivery gate with Agent Wormhole has its own suite too:
 
 ```bash
 cd examples/wormhole-delivery

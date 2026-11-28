@@ -37,9 +37,10 @@ const USAGE = `Usage:
 A paid run reads the paying wallet's key from the file BRAINCHAIN_PAYER_KEY_FILE names and pays BrainChain
 0.25 USDC on Base for the grade. BRAINCHAIN_DESK_URL replaces BrainChain's desk.
 
-Exit codes: 0 use the delivery (--dry: BrainChain would grade it); 2 do not use it: Wormhole refused it,
-BrainChain rejected it, or the record does not hold the same bytes; 1 anything else, such as malformed input, a
-delivery this script cannot grade, or a grade that did not finish.`;
+Exit codes:
+  0  use the delivery; with --dry, BrainChain would grade it
+  1  the run stopped short, such as on malformed input, a delivery this script cannot grade, or a grade that did not finish
+  2  do not use the delivery: Wormhole refused it, BrainChain rejected it, or the record does not confirm it`;
 
 export interface Io {
   log: (line: string) => void;
@@ -73,7 +74,7 @@ export async function loadAccount(file: string | undefined): Promise<PrivateKeyA
   return privateKeyToAccount(`0x${key}`);
 }
 
-/** A UTF-8 text file, without a byte order mark. Text that is not UTF-8 is refused rather than read with replacements. */
+/** Reads a UTF-8 text file and drops a leading byte order mark. Text that is not UTF-8 is refused rather than read with replacements. */
 async function readText(file: string): Promise<string> {
   let text: string;
   try {
@@ -91,7 +92,7 @@ export async function readDelivery(file: string): Promise<Delivery> {
   try {
     value = JSON.parse(text);
   } catch (error) {
-    throw new Error(`${file} is not JSON: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    throw new Error(`${file} is not JSON: ${messageOf(error)}`, { cause: error });
   }
   const delivery = value as Partial<Delivery> | null;
   const response = delivery?.response;
@@ -126,7 +127,7 @@ function report(outcome: Outcome, io: Io): number {
     io.log("Use the delivery.");
     return 0;
   }
-  if (outcome.unchecked) {
+  if (outcome.ungraded) {
     io.log(`Not graded: ${outcome.why}.`);
     return 1;
   }
@@ -158,7 +159,7 @@ async function sample(io: Io): Promise<number> {
     if (!verdict.accepted || !verdict.decision?.record) continue;
     const record = recordName(verdict.decision.record, DEFAULT_DESK);
     const problem = record ? confirm(checked.receipt, verdict, record, new Uint8Array(await readFile(join(SAMPLES, "records", `${verdict.decision.id}.json`)))) : "its URL is not one of the desk's records";
-    io.log(problem ? `  The recorded record does not hold these bytes: ${problem}.` : "  Its decision record holds the same bytes, so its result hashes to Wormhole's SHA-256.");
+    io.log(problem ? `  The saved record does not hold these bytes: ${problem}.` : "  Its decision record holds the same bytes, so its result hashes to Wormhole's SHA-256.");
   }
   return 0;
 }
@@ -185,7 +186,7 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
       return 1;
     }
     if (values.sample) {
-      if (values.delivery || values.brief || values.title || values.dry) throw new Error("--sample runs on its own, without --delivery, --brief, --title or --dry.");
+      if (values.delivery || values.brief || values.title || values.dry) throw new Error("--sample takes no other flags.");
       return await sample(io);
     }
     if (!values.delivery) throw new Error("--delivery names the paid response to check. Run with --help for the usage.");
@@ -194,7 +195,7 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
     const desk = deskUrl(io.env.BRAINCHAIN_DESK_URL);
     const checked = check(delivery, order, io.now().toISOString());
     if (checked.receipt) io.log(wormholeLine(checked.receipt));
-    if (!checked.ok) return report({ use: false, why: checked.why, ...(checked.unchecked ? { unchecked: true } : {}) }, io);
+    if (!checked.ok) return report({ use: false, why: checked.why, ...(checked.ungraded ? { ungraded: true } : {}) }, io);
     if (values.dry) {
       const price = await priceOf(checked.request, { desk, fetch: io.fetch }).catch((error: unknown) => {
         throw new Error(`BrainChain did not answer: ${messageOf(error)}. Nothing was paid to BrainChain.`, { cause: error });
@@ -228,7 +229,7 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
     });
     return report(outcome, io);
   } catch (error) {
-    io.error(error instanceof Error ? error.message : String(error));
+    io.error(messageOf(error));
     return 1;
   }
 }

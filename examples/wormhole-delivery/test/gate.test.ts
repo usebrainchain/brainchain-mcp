@@ -57,16 +57,16 @@ describe("check", () => {
   it("refuses a second 402 and an error page before anything is paid", async () => {
     expect(check(await delivery("charged-again"), order)).toMatchObject({ ok: false, why: expect.stringContaining("X402-402") });
     expect(check(await delivery("error-page"), order)).toMatchObject({ ok: false, why: expect.stringContaining("X402-403") });
-    expect(check(await delivery("charged-again"), order)).not.toHaveProperty("unchecked");
+    expect(check(await delivery("charged-again"), order)).not.toHaveProperty("ungraded");
   });
 
-  it("marks what it cannot grade as unchecked rather than wrong", () => {
+  it("marks what it cannot grade as ungraded rather than wrong", () => {
     const binary: Delivery = { quote: { mimeType: "application/octet-stream" }, response: { status: 200, contentType: "application/octet-stream", bodyBase64: Buffer.from([0xff, 0xfe, 0x00, 0x81, 0x9c]).toString("base64") } };
-    expect(check(binary, order)).toMatchObject({ ok: false, unchecked: true, why: expect.stringContaining("not UTF-8") });
+    expect(check(binary, order)).toMatchObject({ ok: false, ungraded: true, why: expect.stringContaining("not UTF-8") });
     const big: Delivery = { quote: {}, response: { status: 200, contentType: "text/plain", bodyText: "a".repeat(100_001) } };
-    expect(check(big, order)).toMatchObject({ ok: false, unchecked: true, why: expect.stringContaining("100,000") });
+    expect(check(big, order)).toMatchObject({ ok: false, ungraded: true, why: expect.stringContaining("100,000") });
     const blank: Delivery = { quote: {}, response: { status: 200, contentType: "text/plain", bodyText: " \n " } };
-    expect(check(blank, order)).toMatchObject({ ok: false, unchecked: true, why: "the delivery is blank" });
+    expect(check(blank, order)).toMatchObject({ ok: false, ungraded: true, why: "the delivery is blank" });
   });
 
   it("keeps a byte order mark, so the result still hashes to Wormhole's digest", () => {
@@ -153,7 +153,7 @@ describe("gate", () => {
     const record = vi.fn();
     const outcome = await gate(await allowed("another-city"), { desk: DESK, grade: async () => verdict(false), record });
     expect(outcome).toMatchObject({ use: false, why: expect.stringContaining("rejected") });
-    expect(outcome).not.toHaveProperty("unchecked");
+    expect(outcome).not.toHaveProperty("ungraded");
     expect(record).not.toHaveBeenCalled();
   });
 
@@ -229,7 +229,7 @@ describe("main", () => {
   it("refuses --sample with other flags, which it would ignore", async () => {
     const { io: mixedIo, errors } = io();
     expect(await main(["--sample", "--dry"], mixedIo)).toBe(1);
-    expect(errors[0]).toMatch(/^--sample runs on its own/);
+    expect(errors[0]).toBe("--sample takes no other flags.");
   });
 
   it("prints the usage and exits 1 with no arguments", async () => {
@@ -269,7 +269,7 @@ describe("main", () => {
   it("refuses a brief that is not UTF-8 before anything else", async () => {
     const dir = await mkdtemp(join(tmpdir(), "wormhole-delivery-"));
     const file = join(dir, "brief.txt");
-    await writeFile(file, Buffer.from("﻿Berlin forecast", "utf16le"));
+    await writeFile(file, Buffer.from("\uFEFFBerlin forecast", "utf16le"));
     const { io: badIo, errors } = io();
     expect(await main(["--dry", "--delivery", fixture("deliveries/asked.json"), "--brief", file], badIo)).toBe(1);
     expect(errors).toEqual([`${file} is not UTF-8 text.`]);

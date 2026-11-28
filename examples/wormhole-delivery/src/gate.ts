@@ -1,5 +1,5 @@
 // Agent Wormhole checks that a paid response is the resource that was quoted. BrainChain grades whether it is the work
-// that was asked for. The agent uses the delivery, or releases what it holds for it, only when both pass.
+// that was asked for. The agent uses the delivery only when both pass.
 import { createHash } from "node:crypto";
 
 import { keccak256 } from "viem";
@@ -28,10 +28,10 @@ export interface GradeRequest extends Order {
   result: string;
 }
 
-/** `unchecked` marks a delivery this script could not judge, as opposed to one found wrong. */
-export type Checked = { ok: false; why: string; unchecked?: true; receipt?: DeliveryReceipt } | { ok: true; receipt: DeliveryReceipt; request: GradeRequest };
+/** `ungraded` marks a delivery this script could not grade, as opposed to one found wrong. */
+export type Checked = { ok: false; why: string; ungraded?: true; receipt?: DeliveryReceipt } | { ok: true; receipt: DeliveryReceipt; request: GradeRequest };
 
-export type Outcome = { use: true; verdict: Verdict } | { use: false; why: string; unchecked?: true; verdict?: Verdict };
+export type Outcome = { use: true; verdict: Verdict } | { use: false; why: string; ungraded?: true; verdict?: Verdict };
 
 export const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
@@ -67,14 +67,14 @@ export function check(delivery: Delivery, order: Order, issuedAt?: string): Chec
     { ...(delivery.request_digest ? { requestDigest: delivery.request_digest } : {}), ...(issuedAt ? { issuedAt } : {}) },
   );
   const { receipt } = inspected;
-  const held = receipt ? { receipt } : {};
-  if (inspected.decision === "abstain") return { ok: false, unchecked: true, why: `Wormhole did not judge the delivery: ${inspected.reason ?? "no reason given"}`, ...held };
-  if (inspected.decision !== "allow" || !receipt) return { ok: false, why: `Wormhole refused the delivery${receipt?.codes.length ? ` (${receipt.codes.join(", ")})` : ""}`, ...held };
-  if (!bytes) return { ok: false, unchecked: true, why: "the delivery has no body to grade", receipt };
+  const withReceipt = receipt ? { receipt } : {};
+  if (inspected.decision === "abstain") return { ok: false, ungraded: true, why: `Wormhole did not judge the delivery: ${inspected.reason ?? "no reason given"}`, ...withReceipt };
+  if (inspected.decision !== "allow" || !receipt) return { ok: false, why: `Wormhole refused the delivery${receipt?.codes.length ? ` (${receipt.codes.join(", ")})` : ""}`, ...withReceipt };
+  if (!bytes) return { ok: false, ungraded: true, why: "the delivery has no body to grade", receipt };
   const text = exactText(bytes);
-  if (text === undefined) return { ok: false, unchecked: true, why: "the delivery is not UTF-8 text, and BrainChain grades text", receipt };
-  if (bytes.length > MAX_RESULT_BYTES) return { ok: false, unchecked: true, why: `the delivery is ${bytes.length.toLocaleString("en-US")} bytes; BrainChain grades at most ${MAX_RESULT_BYTES.toLocaleString("en-US")}`, receipt };
-  if (text.trim() === "") return { ok: false, unchecked: true, why: "the delivery is blank", receipt };
+  if (text === undefined) return { ok: false, ungraded: true, why: "the delivery is not UTF-8 text, and BrainChain grades text", receipt };
+  if (bytes.length > MAX_RESULT_BYTES) return { ok: false, ungraded: true, why: `the delivery is ${bytes.length.toLocaleString("en-US")} bytes; BrainChain grades at most ${MAX_RESULT_BYTES.toLocaleString("en-US")}`, receipt };
+  if (text.trim() === "") return { ok: false, ungraded: true, why: "the delivery is blank", receipt };
   return { ok: true, receipt, request: { ...order, result: text } };
 }
 
