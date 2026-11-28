@@ -248,7 +248,7 @@ describe("a bounty whose entry names the repository's id", () => {
   it("follows no redirect away from api.github.com", async () => {
     const { post, asked } = await serving({ board, renamed: true, redirectTo: "https://elsewhere.example/pulls/57" });
     expect((await post(claim)).body).toEqual({ reason: "unavailable", error: "GitHub could not be read just now. Nothing was recorded. Try again in a minute." });
-    expect(asked.some(({ url }) => url.startsWith("https://elsewhere.example"))).toBe(false);
+    expect(asked.some(({ url }) => new URL(url).host === "elsewhere.example")).toBe(false);
   });
 
   it("without the id, matches the repository by name as before", async () => {
