@@ -66,11 +66,15 @@ export interface ClaimsOptions {
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const isText = (value: unknown): value is string => typeof value === "string" && value.length > 0;
 
-/** The Lean problems in problems.json; an entry missing any field a claim reads is left out. */
+/**
+ * The Lean problems in problems.json: its top-level `lean` array, apart from `problems`, which versions before 0.26.0
+ * read strictly; a `kind: "lean"` entry in `problems` counts too. An entry missing any field a claim reads is left out.
+ */
 export function leanProblems(body: unknown): LeanProblem[] {
-  if (!isRecord(body) || !Array.isArray(body.problems)) throw new Error("the problem board is not in the format this version knows");
-  return body.problems.flatMap((p): LeanProblem[] => {
-    if (!isRecord(p) || p.kind !== "lean" || !isText(p.problem) || !isText(p.name) || typeof p.version !== "number" || typeof p.bounty !== "number") return [];
+  if (!isRecord(body) || !(Array.isArray(body.lean) || Array.isArray(body.problems))) throw new Error("the problem board is not in the format this version knows");
+  const listed = [...(Array.isArray(body.lean) ? body.lean : []), ...(Array.isArray(body.problems) ? body.problems.filter((p) => isRecord(p) && p.kind === "lean") : [])];
+  return listed.flatMap((p): LeanProblem[] => {
+    if (!isRecord(p) || !isText(p.problem) || !isText(p.name) || typeof p.version !== "number" || typeof p.bounty !== "number") return [];
     const s = p.source;
     if (!isText(p.opened) || Number.isNaN(Date.parse(p.opened)) || !isRecord(s)) return [];
     if (![s.name, s.id, s.page, s.brief, s.api, s.repo, s.proofFile].every(isText)) return [];

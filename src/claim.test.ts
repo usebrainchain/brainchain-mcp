@@ -29,7 +29,7 @@ function run(args: string[], claims: Response | Error = Response.json(recorded),
   const sent: { url: string; authorization: string | null; body: unknown }[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const req = new Request(input, init);
-    if (req.url === "https://usebrainchain.com/problems.json") return Response.json({ problems: [{ problem: "shannon" }, lean] });
+    if (req.url === "https://usebrainchain.com/problems.json") return Response.json({ problems: [{ problem: "shannon" }], lean: [lean] });
     sent.push({ url: req.url, authorization: req.headers.get("authorization"), body: await req.json() });
     if (claims instanceof Error) throw claims;
     return claims;

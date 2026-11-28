@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { BOARD_MS, claimsFrom, createClaims } from "./claims.js";
+import { BOARD_MS, claimsFrom, createClaims, leanProblems } from "./claims.js";
 import { readBoard } from "./solve.js";
 import { EventLog } from "./watch/events.js";
 import { SERVE_LIMITS, serveEvents, type ServeLimits } from "./watch/serve.js";
@@ -64,7 +64,7 @@ function upstream(world: World) {
     }
     if (req.url === BOARD) {
       if (world.down === "board") throw new TypeError("fetch failed");
-      return Response.json(world.board ?? { board: "BrainChain", open: true, windowDays: 7, problems: [checker, lean] });
+      return Response.json(world.board ?? { board: "BrainChain", open: true, windowDays: 7, problems: [checker], lean: [lean] });
     }
     if (req.url === API) {
       if (world.down === "theirs") return new Response("upstream", { status: 500 });
@@ -215,8 +215,21 @@ describe("the claims' settings", () => {
   });
 });
 
-describe("brainchain-mcp solve", () => {
-  it("reads a board that also lists Lean problems, and leaves them to claim", () => {
-    expect(readBoard({ board: "BrainChain", open: true, windowDays: 7, problems: [checker, lean] }).problems.map((p) => p.problem)).toEqual(["shannon-capacity-c7-5"]);
+describe("the board's Lean problems", () => {
+  it("are read from its lean array, and from a kind lean entry in problems too", () => {
+    const board = { board: "BrainChain", open: true, windowDays: 7, problems: [checker], lean: [lean] };
+    expect(leanProblems(board).map((p) => p.problem)).toEqual(["erdos-142"]);
+    expect(leanProblems({ ...board, lean: [], problems: [checker, { ...lean, problem: "erdos-143" }] }).map((p) => p.problem)).toEqual(["erdos-143"]);
+    expect(leanProblems({ ...board, lean: [{ ...lean, source: { ...lean.source, api: undefined } }] })).toEqual([]);
+    expect(() => leanProblems({ board: "BrainChain" })).toThrow("not in the format");
+  });
+
+  it("leave solve reading the board, wherever they are listed", () => {
+    for (const board of [
+      { board: "BrainChain", open: true, windowDays: 7, problems: [checker], lean: [lean] },
+      { board: "BrainChain", open: true, windowDays: 7, problems: [checker, lean] },
+    ]) {
+      expect(readBoard(board).problems.map((p) => p.problem)).toEqual(["shannon-capacity-c7-5"]);
+    }
   });
 });
