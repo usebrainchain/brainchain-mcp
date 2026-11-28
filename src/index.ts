@@ -50,6 +50,10 @@ Usage:
                                  Answer an open problem on BrainChain's problem board: the answer in <file> is run through
                                  the problem's checker and the decision is recorded. Without arguments it lists the
                                  problems. See brainchain-mcp solve --help.
+  brainchain-mcp claim [<problem> --wallet 0x...]
+                                 Claim BrainChain's bounty for a Lean proof merged on Left to Solve, signed in with login
+                                 as the account that sent it. Without arguments it lists the Lean problems with a
+                                 bounty. See brainchain-mcp claim --help.
   brainchain-mcp dataset --out <dir>
                                  Build the dataset brainchain_trace_outcomes reads: every token's dated public steps,
                                  the venues that listed it and the base rates. See brainchain-mcp dataset --help.
@@ -109,6 +113,11 @@ if (dataset && process.argv.slice(3).some((arg) => HELP.includes(arg))) {
   process.exit(0);
 }
 const solve = command === "solve" ? await import("./solve.js") : undefined;
+const claim = command === "claim" ? await import("./claim.js") : undefined;
+if (claim && process.argv.slice(3).some((arg) => HELP.includes(arg))) {
+  console.log(claim.CLAIM_USAGE);
+  process.exit(0);
+}
 if (solve && process.argv.slice(3).some((arg) => HELP.includes(arg))) {
   console.log(solve.SOLVE_USAGE);
   process.exit(0);
@@ -117,10 +126,10 @@ if (command === "--version" || command === "-v" || command === "version") {
   console.log(version);
   process.exit(0);
 }
-if (command !== undefined && !["approve", "wallet", "init", "login", "watch", "dataset", "solve"].includes(command)) fail(`Unknown command ${command}.\n\n${USAGE}`);
+if (command !== undefined && !["approve", "wallet", "init", "login", "watch", "dataset", "solve", "claim"].includes(command)) fail(`Unknown command ${command}.\n\n${USAGE}`);
 const again = command === "login" && process.argv[3] === "--again";
 const extra = process.argv[command === "approve" || again ? 4 : 3];
-if (command !== undefined && command !== "watch" && command !== "dataset" && command !== "solve" && extra !== undefined) {
+if (command !== undefined && command !== "watch" && command !== "dataset" && command !== "solve" && command !== "claim" && extra !== undefined) {
   fail(`Unexpected argument ${extra}: ${command === "approve" ? "approve takes one amount" : command === "login" ? "login takes only --again" : `${command} takes none`}.\n\n${USAGE}`);
 }
 
@@ -150,6 +159,10 @@ if (command === undefined) {
       now: Date.now,
     })
     .catch((error: unknown) => fail(error instanceof solve.SolveUsageError ? `${error.message}\n\n${solve.SOLVE_USAGE}` : error instanceof Error ? error.message : String(error)));
+} else if (claim) {
+  process.exitCode = await claim
+    .runClaim(process.argv.slice(3), { env: process.env, version, fetch, log: (line) => console.log(line) })
+    .catch((error: unknown) => fail(error instanceof claim.ClaimUsageError ? `${error.message}\n\n${claim.CLAIM_USAGE}` : error instanceof Error ? error.message : String(error)));
 } else if (command === "login") {
   process.exitCode = await runLogin(process.env, version, { again }).catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
 } else if (command === "init") {

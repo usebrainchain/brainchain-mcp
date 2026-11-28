@@ -7,7 +7,7 @@ Python 3.10+ or .NET 10. They run on Windows, macOS and Linux.
 
 ## Set up once
 
-1. A paying wallet: `npx -y brainchain-mcp@0.25.1 init` saves a new key in `~/.brainchain/payer.key`, readable only
+1. A paying wallet: `npx -y brainchain-mcp@0.26.0 init` saves a new key in `~/.brainchain/payer.key`, readable only
    by you, and prints the address to fund with USDC on Base. Then set `BRAINCHAIN_PAYER_KEY_FILE=~/.brainchain/payer.key`.
    The [agents page](https://docs.usebrainchain.com/agents) has the details, and testnet takes free test funds.
 2. The model, from any OpenAI-compatible endpoint: `OPENAI_API_KEY` and `OPENAI_MODEL`, plus `OPENAI_BASE_URL`

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { watchUrl } from "../changes.js";
+import { claimsFrom, type Claims } from "../claims.js";
 import { expandHome } from "../config.js";
 import { countsFor } from "../dataset/counts.js";
 import { datasetReader, MANIFEST_MS, type DatasetReader } from "../dataset/published.js";
@@ -78,7 +79,9 @@ them, in USDC on Base (Base Sepolia with BRAINCHAIN_NETWORK=testnet). GITHUB_CLI
 OAuth app people sign in with through brainchain-mcp login, with device flow on; it needs no secret. With both set, --serve
 also answers GET /free, GET /free/me and POST /free/grade, and pays for the first ${FREE.perAccount} grades of each GitHub
 account older than ${FREE.minAccountDays} days, at most ${FREE.perDay} a day and ${FREE.total} in all. BRAINCHAIN_FREE_DAY_CAPS sets
-other caps for listed UTC days, such as 2026-11-30=200,2026-12-01=200, and BRAINCHAIN_FREE_TOTAL replaces the ${FREE.total}.`;
+other caps for listed UTC days, such as 2026-11-30=200,2026-12-01=200, and BRAINCHAIN_FREE_TOTAL replaces the ${FREE.total}.
+GITHUB_CLIENT_ID alone also turns on GET /claims and POST /claims: bounty claims for Lean proofs on the board
+BRAINCHAIN_PROBLEMS_URL names (default BrainChain's), checked against GitHub and kept in claims/claims.json in the state.`;
 
 /** The relay Discord deliveries go through, from BRAINCHAIN_WATCH_DISCORD_RELAY and its key, or none. */
 export function discordRelay(env: Record<string, string | undefined>): Relay | undefined {
@@ -325,7 +328,13 @@ export async function runWatch(argv: readonly string[], env: Record<string, stri
   } catch (error) {
     say(`Free checks are off: ${(error as Error).message}`);
   }
-  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, calls, ...(sponsor ? { sponsor } : {}), mcp: hostedMcp(version, publicUrl ? { publicUrl } : {}), trustProxy: args.trustProxy }) : undefined;
+  let claims: Claims | undefined;
+  try {
+    claims = args.serve ? claimsFrom(env, join(dir, "claims"), { say }) : undefined;
+  } catch (error) {
+    say(`Claims are off: ${(error as Error).message}`);
+  }
+  const served = args.serve ? serveEvents({ log, ...(rpc ? { pools: poolIndex } : {}), names, health: () => health(), adminToken, deliveries, calls, ...(sponsor ? { sponsor } : {}), ...(claims ? { claims } : {}), mcp: hostedMcp(version, publicUrl ? { publicUrl } : {}), trustProxy: args.trustProxy }) : undefined;
   let ticking = false;
   const deliver = () => {
     if (ticking) return;

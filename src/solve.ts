@@ -51,7 +51,8 @@ const isText = (value: unknown): value is string => typeof value === "string" &&
 export function readBoard(body: unknown): Board {
   const unreadable = new Error("The problem board could not be read: it is not in the format this version knows. Update brainchain-mcp and try again.");
   if (!isRecord(body) || typeof body.open !== "boolean" || !isText(body.board) || typeof body.windowDays !== "number" || !Array.isArray(body.problems)) throw unreadable;
-  const problems = body.problems.map((p): BoardProblem => {
+  // Lean problems are proved on an outside board and claimed with brainchain-mcp claim; solve sends answers to checkers.
+  const problems = body.problems.filter((p) => !(isRecord(p) && p.kind === "lean")).map((p): BoardProblem => {
     if (!isRecord(p) || !isText(p.problem) || !isText(p.name) || !isRecord(p.record) || !isText(p.record.display) || !isText(p.record.holder)) throw unreadable;
     if (!isRecord(p.answer) || !isText(p.answer.format) || !isText(p.answer.note) || !isText(p.briefId) || !isRecord(p.request)) throw unreadable;
     const { title, brief, levels, pass } = p.request;

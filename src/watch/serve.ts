@@ -2,8 +2,10 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { isIP, type AddressInfo } from "node:net";
 
+import type { Claims } from "../claims.js";
 import type { McpHandler } from "../hosted.js";
-import { SIGN_IN, type Sponsor } from "../sponsor.js";
+import { SIGN_IN } from "../signin.js";
+import type { Sponsor } from "../sponsor.js";
 import { BASES } from "./chain.js";
 import type { CallIndex } from "./calls.js";
 import type { Deliveries } from "./deliver.js";
@@ -170,6 +172,8 @@ export interface ServeOptions {
   sponsor?: Sponsor;
   /** The hosted BrainChain MCP, for `POST /mcp`; a watcher without it answers 404 there. */
   mcp?: McpHandler;
+  /** Bounty claims for Lean proofs, for `GET /claims` and `POST /claims`; a watcher without them answers 404 there. */
+  claims?: Claims;
   /** Behind a proxy that appends the client's address to X-Forwarded-For, such as Render's, take the address from there. */
   trustProxy?: boolean;
   limits?: ServeLimits;
@@ -308,10 +312,11 @@ export interface Served {
  * `POST /free/grade` with a GitHub sign-in. The hosted BrainChain MCP: `POST /mcp`. Every address is held to `perMinute`
  * requests, to `freePerMinute` of them on the two routes that take a sign-in, and to `mcpPerMinute` on `/mcp`.
  */
-export function serveEvents({ log, pools, names, health, adminToken, deliveries, calls, sponsor, mcp, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
+export function serveEvents({ log, pools, names, health, adminToken, deliveries, calls, sponsor, mcp, claims, trustProxy = false, limits = SERVE_LIMITS, clock = Date.now }: ServeOptions): Served {
   const perMinute = new Window(limits.perMinute, 60_000);
   const freePerMinute = new Window(limits.freePerMinute, 60_000);
   const mcpPerMinute = new Window(limits.mcpPerMinute, 60_000);
+  const claimsPerMinute = new Window(limits.freePerMinute, 60_000);
   // The hosted tools read this watcher over loopback, so each read names the caller it is for, with a secret no one
   // outside this process holds, and is counted against that caller rather than this process.
   const secret = randomBytes(32).toString("hex");
@@ -390,7 +395,7 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       const admin = adminToken !== undefined && given !== undefined && given.length === adminToken.length && timingSafeEqual(Buffer.from(given), Buffer.from(adminToken));
       const sources = (state.sources ?? {}) as Record<string, { failures?: number; baselined?: boolean }>;
       const checks = sponsor?.info();
-      const routes = { ...(checks ? { free: { open: checks.open, paused: checks.paused } } : {}), ...(mcp ? { mcp: "/mcp" } : {}) };
+      const routes = { ...(checks ? { free: { open: checks.open, paused: checks.paused } } : {}), ...(mcp ? { mcp: "/mcp" } : {}), ...(claims ? { claims: "/claims" } : {}) };
       const summary = { ok: state.ok, events: state.events, sources: Object.fromEntries(Object.entries(sources).map(([name, { failures = 0, baselined }]) => [name, { reading: failures < 3, baselined: baselined === true }])), ...routes };
       return send(response, state.ok ? 200 : 503, admin ? { ...state, ...routes } : summary, admin ? {} : OPEN);
     }
@@ -464,9 +469,23 @@ export function serveEvents({ log, pools, names, health, adminToken, deliveries,
       return send(response, status, body);
     }
     if (["/events", "/events/stream", "/pools", "/robinhood/names", "/calls", "/health", "/health/live", "/watches"].includes(url.pathname) || freeRoute || id !== undefined || grade !== undefined) throw new HttpError(405, "That method is not served here.");
+    if (url.pathname === "/claims") {
+      if (!claims) throw new HttpError(404, "This watcher takes no claims.");
+      if (reading) return send(response, 200, claims.list().body, OPEN);
+      if (method !== "POST") throw new HttpError(405, "That method is not served here.");
+      if (!claimsPerMinute.take(address, clock())) {
+        throw new HttpError(429, `Too many claim requests from your network address. BrainChain takes ${limits.freePerMinute} a minute from one address. Wait a minute, then try again.`);
+      }
+      // A request without a sign-in is turned away before its body is read.
+      const token = bearer(request);
+      if (!token) return send(response, SIGN_IN.status, SIGN_IN.body);
+      const { status, body } = await claims.claim(token, await json(request, limits.body));
+      return send(response, status, body);
+    }
     const freeRoutes = sponsor ? ", GET /free, GET /free/me, POST /free/grade" : "";
+    const claimRoutes = claims ? ", GET /claims, POST /claims" : "";
     const mcpRoute = mcp ? ", POST /mcp" : "";
-    throw new HttpError(404, `Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls?after=, GET /calls/:grade, GET /health${freeRoutes}${mcpRoute}, POST /watches and GET or DELETE /watches/:id.`);
+    throw new HttpError(404, `Not found. The watcher serves GET /events, GET /events/stream, GET /pools, GET /robinhood/names, GET /calls?caller=, GET /calls?after=, GET /calls/:grade, GET /health${freeRoutes}${claimRoutes}${mcpRoute}, POST /watches and GET or DELETE /watches/:id.`);
   }
 
   /** This watcher's own address, for the hosted tools' reads of it. */
