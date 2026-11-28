@@ -135,7 +135,7 @@ describe("recorded on mainnet", () => {
 describe("gate", () => {
   it("uses the delivery when both pass and the record holds the same bytes", async () => {
     let record: { file: Uint8Array; url: string } | undefined;
-    const outcome = await gate(await delivery("asked"), order, {
+    const outcome = await gate(await allowed(), {
       desk: DESK,
       grade: async (request) => {
         record = published(request);
@@ -151,27 +151,21 @@ describe("gate", () => {
 
   it("does not use a delivery BrainChain rejects, and reads no record", async () => {
     const record = vi.fn();
-    const outcome = await gate(await delivery("another-city"), order, { desk: DESK, grade: async () => verdict(false), record });
+    const outcome = await gate(await allowed("another-city"), { desk: DESK, grade: async () => verdict(false), record });
     expect(outcome).toMatchObject({ use: false, why: expect.stringContaining("rejected") });
     expect(outcome).not.toHaveProperty("unchecked");
     expect(record).not.toHaveBeenCalled();
   });
 
-  it("never pays for a delivery Wormhole refuses", async () => {
-    const grade = vi.fn();
-    expect((await gate(await delivery("charged-again"), order, { desk: DESK, grade, record: vi.fn() })).use).toBe(false);
-    expect(grade).not.toHaveBeenCalled();
-  });
-
   it("never fetches a record from anywhere but the desk", async () => {
     const record = vi.fn();
-    const outcome = await gate(await delivery("asked"), order, { desk: DESK, grade: async () => verdict(true, `https://elsewhere.test/records/0x${"cd".repeat(32)}.json`), record });
+    const outcome = await gate(await allowed(), { desk: DESK, grade: async () => verdict(true, `https://elsewhere.test/records/0x${"cd".repeat(32)}.json`), record });
     expect(outcome).toMatchObject({ use: false, why: expect.stringContaining("not a decision record") });
     expect(record).not.toHaveBeenCalled();
   });
 
   it("does not use an accepted delivery whose record holds other bytes", async () => {
-    const outcome = await gate(await delivery("asked"), order, {
+    const outcome = await gate(await allowed(), {
       desk: DESK,
       grade: async (request) => verdict(true, published(request).url),
       record: async () => published({ ...order, result: "{}" }).file,
@@ -221,12 +215,46 @@ describe("main", () => {
     expect(new Headers(init.headers).has("payment-signature")).toBe(false);
   });
 
-  it("exits 2 on a delivery Wormhole refuses, before reading any key", async () => {
+  it("exits 2 on a delivery Wormhole refuses, before reading any key or paying", async () => {
     const account = vi.fn();
-    const { io: refusedIo, lines } = io({ account });
+    const fetchMock = vi.fn();
+    const { io: refusedIo, lines } = io({ account, fetch: fetchMock as unknown as typeof fetch });
     expect(await main(["--delivery", fixture("deliveries/charged-again.json"), "--brief", brief], refusedIo)).toBe(2);
     expect(account).not.toHaveBeenCalled();
-    expect(lines.at(-1)).toContain("X402-402");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(lines[0]).toMatch(/^Wormhole: refuse, HTTP 402, 44 bytes, SHA-256 [0-9a-f]{64}, X402-402$/);
+    expect(lines.slice(1)).toEqual(["Do not use the delivery: Wormhole refused the delivery (X402-402)."]);
+  });
+
+  it("refuses --sample with other flags, which it would ignore", async () => {
+    const { io: mixedIo, errors } = io();
+    expect(await main(["--sample", "--dry"], mixedIo)).toBe(1);
+    expect(errors[0]).toMatch(/^--sample runs on its own/);
+  });
+
+  it("prints the usage and exits 1 with no arguments", async () => {
+    const { io: bareIo, lines } = io();
+    expect(await main([], bareIo)).toBe(1);
+    expect(lines[0]).toMatch(/^Usage:/);
+  });
+
+  it("refuses a body given twice or base64 that is not base64", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wormhole-delivery-"));
+    const twice = join(dir, "twice.json");
+    const bad = join(dir, "bad.json");
+    await writeFile(twice, JSON.stringify({ quote: {}, response: { status: 200, bodyText: "a", bodyBase64: "YQ==" } }));
+    await writeFile(bad, JSON.stringify({ quote: {}, response: { status: 200, bodyBase64: "!!!not base64!!!" } }));
+    for (const [file, message] of [[twice, "give the body once"], [bad, "is not base64"]] as const) {
+      const { io: badIo, errors } = io();
+      expect(await main(["--delivery", file, "--brief", brief], badIo)).toBe(1);
+      expect(errors[0]).toContain(message);
+    }
+  });
+
+  it("says nothing was paid when the desk does not answer a dry run", async () => {
+    const { io: downIo, errors } = io({ fetch: vi.fn(async () => Promise.reject(new TypeError("fetch failed"))) as unknown as typeof fetch });
+    expect(await main(["--dry", "--delivery", fixture("deliveries/asked.json"), "--brief", brief], downIo)).toBe(1);
+    expect(errors).toEqual(["BrainChain did not answer: fetch failed. Nothing was paid to BrainChain."]);
   });
 
   it("exits 1 on a delivery it cannot grade", async () => {
@@ -261,9 +289,10 @@ describe("main", () => {
       },
     );
     const account = privateKeyToAccount(generatePrivateKey());
-    const { io: paidIo, errors } = io({ fetch: fetchMock as unknown as typeof fetch, account: async () => account });
+    const { io: paidIo, lines, errors } = io({ fetch: fetchMock as unknown as typeof fetch, account: async () => account });
     expect(await main(["--delivery", fixture("deliveries/asked.json"), "--brief", brief], paidIo)).toBe(1);
     expect(gradeId).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(lines.slice(0, 2)).toEqual(["Wormhole: allow, HTTP 200, 1274 bytes, SHA-256 6a89ab3304ef393addb9df08f9e7b8264619d8b77c2843d55705c2f9596b21b7", `Paying from ${account.address}.`]);
     expect(errors).toEqual([`BrainChain accepted the work, but its record ${DESK}/records/0x${"cd".repeat(32)}.json could not be read (fetch failed). Reading it again is free; running this again pays for another grade.`]);
   });
 
@@ -276,5 +305,6 @@ describe("main", () => {
     await chmod(file, 0o600);
     await expect(loadAccount(file)).resolves.toHaveProperty("address");
     await expect(loadAccount(undefined)).rejects.toThrow(/^Set BRAINCHAIN_PAYER_KEY_FILE/);
+    await expect(loadAccount(dir)).rejects.toThrow("which is not a file.");
   });
 });

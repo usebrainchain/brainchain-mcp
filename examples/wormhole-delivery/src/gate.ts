@@ -31,7 +31,7 @@ export interface GradeRequest extends Order {
 /** `unchecked` marks a delivery this script could not judge, as opposed to one found wrong. */
 export type Checked = { ok: false; why: string; unchecked?: true; receipt?: DeliveryReceipt } | { ok: true; receipt: DeliveryReceipt; request: GradeRequest };
 
-export type Outcome = { use: true; receipt: DeliveryReceipt; verdict: Verdict } | { use: false; why: string; unchecked?: true; receipt?: DeliveryReceipt; verdict?: Verdict };
+export type Outcome = { use: true; verdict: Verdict } | { use: false; why: string; unchecked?: true; verdict?: Verdict };
 
 export const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
@@ -108,21 +108,17 @@ export function confirm(receipt: DeliveryReceipt, verdict: Verdict, name: string
   return undefined;
 }
 
-/** Checks the delivery, pays for BrainChain's grade of it, and confirms the published record holds the same bytes. */
+/** Pays for BrainChain's grade of a delivery Wormhole allowed, and confirms the published record holds the same bytes. */
 export async function gate(
-  delivery: Delivery,
-  order: Order,
-  io: { desk: string; grade: (request: GradeRequest) => Promise<Verdict>; record: (url: string) => Promise<Uint8Array>; issuedAt?: string },
+  checked: Extract<Checked, { ok: true }>,
+  io: { desk: string; grade: (request: GradeRequest) => Promise<Verdict>; record: (url: string) => Promise<Uint8Array> },
 ): Promise<Outcome> {
-  const checked = check(delivery, order, io.issuedAt);
-  if (!checked.ok) return { use: false, why: checked.why, ...(checked.unchecked ? { unchecked: true } : {}), ...(checked.receipt ? { receipt: checked.receipt } : {}) };
-  const { receipt } = checked;
   const verdict = await io.grade(checked.request);
-  if (!verdict.accepted) return { use: false, why: `BrainChain rejected the work at a pass probability of ${pct(verdict.passProbability)}, under its bar of ${pct(verdict.bar)}`, receipt, verdict };
+  if (!verdict.accepted) return { use: false, why: `BrainChain rejected the work at a pass probability of ${pct(verdict.passProbability)}, under its bar of ${pct(verdict.bar)}`, verdict };
   const url = verdict.decision?.record ?? "";
   const name = recordName(url, io.desk);
-  if (!name) return { use: false, why: `BrainChain's verdict names ${url ? `${url}, which is not a decision record on ${io.desk}` : "no decision record"}`, receipt, verdict };
-  const problem = confirm(receipt, verdict, name, await io.record(url));
-  if (problem) return { use: false, why: problem, receipt, verdict };
-  return { use: true, receipt, verdict };
+  if (!name) return { use: false, why: `BrainChain's verdict names ${url ? `${url}, which is not a decision record on ${io.desk}` : "no decision record"}`, verdict };
+  const problem = confirm(checked.receipt, verdict, name, await io.record(url));
+  if (problem) return { use: false, why: problem, verdict };
+  return { use: true, verdict };
 }

@@ -15,7 +15,7 @@ npm run gate -- --sample
 npm run gate -- --dry --delivery fixtures/deliveries/asked.json --brief fixtures/brief.txt
 ```
 
-`--sample` runs Wormhole's check on the four sample deliveries in [`fixtures/deliveries`](fixtures/deliveries) against the brief in [`fixtures/brief.txt`](fixtures/brief.txt), a Berlin forecast. Wormhole refuses a second 402 after payment and an HTML error page served for a JSON quote, so neither costs a grade. It allows the Berlin forecast and one for Bern, which have the same shape. Only the grade tells them apart: [`fixtures/recorded`](fixtures/recorded) holds BrainChain's mainnet verdicts on both, [accepted](https://usebrainchain.com/decision?id=722) and [rejected](https://usebrainchain.com/decision?id=723), and [`fixtures/records`](fixtures/records) the accepted one's decision record, whose result `--sample` hashes again to Wormhole's SHA-256.
+`--sample` runs on its own. It runs Wormhole's check on the four sample deliveries in [`fixtures/deliveries`](fixtures/deliveries) against the brief in [`fixtures/brief.txt`](fixtures/brief.txt), a Berlin forecast. Wormhole refuses a second 402 after payment and an HTML error page served for a JSON quote, so neither costs a grade. It allows the Berlin forecast and one for Bern, which have the same shape. Only the grade tells them apart: [`fixtures/recorded`](fixtures/recorded) holds BrainChain's mainnet verdicts on both, [accepted](https://usebrainchain.com/decision?id=722) and [rejected](https://usebrainchain.com/decision?id=723), and [`fixtures/records`](fixtures/records) the accepted one's decision record, whose result `--sample` hashes again to Wormhole's SHA-256.
 
 `--dry` runs Wormhole's check on one delivery and asks BrainChain's grade route its price without paying. It exits 0 when BrainChain would grade the delivery, and with the codes below otherwise.
 
@@ -36,11 +36,21 @@ The delivery file is what Wormhole's `verify_delivery` tool takes: the quote the
 }
 ```
 
-Send the body as `bodyBase64` when it must arrive byte for byte. The script reads the paying wallet's key only after Wormhole allows the delivery, and pays BrainChain 0.25 USDC on Base whatever the verdict. The wallet needs no gas on Base. It signs at most 0.25 USDC to BrainChain's address, as an EIP-3009 transfer authorization. When BrainChain's answer is lost, the script reads the grade by its id, which is free, instead of paying again.
+Give the body once, as `bodyText` or as `bodyBase64`, and as `bodyBase64` when it must arrive byte for byte. The brief is UTF-8 text of at most 32,000 characters, and `--title` one line of at most 120. The script reads the paying wallet's key only after Wormhole allows the delivery, and pays BrainChain 0.25 USDC on Base whatever the verdict. The wallet needs no gas on Base. It signs at most 0.25 USDC to BrainChain's address, as an EIP-3009 transfer authorization. When BrainChain's answer is lost, the script reads the grade by its id, which is free, instead of paying again.
 
 Before paying, the script stops a delivery that Wormhole refuses or does not judge, one with no body, a body that is not UTF-8 text, one over BrainChain's 100,000 bytes and a blank one. After the verdict, it reads the decision record from BrainChain's desk and checks three things: the record is the file whose keccak256 names it, it is the record of the grade this run paid for, and its result hashes to Wormhole's `resource_digest`. If the record cannot be read, the script says the grade was paid for and where to read it again, which is free.
 
 The brief is published in the decision record, and so is the delivery once BrainChain accepts it. Grade only content you may publish.
+
+Wormhole names each refusal by a code that echoes the HTTP status it is about. These come from its delivery check; codes from its scan of paid text for prompt injection can ride along.
+
+| Code | Wormhole found |
+| --- | --- |
+| `X402-401` | An error status after the payment settled: paid but denied. |
+| `X402-402` | A second 402 for a payment already made. |
+| `X402-403` | A content type that contradicts the quote. |
+| `X402-404` | A successful status with an empty body. |
+| `X402-406` | JSON, quoted or declared, that does not parse. |
 
 | Exit code | Meaning |
 | --- | --- |

@@ -6,14 +6,19 @@ import { parseArgs } from "node:util";
 
 import { privateKeyToAccount } from "viem/accounts";
 import type { PrivateKeyAccount } from "viem";
+import type { DeliveryReceipt } from "wormhole-x402/delivery";
 
 import { DEFAULT_DESK, deskUrl, payGrade, priceOf, type Verdict } from "./desk.ts";
 import { check, confirm, gate, pct, recordName, type Delivery, type Order, type Outcome } from "./gate.ts";
 import { messageOf } from "./shared.ts";
 
 const SAMPLES = fileURLToPath(new URL("../fixtures/", import.meta.url));
+/** BrainChain's limits on a grade request's brief and title, in characters. */
+const MAX_BRIEF = 32_000;
+const MAX_TITLE = 120;
 /** Far more than a grade record of a 100,000-byte result and a 32,000-character brief. */
 const MAX_RECORD_BYTES = 2_000_000;
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 const USAGE = `Usage:
   npm run gate -- --sample
@@ -22,10 +27,11 @@ const USAGE = `Usage:
 
   --delivery <file>  the paid response as JSON, as Wormhole's verify_delivery takes it:
                      {"quote": {...}, "response": {"status", "contentType", "bodyText" or "bodyBase64"}, "request_digest"}
-  --brief <file>     what the delivery had to be, as text; BrainChain reads nothing else about the job
-  --title <text>     one line naming the deliverable
+  --brief <file>     what the delivery had to be, as UTF-8 text of at most 32,000 characters;
+                     BrainChain reads nothing else about the job
+  --title <text>     one line of at most 120 characters naming the deliverable
   --dry              Wormhole's check and BrainChain's price; nothing is paid
-  --sample           Wormhole's check on the sample deliveries in fixtures/; nothing is paid
+  --sample           Wormhole's check on the sample deliveries in fixtures/, and the recorded grades; nothing is paid
   -h, --help         this text
 
 A paid run reads the paying wallet's key from the file BRAINCHAIN_PAYER_KEY_FILE names and pays BrainChain
@@ -52,7 +58,10 @@ const defaultIo: Io = { log: console.log, error: console.error, fetch: (...args)
 export async function loadAccount(file: string | undefined): Promise<PrivateKeyAccount> {
   if (!file) throw new Error("Set BRAINCHAIN_PAYER_KEY_FILE to a file holding the paying wallet's private key. It pays 0.25 USDC to BrainChain on Base.");
   const mode = await stat(file).then(
-    (s) => s.mode,
+    (s) => {
+      if (!s.isFile()) throw new Error(`BRAINCHAIN_PAYER_KEY_FILE names ${file}, which is not a file.`);
+      return s.mode;
+    },
     (error: NodeJS.ErrnoException) => {
       throw new Error(`BRAINCHAIN_PAYER_KEY_FILE names ${file}, which ${error.code === "ENOENT" ? "does not exist" : `cannot be read (${error.code ?? error.message})`}.`, { cause: error });
     },
@@ -90,22 +99,27 @@ export async function readDelivery(file: string): Promise<Delivery> {
   if (typeof response !== "object" || response === null || !Number.isInteger(response.status)) throw new Error(`${file} needs a response with the HTTP status that arrived after paying.`);
   if (response.bodyText !== undefined && typeof response.bodyText !== "string") throw new Error(`${file}: response.bodyText must be a string.`);
   if (response.bodyBase64 !== undefined && typeof response.bodyBase64 !== "string") throw new Error(`${file}: response.bodyBase64 must be a string.`);
+  if (response.bodyText !== undefined && response.bodyBase64 !== undefined) throw new Error(`${file}: give the body once, as bodyText or as bodyBase64.`);
+  if (response.bodyBase64 !== undefined && !BASE64.test(response.bodyBase64)) throw new Error(`${file}: response.bodyBase64 is not base64.`);
   if (response.contentType !== undefined && typeof response.contentType !== "string") throw new Error(`${file}: response.contentType must be a string.`);
   if (delivery.request_digest !== undefined && typeof delivery.request_digest !== "string") throw new Error(`${file}: request_digest must be a string.`);
   return delivery as Delivery;
 }
 
 async function readOrder(file: string | undefined, title: string | undefined): Promise<Order> {
-  if (!file) throw new Error("--brief names the file that says what the delivery had to be.");
+  if (!file) throw new Error("--brief names the file that says what the delivery had to be. Run with --help for the usage.");
   const brief = (await readText(file)).trim();
   if (!brief) throw new Error(`${file} is empty.`);
-  if (title !== undefined && (!title.trim() || title.length > 120 || /[\n\r]/.test(title))) throw new Error("--title is one line of at most 120 characters.");
+  if (brief.length > MAX_BRIEF) throw new Error(`${file} holds a brief of ${brief.length.toLocaleString("en-US")} characters; BrainChain takes at most ${MAX_BRIEF.toLocaleString("en-US")}.`);
+  if (title !== undefined && (!title.trim() || title.length > MAX_TITLE || /[\n\r]/.test(title))) throw new Error(`--title is one line of 1 to ${MAX_TITLE} characters.`);
   return { ...(title ? { title: title.trim() } : {}), brief };
 }
 
+const wormholeLine = (receipt: DeliveryReceipt) =>
+  `Wormhole: ${receipt.decision}, HTTP ${receipt.http_status}${receipt.byte_len === null ? "" : `, ${receipt.byte_len} bytes, SHA-256 ${receipt.resource_digest}`}${receipt.codes.length ? `, ${receipt.codes.join(", ")}` : ""}`;
+
 function report(outcome: Outcome, io: Io): number {
-  const { receipt, verdict } = outcome;
-  if (receipt) io.log(`Wormhole: ${receipt.decision}, HTTP ${receipt.http_status}${receipt.byte_len === null ? "" : `, ${receipt.byte_len} bytes, SHA-256 ${receipt.resource_digest}`}${receipt.codes.length ? `, ${receipt.codes.join(", ")}` : ""}`);
+  const { verdict } = outcome;
   if (verdict) io.log(`BrainChain: ${verdict.accepted ? "accepted" : "rejected"} at a pass probability of ${pct(verdict.passProbability)} (bar ${pct(verdict.bar)}), decision ${verdict.decision?.id ?? "?"}${verdict.decision?.page ? `, ${verdict.decision.page}` : ""}`);
   if (outcome.use) {
     io.log("Record: holds the same bytes, published under its own keccak256.");
@@ -166,25 +180,34 @@ export async function main(argv: string[], io: Io = defaultIo): Promise<number> 
       io.log(USAGE);
       return 0;
     }
-    if (values.sample) return await sample(io);
+    if (argv.length === 0) {
+      io.log(USAGE);
+      return 1;
+    }
+    if (values.sample) {
+      if (values.delivery || values.brief || values.title || values.dry) throw new Error("--sample runs on its own, without --delivery, --brief, --title or --dry.");
+      return await sample(io);
+    }
     if (!values.delivery) throw new Error("--delivery names the paid response to check. Run with --help for the usage.");
     const delivery = await readDelivery(values.delivery);
     const order = await readOrder(values.brief, values.title);
     const desk = deskUrl(io.env.BRAINCHAIN_DESK_URL);
+    const checked = check(delivery, order, io.now().toISOString());
+    if (checked.receipt) io.log(wormholeLine(checked.receipt));
+    if (!checked.ok) return report({ use: false, why: checked.why, ...(checked.unchecked ? { unchecked: true } : {}) }, io);
     if (values.dry) {
-      const checked = check(delivery, order, io.now().toISOString());
-      if (!checked.ok) return report({ use: false, why: checked.why, ...(checked.unchecked ? { unchecked: true } : {}), ...(checked.receipt ? { receipt: checked.receipt } : {}) }, io);
-      io.log(`Wormhole: allow, ${checked.receipt.byte_len} bytes, SHA-256 ${checked.receipt.resource_digest}`);
-      const price = await priceOf(checked.request, { desk, fetch: io.fetch });
+      const price = await priceOf(checked.request, { desk, fetch: io.fetch }).catch((error: unknown) => {
+        throw new Error(`BrainChain did not answer: ${messageOf(error)}. Nothing was paid to BrainChain.`, { cause: error });
+      });
       io.log(price.text);
       return price.takes ? 0 : 1;
     }
-    const outcome = await gate(delivery, order, {
+    const outcome = await gate(checked, {
       desk,
-      issuedAt: io.now().toISOString(),
       // The key is read only once Wormhole has allowed the delivery.
       grade: async (request) => {
         const account = await io.account(io.env.BRAINCHAIN_PAYER_KEY_FILE);
+        io.log(`Paying from ${account.address}.`);
         return (await payGrade(request, account, { desk, fetch: io.fetch, log: io.log, ...(io.pollMs ? { pollMs: io.pollMs } : {}) })).verdict;
       },
       record: async (url) => {
